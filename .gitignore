@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+.env
+*.log
+*.out
+*.err
+admin-backend/.env
+admin-backend/_vendor/
+admin-backend/uploads/
+admin-backend/__pycache__/
