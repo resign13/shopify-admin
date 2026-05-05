@@ -1122,7 +1122,8 @@ def get_homepage_config() -> dict[str, Any]:
     display_category_keys = _normalize_home_category_keys(
         _parse_json_text(row.get("display_category_keys"), defaults["displayCategoryKeys"])
     )
-    valid_product_ids = {int(item["id"]) for item in products}
+    valid_product_rows = _fetch_all("SELECT id FROM products WHERE is_active = TRUE ORDER BY id")
+    valid_product_ids = {int(item["id"]) for item in valid_product_rows}
     section_product_ids = _filter_section_product_map(section_product_ids, valid_product_ids, limit=5)
     collection_product_ids = _filter_section_product_map(
         collection_product_ids, valid_product_ids, limit=None
