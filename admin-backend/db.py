@@ -193,7 +193,6 @@ def ensure_database_ready() -> None:
             with conn.cursor() as cur:
                 cur.execute(SQL("CREATE DATABASE {}").format(Identifier(DB_NAME)))
 
-    schema_sql = SCHEMA_SQL_FILE.read_text(encoding="utf-8")
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -201,6 +200,9 @@ def ensure_database_ready() -> None:
             )
             row = cur.fetchone()
             if not row or not row["exists"]:
+                if not SCHEMA_SQL_FILE.exists():
+                    raise FileNotFoundError(f"Database schema file not found: {SCHEMA_SQL_FILE}")
+                schema_sql = SCHEMA_SQL_FILE.read_text(encoding="utf-8-sig")
                 cur.execute(schema_sql)
             _apply_schema_migrations(cur)
         conn.commit()

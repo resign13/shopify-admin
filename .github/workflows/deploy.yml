@@ -1,0 +1,23 @@
+name: Deploy Admin
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to server
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          script_stop: true
+          envs: GITHUB_REF_NAME
+          script: |
+            export GITHUB_REF_NAME="${GITHUB_REF_NAME:-main}"
+            bash /opt/gingtto/shopify-admin/scripts/deploy-admin.sh

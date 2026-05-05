@@ -291,10 +291,10 @@ SELECT p.id, v.lang_code, v.name, v.summary, v.description
 FROM products p
 JOIN (
   VALUES
-    ('atelier-linen-shirt-dress', 'zh', 'Atelier 浜氶夯琛～杩炶。瑁?, '绮惧搧搴﹀亣椋庝簹楹昏锛岄€傚悎濂宠绯诲垪寮€鍙戙€?, '鍨傚潬鎰熶笌鑸掗€傜増鍨嬪吋鍏凤紝鏀寔闈㈡枡銆佽緟鏂欏拰鍚婄墝瀹氬埗銆?),
+    ('atelier-linen-shirt-dress', 'zh', 'Atelier Linen Shirt Dress', 'Premium resort-style linen dress for boutique fashion programs.', 'Fluid drape and easy silhouette with customization support for fabric, trims and labels.'),
     ('atelier-linen-shirt-dress', 'en', 'Atelier Linen Shirt Dress', 'Premium resort-style linen dress for boutique fashion programs.', 'Fluid drape and easy silhouette with customization support for fabric, trims and labels.'),
     ('atelier-linen-shirt-dress', 'fr', 'Robe chemise en lin Atelier', 'Robe en lin premium esprit resort pour les programmes mode boutique.', 'Beau tombe et silhouette decontractee avec personnalisation des tissus, finitions et etiquettes.'),
-    ('signature-oxford-shirt', 'zh', 'Signature 鐗涙触绾鸿‖琛?, '缁忓吀琛～绯诲垪锛岄€傚悎鐢疯鍝佺墝涓庡埗鏈嶉噰璐€?, '楂樺瘑妫夌罕鏉愯川锛屾敮鎸侀鏍囥€佸埡缁ｅ拰鍖呰瀹氬埗銆?),
+    ('signature-oxford-shirt', 'zh', 'Signature Oxford Shirt', 'Classic shirt program for menswear brands and uniform buyers.', 'High-density cotton yarn with customizable labels, embroidery and packaging.'),
     ('signature-oxford-shirt', 'en', 'Signature Oxford Shirt', 'Classic shirt program for menswear brands and uniform buyers.', 'High-density cotton yarn with customizable labels, embroidery and packaging.'),
     ('signature-oxford-shirt', 'fr', 'Chemise Oxford Signature', 'Programme chemise classique pour les marques homme et l uniforme.', 'Coton haute densite avec etiquettes, broderies et packaging personnalisables.')
 ) AS v(slug, lang_code, name, summary, description)
