@@ -60,7 +60,7 @@
 
             <div class="product-item-actions">
               <button class="admin-button ghost" type="button" @click="goEdit(item.id)">编辑</button>
-              <button class="admin-button ghost" type="button" @click="admin.deleteProduct(item.id)">
+              <button class="admin-button ghost" type="button" @click="openDeleteDialog(item)">
                 删除
               </button>
             </div>
@@ -77,6 +77,24 @@
           @update:page-size="pageSize = $event"
         />
       </section>
+    </div>
+    <div v-if="deleteTarget" class="confirm-mask" @click.self="closeDeleteDialog">
+      <div class="confirm-dialog">
+        <h3>删除商品</h3>
+        <p>
+          确认删除商品“{{ deleteTarget.name?.zh || deleteTarget.productCode || deleteTarget.sku }}”吗？
+          删除后会直接从数据库移除，无法恢复。
+        </p>
+        <p class="small-note">如果商品已经产生订单，系统会阻止删除以保护订单历史数据。</p>
+        <div class="confirm-actions">
+          <button class="admin-button ghost" type="button" :disabled="deleting" @click="closeDeleteDialog">
+            取消
+          </button>
+          <button class="admin-button danger" type="button" :disabled="deleting" @click="confirmDelete">
+            {{ deleting ? '删除中...' : '确认删除' }}
+          </button>
+        </div>
+      </div>
     </div>
   </AdminLayout>
 </template>
@@ -97,6 +115,8 @@ const keywordDraft = ref('')
 const keyword = ref('')
 const currentPage = ref(1)
 const pageSize = ref(10)
+const deleteTarget = ref(null)
+const deleting = ref(false)
 
 const filteredProducts = computed(() => {
   const normalizedKeyword = keyword.value.trim().toLowerCase()
@@ -153,6 +173,28 @@ function goCreate() {
 
 function goEdit(id) {
   router.push(`/products/${id}/edit`)
+}
+
+function openDeleteDialog(item) {
+  deleteTarget.value = item
+}
+
+function closeDeleteDialog() {
+  if (deleting.value) return
+  deleteTarget.value = null
+}
+
+async function confirmDelete() {
+  if (!deleteTarget.value || deleting.value) return
+  deleting.value = true
+  try {
+    await admin.deleteProduct(deleteTarget.value.id)
+    deleteTarget.value = null
+  } catch (error) {
+    window.alert(error.message || '删除商品失败')
+  } finally {
+    deleting.value = false
+  }
 }
 
 onMounted(async () => {
@@ -259,6 +301,51 @@ onMounted(async () => {
   color: var(--muted);
   border: 1px dashed var(--line);
   background: rgba(255, 255, 255, 0.62);
+}
+
+.confirm-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(33, 24, 18, 0.32);
+}
+
+.confirm-dialog {
+  width: min(460px, 100%);
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid var(--line);
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(33, 24, 18, 0.16);
+}
+
+.confirm-dialog h3,
+.confirm-dialog p {
+  margin: 0;
+}
+
+.confirm-dialog h3 {
+  margin-bottom: 12px;
+}
+
+.confirm-dialog p + p {
+  margin-top: 10px;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.admin-button.danger {
+  color: #fff;
+  border-color: #1f1712;
+  background: #1f1712;
 }
 
 @media (max-width: 900px) {

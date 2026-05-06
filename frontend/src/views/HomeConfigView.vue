@@ -380,8 +380,8 @@ function matchesKeyword(item, keyword) {
 }
 
 function availableProducts(sectionKey) {
-  const selected = new Set(form.sectionProductIds[sectionKey] || [])
-  return admin.products.filter((item) => !selected.has(item.id))
+  const selected = new Set((form.sectionProductIds[sectionKey] || []).map((id) => Number(id)))
+  return admin.products.filter((item) => !selected.has(Number(item.id)))
 }
 
 function filteredAvailableProducts(sectionKey) {
@@ -392,7 +392,7 @@ function filteredAvailableProducts(sectionKey) {
 
 function selectedProducts(sectionKey) {
   return (form.sectionProductIds[sectionKey] || [])
-    .map((id) => admin.products.find((item) => item.id === id))
+    .map((id) => admin.products.find((item) => Number(item.id) === Number(id)))
     .filter(Boolean)
 }
 

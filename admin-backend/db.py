@@ -453,7 +453,7 @@ def get_product_by_slug(slug: str) -> dict[str, Any] | None:
 
 
 def product_slug_exists(slug: str, *, exclude_id: int | None = None) -> bool:
-    query = "SELECT 1 FROM products WHERE slug = %s"
+    query = "SELECT 1 FROM products WHERE slug = %s AND is_active = TRUE"
     params: list[Any] = [slug]
     if exclude_id is not None:
         query += " AND id <> %s"
@@ -461,7 +461,7 @@ def product_slug_exists(slug: str, *, exclude_id: int | None = None) -> bool:
     return _fetch_one(query, tuple(params)) is not None
 
 def product_sku_exists(sku: str, *, exclude_id: int | None = None) -> bool:
-    query = "SELECT 1 FROM products WHERE sku = %s"
+    query = "SELECT 1 FROM products WHERE sku = %s AND is_active = TRUE"
     params: list[Any] = [sku]
     if exclude_id is not None:
         query += " AND id <> %s"
@@ -471,12 +471,23 @@ def product_sku_exists(sku: str, *, exclude_id: int | None = None) -> bool:
 
 
 def product_code_exists(product_code: str, *, exclude_id: int | None = None) -> bool:
-    query = "SELECT 1 FROM products WHERE LOWER(product_code) = LOWER(%s)"
+    query = "SELECT 1 FROM products WHERE LOWER(product_code) = LOWER(%s) AND is_active = TRUE"
     params: list[Any] = [product_code]
     if exclude_id is not None:
         query += " AND id <> %s"
         params.append(exclude_id)
     return _fetch_one(query, tuple(params)) is not None
+
+
+def _build_archived_identifier(
+    value: str | None, product_id: int, *, max_length: int, label: str
+) -> str:
+    base = str(value or "").strip()
+    suffix = f"__deleted__{label}_{product_id}"
+    if len(suffix) >= max_length:
+        return suffix[:max_length]
+    remaining = max_length - len(suffix)
+    return f"{base[:remaining]}{suffix}"
 
 def _get_category_id(cur: Any, category_key: str) -> int:
     cur.execute("SELECT id FROM product_categories WHERE category_key = %s", (category_key,))
@@ -795,11 +806,27 @@ def delete_product(product_id: int) -> bool:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE products SET is_active = FALSE, updated_at = NOW() WHERE id = %s AND is_active = TRUE RETURNING id",
+                """
+                SELECT id
+                FROM products
+                WHERE id = %s AND is_active = TRUE
+                """,
                 (product_id,),
             )
-            deleted = cur.fetchone() is not None
+            row = cur.fetchone()
+            deleted = row is not None
             if deleted:
+                cur.execute("SELECT COUNT(*) AS total FROM order_items WHERE product_id = %s", (product_id,))
+                order_row = cur.fetchone()
+                if order_row and int(order_row["total"]) > 0:
+                    raise ValueError("Product has related orders and cannot be deleted")
+                cur.execute(
+                    """
+                    DELETE FROM products
+                    WHERE id = %s AND is_active = TRUE
+                    """,
+                    (product_id,),
+                )
                 cur.execute(
                     """
                     SELECT section_product_ids, collection_product_ids
