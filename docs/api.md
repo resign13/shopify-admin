@@ -204,20 +204,21 @@
 更新订单状态请求体:
 ```json
 {
-  "status": "shipped",
-  "trackingNo": "SF123456789CN"
+  "status": "paid",
+  "trackingNo": "SF123456789CN",
+  "paymentLink": "https://pay.example.com/order/LM-000012"
 }
 ```
 
 允许状态:
-- `pending`
+- `pending_payment`
 - `paid`
-- `packed`
 - `shipped`
 - `completed`
 - `cancelled`
 
 说明:
+- `paymentLink` 为可选字段，后台可随时维护
 - 当状态改为 `shipped` 时，必须同时传入 `trackingNo`
 - 改为 `completed` 时可继续保留原有物流单号
-- 订单返回字段包含 `trackingNo / shippedAt / completedAt / items[] / totalAmount`
+- 订单返回字段包含 `trackingNo / paymentLink / shippedAt / completedAt / items[] / totalAmount`

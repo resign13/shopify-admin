@@ -5,14 +5,17 @@
         <div class="page-head">
           <div>
             <h1>订单管理</h1>
-            <p class="small-note">
-              支持按时间、订单状态和商品分类筛选订单，发货后可更新物流单号。
-            </p>
+            <p class="small-note">支持按时间、状态和商品分类筛选订单，维护付款链接、物流单号和订单状态。</p>
           </div>
+          <button class="admin-button" type="button" :disabled="exporting" @click="exportOrders">
+            {{ exporting ? '导出中...' : '导出订单 Excel' }}
+          </button>
         </div>
 
         <div class="orders-filter-row orders-filter-row-wide">
           <select v-model="selectedTimeRange" class="admin-field">
+            <option value="today">今天</option>
+            <option value="yesterday">昨天</option>
             <option value="all">全部时间</option>
             <option value="7d">近 7 天</option>
             <option value="30d">近 30 天</option>
@@ -22,9 +25,8 @@
 
           <select v-model="selectedStatus" class="admin-field">
             <option value="all">全部状态</option>
-            <option value="pending">待处理</option>
+            <option value="pending_payment">待付款</option>
             <option value="paid">已付款</option>
-            <option value="packed">已打包</option>
             <option value="shipped">已发货</option>
             <option value="completed">已完成</option>
             <option value="cancelled">已取消</option>
@@ -112,14 +114,38 @@
         </div>
 
         <div class="order-actions-panel">
-          <input
-            v-model.trim="trackingDrafts[order.id]"
-            class="admin-field"
-            placeholder="请输入物流单号"
-            :disabled="order.status === 'cancelled'"
-          />
+          <div class="order-action-fields">
+            <input
+              v-model.trim="paymentLinkDrafts[order.id]"
+              class="admin-field"
+              placeholder="请输入付款链接"
+              :disabled="order.status === 'cancelled'"
+            />
+            <input
+              v-model.trim="trackingDrafts[order.id]"
+              class="admin-field"
+              placeholder="请输入物流单号"
+              :disabled="order.status === 'cancelled'"
+            />
+          </div>
 
           <div class="inline-actions">
+            <button
+              v-if="canSavePaymentLink(order)"
+              class="admin-button ghost"
+              type="button"
+              @click="savePaymentLink(order)"
+            >
+              保存付款链接
+            </button>
+            <button
+              v-if="order.status === 'pending_payment'"
+              class="admin-button"
+              type="button"
+              @click="markPaid(order)"
+            >
+              标记为已付款
+            </button>
             <button
               v-if="canMarkShipped(order)"
               class="admin-button"
@@ -128,7 +154,6 @@
             >
               标记为已发货
             </button>
-
             <button
               v-if="canSaveTracking(order)"
               class="admin-button ghost"
@@ -137,7 +162,6 @@
             >
               保存物流单号
             </button>
-
             <button
               v-if="order.status === 'shipped'"
               class="admin-button"
@@ -146,13 +170,19 @@
             >
               标记为已完成
             </button>
+            <button
+              v-if="canCancelOrder(order)"
+              class="admin-button ghost danger"
+              type="button"
+              @click="markCancelled(order)"
+            >
+              标记为已取消
+            </button>
           </div>
         </div>
       </article>
 
-      <div v-if="!filteredOrders.length" class="admin-card">
-        当前筛选条件下暂无订单。
-      </div>
+      <div v-if="!filteredOrders.length" class="admin-card">当前筛选条件下暂无订单。</div>
 
       <div v-else class="admin-card">
         <PaginationBar
@@ -182,12 +212,15 @@ const selectedCategory = ref('all')
 const currentPage = ref(1)
 const pageSize = ref(6)
 const trackingDrafts = reactive({})
+const paymentLinkDrafts = reactive({})
+const exporting = ref(false)
 
 watch(
   () => admin.orders,
   (orders) => {
     orders.forEach((order) => {
       trackingDrafts[order.id] = order.trackingNo || ''
+      paymentLinkDrafts[order.id] = order.paymentLink || ''
     })
   },
   { immediate: true }
@@ -242,6 +275,22 @@ function matchesTimeRange(value, range) {
   const target = new Date(value)
   if (Number.isNaN(target.getTime())) return false
   const now = new Date()
+  if (range === 'today') {
+    return (
+      target.getFullYear() === now.getFullYear() &&
+      target.getMonth() === now.getMonth() &&
+      target.getDate() === now.getDate()
+    )
+  }
+  if (range === 'yesterday') {
+    const yesterday = new Date(now)
+    yesterday.setDate(now.getDate() - 1)
+    return (
+      target.getFullYear() === yesterday.getFullYear() &&
+      target.getMonth() === yesterday.getMonth() &&
+      target.getDate() === yesterday.getDate()
+    )
+  }
   const diffDays = (now.getTime() - target.getTime()) / (24 * 60 * 60 * 1000)
   if (range === '7d') return diffDays <= 7
   if (range === '30d') return diffDays <= 30
@@ -253,9 +302,8 @@ function matchesTimeRange(value, range) {
 function formatStatus(status) {
   return (
     {
-      pending: '待处理',
+      pending_payment: '待付款',
       paid: '已付款',
-      packed: '已打包',
       shipped: '已发货',
       completed: '已完成',
       cancelled: '已取消',
@@ -275,35 +323,102 @@ function formatDate(value) {
   }).format(date)
 }
 
+function currentPaymentLink(order) {
+  return (paymentLinkDrafts[order.id] || '').trim()
+}
+
+function currentTrackingNo(order) {
+  return (trackingDrafts[order.id] || '').trim()
+}
+
+function canSavePaymentLink(order) {
+  return order.status !== 'cancelled'
+}
+
 function canMarkShipped(order) {
-  return ['pending', 'paid', 'packed'].includes(order.status)
+  return order.status === 'paid'
 }
 
 function canSaveTracking(order) {
   return ['shipped', 'completed'].includes(order.status)
 }
 
+function canCancelOrder(order) {
+  return ['pending_payment', 'paid'].includes(order.status)
+}
+
+async function savePaymentLink(order) {
+  await admin.updateOrderStatus(
+    order.id,
+    order.status,
+    currentTrackingNo(order) || order.trackingNo || '',
+    currentPaymentLink(order)
+  )
+}
+
 async function saveTracking(order) {
-  const trackingNo = (trackingDrafts[order.id] || '').trim()
+  const trackingNo = currentTrackingNo(order)
   if (!trackingNo) {
     window.alert('请先输入物流单号。')
     return
   }
-  await admin.updateOrderStatus(order.id, order.status, trackingNo)
+  await admin.updateOrderStatus(order.id, order.status, trackingNo, currentPaymentLink(order))
+}
+
+async function markPaid(order) {
+  await admin.updateOrderStatus(order.id, 'paid', currentTrackingNo(order), currentPaymentLink(order))
 }
 
 async function markShipped(order) {
-  const trackingNo = (trackingDrafts[order.id] || '').trim()
+  const trackingNo = currentTrackingNo(order)
   if (!trackingNo) {
     window.alert('请先输入物流单号。')
     return
   }
-  await admin.updateOrderStatus(order.id, 'shipped', trackingNo)
+  await admin.updateOrderStatus(order.id, 'shipped', trackingNo, currentPaymentLink(order))
 }
 
 async function markCompleted(order) {
-  const trackingNo = (trackingDrafts[order.id] || order.trackingNo || '').trim()
-  await admin.updateOrderStatus(order.id, 'completed', trackingNo)
+  await admin.updateOrderStatus(
+    order.id,
+    'completed',
+    currentTrackingNo(order) || order.trackingNo || '',
+    currentPaymentLink(order)
+  )
+}
+
+async function markCancelled(order) {
+  await admin.updateOrderStatus(
+    order.id,
+    'cancelled',
+    currentTrackingNo(order) || order.trackingNo || '',
+    currentPaymentLink(order)
+  )
+}
+
+async function exportOrders() {
+  exporting.value = true
+  try {
+    const blob = await admin.exportOrders({
+      timeRange: selectedTimeRange.value,
+      status: selectedStatus.value,
+      category: selectedCategory.value,
+      includeImages: '1',
+    })
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `orders_export_${timestamp}.xlsx`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
+  } catch (error) {
+    window.alert(error.message || '导出订单失败')
+  } finally {
+    exporting.value = false
+  }
 }
 
 onMounted(() => {
@@ -354,6 +469,23 @@ onMounted(() => {
 .order-item-copy strong,
 .order-item-copy p {
   margin: 0;
+}
+
+.order-action-fields {
+  display: grid;
+  gap: 10px;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-button.danger {
+  color: #8d3b3b;
+  border-color: rgba(141, 59, 59, 0.24);
 }
 
 @media (max-width: 1080px) {

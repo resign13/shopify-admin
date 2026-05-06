@@ -20,6 +20,7 @@ SCHEMA_SQL_FILE = REPO_DIR / "db" / "postgres" / "init_lumiere_admin.sql"
 DEFAULT_LANG = "zh"
 SUPPORTED_LANGS = ("zh", "en", "fr")
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
+ORDER_STATUSES = ("pending_payment", "paid", "shipped", "completed", "cancelled")
 
 
 def load_env_file(path: Path) -> None:
@@ -77,6 +78,31 @@ def _fetch_one(query: str, params: tuple[Any, ...] = ()) -> dict[str, Any] | Non
         with conn.cursor() as cur:
             cur.execute(query, params)
             return cur.fetchone()
+
+
+def _sync_order_status_constraint(cur: Any) -> None:
+    cur.execute(
+        """
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = con.connamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'orders'
+          AND con.contype = 'c'
+          AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+        """
+    )
+    rows = cur.fetchall()
+    for row in rows:
+        cur.execute(SQL("ALTER TABLE orders DROP CONSTRAINT IF EXISTS {}").format(Identifier(row["conname"])))
+    cur.execute(
+        """
+        ALTER TABLE orders
+        ADD CONSTRAINT orders_status_check
+        CHECK (status IN ('pending_payment', 'paid', 'shipped', 'completed', 'cancelled'))
+        """
+    )
 
 
 def _iso(value: Any) -> str:
@@ -165,8 +191,12 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS state VARCHAR(120)")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS postal_code VARCHAR(40)")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_no VARCHAR(120)")
+    cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_link TEXT")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
+    cur.execute("UPDATE orders SET status = 'pending_payment' WHERE status = 'pending'")
+    cur.execute("UPDATE orders SET status = 'paid' WHERE status = 'packed'")
+    _sync_order_status_constraint(cur)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS homepage_configs (
@@ -1653,6 +1683,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None) -> list
           o.state,
           o.postal_code,
           o.tracking_no,
+          o.payment_link,
           o.shipped_at,
           o.completed_at,
           o.shipping_address,
@@ -1701,6 +1732,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None) -> list
                 "note": row["note"] or "",
                 "totalAmount": _num(row["total_amount"]),
                 "trackingNo": row.get("tracking_no") or "",
+                "paymentLink": row.get("payment_link") or "",
                 "shippedAt": _iso(row["shipped_at"]) if row.get("shipped_at") else "",
                 "completedAt": _iso(row["completed_at"]) if row.get("completed_at") else "",
                 "marketingOptIn": bool(row.get("marketing_opt_in")),
@@ -1821,7 +1853,7 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                   shipping_address, note, total_amount, created_at, updated_at
                 )
                 VALUES (
-                  %s, %s, 'pending', %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                  %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, NOW(), NOW()
                 )
                 RETURNING id
                 """,
@@ -1862,18 +1894,24 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
     return get_order_by_id(order_id)  # type: ignore[return-value]
 
 
-def update_order_status(order_id: int, status: str, tracking_no: str = "") -> dict[str, Any] | None:
+def update_order_status(
+    order_id: int, status: str, tracking_no: str = "", payment_link: str = ""
+) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
             if status == "shipped":
                 cur.execute(
                     """
                     UPDATE orders
-                    SET status = %s, tracking_no = %s, shipped_at = COALESCE(shipped_at, NOW()), updated_at = NOW()
+                    SET status = %s,
+                        tracking_no = %s,
+                        payment_link = %s,
+                        shipped_at = COALESCE(shipped_at, NOW()),
+                        updated_at = NOW()
                     WHERE id = %s
                     RETURNING id
                     """,
-                    (status, tracking_no, order_id),
+                    (status, tracking_no, payment_link, order_id),
                 )
             elif status == "completed":
                 cur.execute(
@@ -1881,12 +1919,13 @@ def update_order_status(order_id: int, status: str, tracking_no: str = "") -> di
                     UPDATE orders
                     SET status = %s,
                         tracking_no = CASE WHEN %s <> '' THEN %s ELSE tracking_no END,
+                        payment_link = %s,
                         completed_at = COALESCE(completed_at, NOW()),
                         updated_at = NOW()
                     WHERE id = %s
                     RETURNING id
                     """,
-                    (status, tracking_no, tracking_no, order_id),
+                    (status, tracking_no, tracking_no, payment_link, order_id),
                 )
             else:
                 cur.execute(
@@ -1894,11 +1933,12 @@ def update_order_status(order_id: int, status: str, tracking_no: str = "") -> di
                     UPDATE orders
                     SET status = %s,
                         tracking_no = CASE WHEN %s <> '' THEN %s ELSE tracking_no END,
+                        payment_link = %s,
                         updated_at = NOW()
                     WHERE id = %s
                     RETURNING id
                     """,
-                    (status, tracking_no, tracking_no, order_id),
+                    (status, tracking_no, tracking_no, payment_link, order_id),
                 )
             if not cur.fetchone():
                 return None

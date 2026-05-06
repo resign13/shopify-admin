@@ -36,7 +36,7 @@ function normalizeGroupedOrder(order = {}) {
     orderNo: order.orderNo || '',
     createdAt: order.createdAt || '',
     updatedAt: order.updatedAt || '',
-    status: order.status || 'pending',
+    status: order.status || 'pending_payment',
     userId: Number(order.userId || 0),
     userName: order.userName || '',
     companyName: order.companyName || '',
@@ -54,6 +54,7 @@ function normalizeGroupedOrder(order = {}) {
     note: order.note || '',
     totalAmount,
     trackingNo: order.trackingNo || '',
+    paymentLink: order.paymentLink || '',
     shippedAt: order.shippedAt || '',
     completedAt: order.completedAt || '',
     marketingOptIn: Boolean(order.marketingOptIn),
@@ -73,7 +74,7 @@ function groupLegacyOrders(rows = []) {
         orderNo: row.orderNo || '',
         createdAt: row.createdAt || '',
         updatedAt: row.updatedAt || row.createdAt || '',
-        status: row.status || 'pending',
+        status: row.status || 'pending_payment',
         userId: Number(row.userId || 0),
         userName: row.userName || '',
         companyName: row.companyName || '',
@@ -91,6 +92,7 @@ function groupLegacyOrders(rows = []) {
         note: row.note || '',
         totalAmount: 0,
         trackingNo: row.trackingNo || '',
+        paymentLink: row.paymentLink || '',
         shippedAt: row.shippedAt || '',
         completedAt: row.completedAt || '',
         marketingOptIn: Boolean(row.marketingOptIn),
@@ -306,12 +308,41 @@ export const useAdminStore = defineStore('admin-data', {
       const data = await request('/api/admin/orders', { headers: authHeaders(auth.token) })
       this.orders = normalizeOrders(data.items)
     },
-    async updateOrderStatus(id, status, trackingNo = '') {
+    async exportOrders(filters = {}) {
+      const auth = useAdminAuthStore()
+      const params = new URLSearchParams()
+      Object.entries(filters || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          params.set(key, String(value))
+        }
+      })
+      const response = await fetch(
+        `/api/admin/orders/export${params.toString() ? `?${params.toString()}` : ''}`.replace(
+          /^\/api/,
+          `${(import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5202')}/api`
+        ),
+        {
+          headers: authHeaders(auth.token),
+        }
+      )
+      if (!response.ok) {
+        let message = 'Export failed'
+        try {
+          const data = await response.json()
+          message = data.message || message
+        } catch {
+          // ignore json parse failure for file responses
+        }
+        throw new Error(message)
+      }
+      return response.blob()
+    },
+    async updateOrderStatus(id, status, trackingNo = '', paymentLink = '') {
       const auth = useAdminAuthStore()
       await request(`/api/admin/orders/${id}`, {
         method: 'PUT',
         headers: authHeaders(auth.token),
-        body: JSON.stringify({ status, trackingNo }),
+        body: JSON.stringify({ status, trackingNo, paymentLink }),
       })
       await this.loadOrders()
     },

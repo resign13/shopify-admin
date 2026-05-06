@@ -4,6 +4,7 @@ import os
 import secrets
 import sys
 from base64 import b64encode
+from io import BytesIO
 from datetime import UTC, datetime
 from functools import wraps
 from pathlib import Path
@@ -16,8 +17,12 @@ LOCAL_VENDOR_DIR = BASE_DIR / "_vendor"
 if LOCAL_VENDOR_DIR.exists():
     sys.path.insert(0, str(LOCAL_VENDOR_DIR))
 
-from flask import Flask, g, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
+from openpyxl import Workbook
+from openpyxl.drawing.image import Image as OpenpyxlImage
+from openpyxl.styles import Alignment, Font
+from openpyxl.utils import get_column_letter
 from psycopg.errors import ForeignKeyViolation
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -85,7 +90,178 @@ SERVICE_TOKEN = os.environ.get("LUMIERE_SERVICE_TOKEN", "lumiere-service-token")
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
 SUPPORTED_LANGS = {"zh", "en", "fr"}
 DEFAULT_LANG = "zh"
-ORDER_STATUSES = {"pending", "paid", "packed", "shipped", "completed", "cancelled"}
+ORDER_STATUSES = {"pending_payment", "paid", "shipped", "completed", "cancelled"}
+ORDER_STATUS_LABELS = {
+    "pending_payment": "待付款",
+    "paid": "已付款",
+    "shipped": "已发货",
+    "completed": "已完成",
+    "cancelled": "已取消",
+}
+
+
+def parse_bool(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def matches_time_range(value: str, range_key: str) -> bool:
+    if range_key == "all":
+        return True
+    try:
+        target = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    now = datetime.now(UTC)
+    if range_key == "today":
+        target_local = target.astimezone(UTC)
+        return target_local.date() == now.date()
+    if range_key == "yesterday":
+        target_local = target.astimezone(UTC)
+        return target_local.date() == (now.date()).fromordinal(now.date().toordinal() - 1)
+    diff_days = (now - target.astimezone(UTC)).total_seconds() / 86400
+    if range_key == "7d":
+        return diff_days <= 7
+    if range_key == "30d":
+        return diff_days <= 30
+    if range_key == "90d":
+        return diff_days <= 90
+    if range_key == "year":
+        return target.astimezone(UTC).year == now.year
+    return True
+
+
+def filter_orders(
+    orders: list[dict[str, Any]], *, time_range: str = "all", status: str = "all", category: str = "all"
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for order in orders:
+        status_match = status == "all" or order.get("status") == status
+        time_match = matches_time_range(str(order.get("createdAt") or ""), time_range)
+        category_match = category == "all" or any(
+            str(item.get("categoryKey") or "") == category for item in (order.get("items") or [])
+        )
+        if status_match and time_match and category_match:
+            items.append(order)
+    return items
+
+
+def fetch_image_bytes(url: str) -> bytes | None:
+    value = str(url or "").strip()
+    if not value:
+        return None
+    req = urllib_request.Request(
+        value,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        },
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=20) as resp:
+            content_type = str(resp.headers.get("Content-Type", "")).lower()
+            if not content_type.startswith("image/"):
+                return None
+            return resp.read()
+    except Exception:
+        return None
+
+
+def autosize_columns(worksheet: Any) -> None:
+    widths: dict[int, int] = {}
+    for row in worksheet.iter_rows():
+        for cell in row:
+            if cell.value in (None, ""):
+                continue
+            widths[cell.column] = max(widths.get(cell.column, 0), len(str(cell.value)))
+    for column_index, width in widths.items():
+        worksheet.column_dimensions[get_column_letter(column_index)].width = min(max(width + 2, 12), 42)
+
+
+def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Orders"
+    headers = [
+        "订单号",
+        "下单时间",
+        "订单状态",
+        "客户公司",
+        "客户邮箱",
+        "联系人",
+        "联系电话",
+        "国家",
+        "收货地址",
+        "物流单号",
+        "商品图片",
+        "商品名称",
+        "SKU",
+        "尺码",
+        "商品分类",
+        "数量",
+        "单价(USD)",
+        "小计(USD)",
+        "订单总额(USD)",
+        "备注",
+    ]
+    worksheet.append(headers)
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(vertical="center", horizontal="center")
+
+    current_row = 2
+    for order in orders:
+        rows = order.get("items") or [{}]
+        for item in rows:
+            worksheet.append(
+                [
+                    order.get("orderNo") or "",
+                    order.get("createdAt") or "",
+                    ORDER_STATUS_LABELS.get(str(order.get("status") or ""), str(order.get("status") or "")),
+                    order.get("companyName") or "",
+                    order.get("userEmail") or "",
+                    order.get("contactName") or "",
+                    order.get("phone") or "",
+                    order.get("country") or "",
+                    order.get("shippingAddress") or "",
+                    order.get("trackingNo") or "",
+                    "",
+                    item.get("productName") or "",
+                    item.get("sku") or "",
+                    item.get("sizeCode") or "",
+                    item.get("categoryLabel") or item.get("categoryKey") or "",
+                    item.get("quantity") or 0,
+                    item.get("unitPrice") or 0,
+                    item.get("totalPrice") or 0,
+                    order.get("totalAmount") or 0,
+                    order.get("note") or "",
+                ]
+            )
+            worksheet.row_dimensions[current_row].height = 72
+            for cell in worksheet[current_row]:
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+            if include_images:
+                image_bytes = fetch_image_bytes(str(item.get("image") or ""))
+                if image_bytes:
+                    try:
+                        excel_image = OpenpyxlImage(BytesIO(image_bytes))
+                        excel_image.width = 54
+                        excel_image.height = 70
+                        excel_image.anchor = f"K{current_row}"
+                        worksheet.add_image(excel_image)
+                    except Exception:
+                        pass
+
+            current_row += 1
+
+    worksheet.freeze_panes = "A2"
+    worksheet.column_dimensions["K"].width = 14
+    autosize_columns(worksheet)
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
 ADMIN_USER_ROLES = {"admin", "sales", "warehouse"}
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
@@ -1103,6 +1279,25 @@ def orders() -> Any:
     return jsonify({"items": list_orders()})
 
 
+@app.get("/api/admin/orders/export")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def export_orders() -> Any:
+    time_range = str(request.args.get("timeRange", "all")).strip() or "all"
+    status = str(request.args.get("status", "all")).strip() or "all"
+    category = str(request.args.get("category", "all")).strip() or "all"
+    include_images = parse_bool(request.args.get("includeImages", "1"))
+    orders = filter_orders(list_orders(), time_range=time_range, status=status, category=category)
+    file_stream = build_orders_export(orders, include_images=include_images)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return send_file(
+        file_stream,
+        as_attachment=True,
+        download_name=f"orders_export_{timestamp}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
 @app.put("/api/admin/orders/<int:order_id>")
 @require_auth
 @require_roles("admin", "sales", "warehouse")
@@ -1110,13 +1305,14 @@ def update_order_route(order_id: int) -> Any:
     payload = request.get_json(silent=True) or {}
     status = str(payload.get("status", "")).strip()
     tracking_no = str(payload.get("trackingNo", "")).strip()
+    payment_link = str(payload.get("paymentLink", "")).strip()
     if not status:
         return jsonify({"message": "Missing status"}), 400
     if status not in ORDER_STATUSES:
         return jsonify({"message": "Invalid status"}), 400
     if status == "shipped" and not tracking_no:
         return jsonify({"message": "Missing trackingNo"}), 400
-    order = update_order_status(order_id, status, tracking_no)
+    order = update_order_status(order_id, status, tracking_no, payment_link)
     if not order:
         return jsonify({"message": "Order not found"}), 404
     return jsonify({"message": "Order updated", "order": order})

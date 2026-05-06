@@ -158,14 +158,15 @@ CREATE TABLE IF NOT EXISTS orders (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   order_no VARCHAR(40) NOT NULL UNIQUE,
   store_user_id BIGINT NOT NULL REFERENCES store_users(id),
-  status VARCHAR(30) NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'paid', 'packed', 'shipped', 'completed', 'cancelled')),
+  status VARCHAR(30) NOT NULL DEFAULT 'pending_payment'
+    CHECK (status IN ('pending_payment', 'paid', 'shipped', 'completed', 'cancelled')),
   contact_name VARCHAR(120) NOT NULL,
   phone VARCHAR(50) NOT NULL,
   country VARCHAR(120),
   shipping_address TEXT NOT NULL,
   note TEXT,
   total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
+  payment_link TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
