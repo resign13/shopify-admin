@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 
-import { request } from '../api'
+import { API_BASE, request } from '../api'
 import { useAdminAuthStore } from './auth'
 
 function authHeaders(token) {
@@ -319,7 +319,7 @@ export const useAdminStore = defineStore('admin-data', {
       const response = await fetch(
         `/api/admin/orders/export${params.toString() ? `?${params.toString()}` : ''}`.replace(
           /^\/api/,
-          `${(import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:5202')}/api`
+          `${API_BASE}/api`
         ),
         {
           headers: authHeaders(auth.token),
