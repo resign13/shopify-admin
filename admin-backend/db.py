@@ -105,6 +105,28 @@ def _sync_order_status_constraint(cur: Any) -> None:
     )
 
 
+def _migrate_order_status_values(cur: Any) -> None:
+    cur.execute(
+        """
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = con.connamespace
+        WHERE nsp.nspname = 'public'
+          AND rel.relname = 'orders'
+          AND con.contype = 'c'
+          AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+        """
+    )
+    rows = cur.fetchall()
+    for row in rows:
+        cur.execute(SQL("ALTER TABLE orders DROP CONSTRAINT IF EXISTS {}").format(Identifier(row["conname"])))
+
+    cur.execute("UPDATE orders SET status = 'pending_payment' WHERE status = 'pending'")
+    cur.execute("UPDATE orders SET status = 'paid' WHERE status = 'packed'")
+    _sync_order_status_constraint(cur)
+
+
 def _iso(value: Any) -> str:
     if isinstance(value, datetime):
         return value.astimezone(UTC).isoformat()
@@ -194,9 +216,7 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_link TEXT")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
-    cur.execute("UPDATE orders SET status = 'pending_payment' WHERE status = 'pending'")
-    cur.execute("UPDATE orders SET status = 'paid' WHERE status = 'packed'")
-    _sync_order_status_constraint(cur)
+    _migrate_order_status_values(cur)
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS homepage_configs (
