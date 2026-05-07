@@ -3,6 +3,7 @@
 import os
 import secrets
 import sys
+import mimetypes
 from base64 import b64encode
 from io import BytesIO
 from datetime import UTC, datetime
@@ -84,6 +85,7 @@ app = Flask(__name__)
 CORS(app)
 UPLOAD_DIR = BASE_DIR / "uploads"
 ADMIN_FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
+mimetypes.add_type("image/webp", ".webp")
 
 F = TypeVar("F", bound=Callable[..., Any])
 SERVICE_TOKEN = os.environ.get("LUMIERE_SERVICE_TOKEN", "lumiere-service-token")
@@ -244,7 +246,14 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                 image_bytes = fetch_image_bytes(str(item.get("image") or ""))
                 if image_bytes:
                     try:
-                        excel_image = OpenpyxlImage(BytesIO(image_bytes))
+                        source_stream = BytesIO(image_bytes)
+                        excel_image = OpenpyxlImage(source_stream)
+                        image_format = str(getattr(excel_image.image, "format", "") or "").upper()
+                        if image_format == "WEBP":
+                            converted_stream = BytesIO()
+                            excel_image.image.save(converted_stream, format="PNG")
+                            converted_stream.seek(0)
+                            excel_image = OpenpyxlImage(converted_stream)
                         excel_image.width = 54
                         excel_image.height = 70
                         excel_image.anchor = f"K{current_row}"

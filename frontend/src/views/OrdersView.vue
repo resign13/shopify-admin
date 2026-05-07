@@ -46,13 +46,17 @@
           <div>
             <strong>{{ order.orderNo }}</strong>
             <p>{{ order.companyName || '--' }} / {{ order.userEmail || '--' }}</p>
-            <p>{{ formatDate(order.createdAt) }} / {{ formatStatus(order.status) }}</p>
+            <p>{{ formatDate(order.createdAt) }} / {{ formatStatus(statusDrafts[order.id] || order.status) }}</p>
           </div>
 
           <div class="order-head-side">
-            <span class="order-status-badge" :class="`status-${order.status}`">
-              {{ formatStatus(order.status) }}
-            </span>
+            <select v-model="statusDrafts[order.id]" class="admin-field status-select">
+              <option value="pending_payment">待付款</option>
+              <option value="paid">已付款</option>
+              <option value="shipped">已发货</option>
+              <option value="completed">已完成</option>
+              <option value="cancelled">已取消</option>
+            </select>
             <strong>${{ Number(order.totalAmount || 0).toFixed(2) }}</strong>
           </div>
         </div>
@@ -68,7 +72,7 @@
           </div>
           <div>
             <span>物流单号</span>
-            <strong>{{ order.trackingNo || '暂未填写' }}</strong>
+            <strong>{{ trackingDrafts[order.id] || order.trackingNo || '暂未填写' }}</strong>
           </div>
           <div>
             <span>收货地址</span>
@@ -119,64 +123,19 @@
               v-model.trim="paymentLinkDrafts[order.id]"
               class="admin-field"
               placeholder="请输入付款链接"
-              :disabled="order.status === 'cancelled'"
+              :disabled="statusDrafts[order.id] === 'cancelled'"
             />
             <input
               v-model.trim="trackingDrafts[order.id]"
               class="admin-field"
               placeholder="请输入物流单号"
-              :disabled="order.status === 'cancelled'"
+              :disabled="statusDrafts[order.id] === 'cancelled'"
             />
           </div>
 
-          <div class="inline-actions">
-            <button
-              v-if="canSavePaymentLink(order)"
-              class="admin-button ghost"
-              type="button"
-              @click="savePaymentLink(order)"
-            >
-              保存付款链接
-            </button>
-            <button
-              v-if="order.status === 'pending_payment'"
-              class="admin-button"
-              type="button"
-              @click="markPaid(order)"
-            >
-              标记为已付款
-            </button>
-            <button
-              v-if="canMarkShipped(order)"
-              class="admin-button"
-              type="button"
-              @click="markShipped(order)"
-            >
-              标记为已发货
-            </button>
-            <button
-              v-if="canSaveTracking(order)"
-              class="admin-button ghost"
-              type="button"
-              @click="saveTracking(order)"
-            >
-              保存物流单号
-            </button>
-            <button
-              v-if="order.status === 'shipped'"
-              class="admin-button"
-              type="button"
-              @click="markCompleted(order)"
-            >
-              标记为已完成
-            </button>
-            <button
-              v-if="canCancelOrder(order)"
-              class="admin-button ghost danger"
-              type="button"
-              @click="markCancelled(order)"
-            >
-              标记为已取消
+          <div class="inline-actions right-actions">
+            <button class="admin-button" type="button" @click="saveOrder(order)">
+              保存订单修改
             </button>
           </div>
         </div>
@@ -213,6 +172,7 @@ const currentPage = ref(1)
 const pageSize = ref(6)
 const trackingDrafts = reactive({})
 const paymentLinkDrafts = reactive({})
+const statusDrafts = reactive({})
 const exporting = ref(false)
 
 watch(
@@ -221,6 +181,7 @@ watch(
     orders.forEach((order) => {
       trackingDrafts[order.id] = order.trackingNo || ''
       paymentLinkDrafts[order.id] = order.paymentLink || ''
+      statusDrafts[order.id] = order.status || 'pending_payment'
     })
   },
   { immediate: true }
@@ -323,77 +284,17 @@ function formatDate(value) {
   }).format(date)
 }
 
-function currentPaymentLink(order) {
-  return (paymentLinkDrafts[order.id] || '').trim()
-}
+async function saveOrder(order) {
+  const nextStatus = statusDrafts[order.id] || order.status || 'pending_payment'
+  const nextTrackingNo = (trackingDrafts[order.id] || '').trim()
+  const nextPaymentLink = (paymentLinkDrafts[order.id] || '').trim()
 
-function currentTrackingNo(order) {
-  return (trackingDrafts[order.id] || '').trim()
-}
-
-function canSavePaymentLink(order) {
-  return order.status !== 'cancelled'
-}
-
-function canMarkShipped(order) {
-  return order.status === 'paid'
-}
-
-function canSaveTracking(order) {
-  return ['shipped', 'completed'].includes(order.status)
-}
-
-function canCancelOrder(order) {
-  return ['pending_payment', 'paid'].includes(order.status)
-}
-
-async function savePaymentLink(order) {
-  await admin.updateOrderStatus(
-    order.id,
-    order.status,
-    currentTrackingNo(order) || order.trackingNo || '',
-    currentPaymentLink(order)
-  )
-}
-
-async function saveTracking(order) {
-  const trackingNo = currentTrackingNo(order)
-  if (!trackingNo) {
-    window.alert('请先输入物流单号。')
+  if (nextStatus === 'shipped' && !nextTrackingNo) {
+    window.alert('订单状态改为已发货时，必须填写物流单号。')
     return
   }
-  await admin.updateOrderStatus(order.id, order.status, trackingNo, currentPaymentLink(order))
-}
 
-async function markPaid(order) {
-  await admin.updateOrderStatus(order.id, 'paid', currentTrackingNo(order), currentPaymentLink(order))
-}
-
-async function markShipped(order) {
-  const trackingNo = currentTrackingNo(order)
-  if (!trackingNo) {
-    window.alert('请先输入物流单号。')
-    return
-  }
-  await admin.updateOrderStatus(order.id, 'shipped', trackingNo, currentPaymentLink(order))
-}
-
-async function markCompleted(order) {
-  await admin.updateOrderStatus(
-    order.id,
-    'completed',
-    currentTrackingNo(order) || order.trackingNo || '',
-    currentPaymentLink(order)
-  )
-}
-
-async function markCancelled(order) {
-  await admin.updateOrderStatus(
-    order.id,
-    'cancelled',
-    currentTrackingNo(order) || order.trackingNo || '',
-    currentPaymentLink(order)
-  )
+  await admin.updateOrderStatus(order.id, nextStatus, nextTrackingNo, nextPaymentLink)
 }
 
 async function exportOrders() {
@@ -483,14 +384,23 @@ onMounted(() => {
   align-items: center;
 }
 
-.admin-button.danger {
-  color: #8d3b3b;
-  border-color: rgba(141, 59, 59, 0.24);
+.right-actions {
+  justify-content: flex-end;
+}
+
+.status-select {
+  width: 120px;
+  min-height: 40px;
+  padding-right: 30px;
 }
 
 @media (max-width: 1080px) {
   .order-item-main {
     width: 100%;
+  }
+
+  .right-actions {
+    justify-content: flex-start;
   }
 }
 </style>
