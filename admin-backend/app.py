@@ -1315,13 +1315,14 @@ def update_order_route(order_id: int) -> Any:
     status = str(payload.get("status", "")).strip()
     tracking_no = str(payload.get("trackingNo", "")).strip()
     payment_link = str(payload.get("paymentLink", "")).strip()
+    shipping_fee = payload.get("shippingFee", 0)
     if not status:
         return jsonify({"message": "Missing status"}), 400
     if status not in ORDER_STATUSES:
         return jsonify({"message": "Invalid status"}), 400
     if status == "shipped" and not tracking_no:
         return jsonify({"message": "Missing trackingNo"}), 400
-    order = update_order_status(order_id, status, tracking_no, payment_link)
+    order = update_order_status(order_id, status, tracking_no, payment_link, shipping_fee)
     if not order:
         return jsonify({"message": "Order not found"}), 404
     return jsonify({"message": "Order updated", "order": order})

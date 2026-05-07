@@ -57,7 +57,7 @@
               <option value="completed">已完成</option>
               <option value="cancelled">已取消</option>
             </select>
-            <strong>${{ Number(order.totalAmount || 0).toFixed(2) }}</strong>
+            <strong>${{ displayTotal(order).toFixed(2) }}</strong>
           </div>
         </div>
 
@@ -131,6 +131,15 @@
               placeholder="请输入物流单号"
               :disabled="statusDrafts[order.id] === 'cancelled'"
             />
+            <input
+              v-model.number="shippingFeeDrafts[order.id]"
+              class="admin-field"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="请输入运费"
+              :disabled="statusDrafts[order.id] === 'cancelled'"
+            />
           </div>
 
           <div class="inline-actions right-actions">
@@ -172,6 +181,7 @@ const currentPage = ref(1)
 const pageSize = ref(6)
 const trackingDrafts = reactive({})
 const paymentLinkDrafts = reactive({})
+const shippingFeeDrafts = reactive({})
 const statusDrafts = reactive({})
 const exporting = ref(false)
 
@@ -181,6 +191,7 @@ watch(
     orders.forEach((order) => {
       trackingDrafts[order.id] = order.trackingNo || ''
       paymentLinkDrafts[order.id] = order.paymentLink || ''
+      shippingFeeDrafts[order.id] = Number(order.shippingFee || 0)
       statusDrafts[order.id] = order.status || 'pending_payment'
     })
   },
@@ -284,17 +295,29 @@ function formatDate(value) {
   }).format(date)
 }
 
+function displayTotal(order) {
+  const itemsTotal = Number(order.items?.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0) || 0)
+  const shippingFee = Number(shippingFeeDrafts[order.id] ?? order.shippingFee ?? 0)
+  return itemsTotal + shippingFee
+}
+
 async function saveOrder(order) {
   const nextStatus = statusDrafts[order.id] || order.status || 'pending_payment'
   const nextTrackingNo = (trackingDrafts[order.id] || '').trim()
   const nextPaymentLink = (paymentLinkDrafts[order.id] || '').trim()
+  const nextShippingFee = Number(shippingFeeDrafts[order.id] || 0)
 
   if (nextStatus === 'shipped' && !nextTrackingNo) {
     window.alert('订单状态改为已发货时，必须填写物流单号。')
     return
   }
 
-  await admin.updateOrderStatus(order.id, nextStatus, nextTrackingNo, nextPaymentLink)
+  if (Number.isNaN(nextShippingFee) || nextShippingFee < 0) {
+    window.alert('运费必须是大于等于 0 的数字。')
+    return
+  }
+
+  await admin.updateOrderStatus(order.id, nextStatus, nextTrackingNo, nextPaymentLink, nextShippingFee)
 }
 
 async function exportOrders() {

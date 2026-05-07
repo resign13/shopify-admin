@@ -55,6 +55,7 @@ function normalizeGroupedOrder(order = {}) {
     totalAmount,
     trackingNo: order.trackingNo || '',
     paymentLink: order.paymentLink || '',
+    shippingFee: Number(order.shippingFee || 0),
     shippedAt: order.shippedAt || '',
     completedAt: order.completedAt || '',
     marketingOptIn: Boolean(order.marketingOptIn),
@@ -93,6 +94,7 @@ function groupLegacyOrders(rows = []) {
         totalAmount: 0,
         trackingNo: row.trackingNo || '',
         paymentLink: row.paymentLink || '',
+        shippingFee: Number(row.shippingFee || 0),
         shippedAt: row.shippedAt || '',
         completedAt: row.completedAt || '',
         marketingOptIn: Boolean(row.marketingOptIn),
@@ -337,12 +339,12 @@ export const useAdminStore = defineStore('admin-data', {
       }
       return response.blob()
     },
-    async updateOrderStatus(id, status, trackingNo = '', paymentLink = '') {
+    async updateOrderStatus(id, status, trackingNo = '', paymentLink = '', shippingFee = 0) {
       const auth = useAdminAuthStore()
       await request(`/api/admin/orders/${id}`, {
         method: 'PUT',
         headers: authHeaders(auth.token),
-        body: JSON.stringify({ status, trackingNo, paymentLink }),
+        body: JSON.stringify({ status, trackingNo, paymentLink, shippingFee }),
       })
       await this.loadOrders()
     },
