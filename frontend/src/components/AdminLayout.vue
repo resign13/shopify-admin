@@ -51,10 +51,7 @@ const allNavItems = [
   { to: '/orders', label: '订单管理', roles: ['admin', 'sales', 'warehouse'] },
 ]
 
-const navItems = computed(() =>
-  allNavItems.filter((item) => item.roles.includes(auth.userRole || ''))
-)
-
+const navItems = computed(() => allNavItems.filter((item) => item.roles.includes(auth.userRole || '')))
 const roleLabel = computed(() => roleLabelMap[auth.userRole] || '未分配角色')
 
 async function logout() {

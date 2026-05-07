@@ -1,7 +1,7 @@
 <template>
   <AdminLayout>
     <div class="admin-page">
-      <div class="admin-card">
+      <div class="admin-card admin-floating-card">
         <div class="page-head">
           <div>
             <h1>订单管理</h1>
@@ -56,7 +56,7 @@
         <div class="order-card-head">
           <div>
             <strong>{{ order.orderNo }}</strong>
-            <p>{{ order.companyName || '--' }} / {{ order.userEmail || '--' }}</p>
+            <p>{{ formatOrderOwner(order) }}</p>
             <p>{{ formatDate(order.createdAt) }} / {{ formatStatus(statusDrafts[order.id] || order.status) }}</p>
           </div>
 
@@ -271,6 +271,13 @@ function applyKeyword() {
 
 function updateShippingFeeDraft(orderId, event) {
   shippingFeeDrafts[orderId] = event.target.value
+}
+
+function formatOrderOwner(order) {
+  const companyName = String(order.companyName || '').trim()
+  const userName = String(order.userName || '').trim()
+  if (companyName && userName) return `${companyName} / ${userName}`
+  return companyName || userName || '--'
 }
 
 function matchesTimeRange(value, range) {

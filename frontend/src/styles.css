@@ -11,12 +11,12 @@
 body { margin: 0; background: linear-gradient(180deg, #faf5ef 0%, #f0e5d9 100%); color: var(--text); font-family: "Segoe UI Variable", "Microsoft YaHei UI", sans-serif; }
 a { color: inherit; text-decoration: none; }
 
-.admin-shell { min-height: 100vh; display: grid; grid-template-columns: 260px 1fr; }
-.sidebar { padding: 28px; background: #261b15; color: white; display: grid; align-content: start; gap: 20px; }
+.admin-shell { min-height: 100vh; display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 0 28px 28px 0; }
+.sidebar { position: sticky; top: 20px; align-self: start; max-height: calc(100vh - 40px); overflow-y: auto; padding: 28px; background: #261b15; color: white; display: grid; align-content: start; gap: 20px; border-radius: 0 0 24px 0; }
 .sidebar-nav { display: grid; gap: 10px; }
 .sidebar-nav a { padding: 12px 14px; border-radius: 14px; color: rgba(255,255,255,0.72); }
 .sidebar-nav a.router-link-active { background: rgba(255,255,255,0.1); color: white; }
-.admin-content { padding: 28px; }
+.admin-content { min-width: 0; padding: 28px 0 0; }
 .admin-page { display: grid; gap: 18px; }
 .two-col { grid-template-columns: 1fr 1fr; align-items: start; }
 .admin-card { padding: 22px; background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: 0 12px 28px rgba(90,68,51,0.08); }
@@ -73,9 +73,13 @@ a { color: inherit; text-decoration: none; }
 .order-status-badge.status-completed { background: #eef7ef; border-color: rgba(96,153,102,0.24); }
 .order-status-badge.status-cancelled { background: #fbefef; border-color: rgba(172,87,87,0.24); }
 .order-actions-panel { grid-template-columns: minmax(240px, 320px) 1fr; align-items: end; }
+.admin-floating-card { position: sticky; top: 20px; z-index: 20; backdrop-filter: blur(14px); }
 
 @media (max-width: 1080px) {
   .admin-shell, .two-col, .card-grid, .editor-grid, .order-summary-grid, .order-actions-panel, .orders-filter-row, .orders-filter-row-wide { grid-template-columns: 1fr; }
+  .admin-shell { gap: 18px; padding: 0 18px 18px; }
+  .sidebar { position: static; max-height: none; border-radius: 24px; }
+  .admin-content { padding-top: 0; }
   .order-item-row { align-items: flex-start; flex-direction: column; }
   .summary-head, .order-items-head { align-items: flex-start; flex-direction: column; }
 }
