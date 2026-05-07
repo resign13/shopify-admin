@@ -24,6 +24,7 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
+from PIL import Image as PILImage
 from psycopg.errors import ForeignKeyViolation
 from werkzeug.utils import secure_filename
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -133,8 +134,14 @@ def matches_time_range(value: str, range_key: str) -> bool:
 
 
 def filter_orders(
-    orders: list[dict[str, Any]], *, time_range: str = "all", status: str = "all", category: str = "all"
+    orders: list[dict[str, Any]],
+    *,
+    time_range: str = "all",
+    status: str = "all",
+    category: str = "all",
+    keyword: str = "",
 ) -> list[dict[str, Any]]:
+    normalized_keyword = str(keyword or "").strip().lower()
     items: list[dict[str, Any]] = []
     for order in orders:
         status_match = status == "all" or order.get("status") == status
@@ -142,7 +149,13 @@ def filter_orders(
         category_match = category == "all" or any(
             str(item.get("categoryKey") or "") == category for item in (order.get("items") or [])
         )
-        if status_match and time_match and category_match:
+        keyword_match = not normalized_keyword or normalized_keyword in " ".join(
+            [
+                str(order.get("orderNo") or "").lower(),
+                str(order.get("userName") or "").lower(),
+            ]
+        )
+        if status_match and time_match and category_match and keyword_match:
             items.append(order)
     return items
 
@@ -164,6 +177,21 @@ def fetch_image_bytes(url: str) -> bytes | None:
             if not content_type.startswith("image/"):
                 return None
             return resp.read()
+    except Exception:
+        return None
+
+
+def build_excel_image(image_bytes: bytes) -> OpenpyxlImage | None:
+    try:
+        with PILImage.open(BytesIO(image_bytes)) as img:
+            converted = img.convert("RGBA")
+            output = BytesIO()
+            converted.save(output, format="PNG")
+            output.seek(0)
+            excel_image = OpenpyxlImage(output)
+            excel_image.width = 54
+            excel_image.height = 70
+            return excel_image
     except Exception:
         return None
 
@@ -246,18 +274,9 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                 image_bytes = fetch_image_bytes(str(item.get("image") or ""))
                 if image_bytes:
                     try:
-                        source_stream = BytesIO(image_bytes)
-                        excel_image = OpenpyxlImage(source_stream)
-                        image_format = str(getattr(excel_image.image, "format", "") or "").upper()
-                        if image_format == "WEBP":
-                            converted_stream = BytesIO()
-                            excel_image.image.save(converted_stream, format="PNG")
-                            converted_stream.seek(0)
-                            excel_image = OpenpyxlImage(converted_stream)
-                        excel_image.width = 54
-                        excel_image.height = 70
-                        excel_image.anchor = f"K{current_row}"
-                        worksheet.add_image(excel_image)
+                        excel_image = build_excel_image(image_bytes)
+                        if excel_image:
+                            worksheet.add_image(excel_image, f"K{current_row}")
                     except Exception:
                         pass
 
@@ -1125,7 +1144,7 @@ def store_users() -> Any:
 @require_roles("admin")
 def create_store_user_route() -> Any:
     payload = request.get_json(silent=True) or {}
-    required = ["name", "companyName", "email", "password"]
+    required = ["name", "email", "password"]
     missing = [field for field in required if not str(payload.get(field, "")).strip()]
     if missing:
         return jsonify({"message": f"Missing field: {', '.join(missing)}"}), 400
@@ -1295,8 +1314,15 @@ def export_orders() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     status = str(request.args.get("status", "all")).strip() or "all"
     category = str(request.args.get("category", "all")).strip() or "all"
+    keyword = str(request.args.get("keyword", "")).strip()
     include_images = parse_bool(request.args.get("includeImages", "1"))
-    orders = filter_orders(list_orders(), time_range=time_range, status=status, category=category)
+    orders = filter_orders(
+        list_orders(),
+        time_range=time_range,
+        status=status,
+        category=category,
+        keyword=keyword,
+    )
     file_stream = build_orders_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(

@@ -5,14 +5,16 @@
         <div class="page-head">
           <div>
             <h1>订单管理</h1>
-            <p class="small-note">支持按时间、状态和商品分类筛选订单，维护付款链接、物流单号和订单状态。</p>
+            <p class="small-note">
+              支持按时间、状态、分类和关键词筛选订单，并维护付款链接、物流单号、运费和订单状态。
+            </p>
           </div>
           <button class="admin-button" type="button" :disabled="exporting" @click="exportOrders">
             {{ exporting ? '导出中...' : '导出订单 Excel' }}
           </button>
         </div>
 
-        <div class="orders-filter-row orders-filter-row-wide">
+        <div class="orders-filter-row orders-filter-row-wide orders-filter-row-full">
           <select v-model="selectedTimeRange" class="admin-field">
             <option value="today">今天</option>
             <option value="yesterday">昨天</option>
@@ -38,6 +40,15 @@
               {{ item.label }}
             </option>
           </select>
+
+          <form class="order-search-form" @submit.prevent="applyKeyword">
+            <input
+              v-model.trim="keywordDraft"
+              class="admin-field"
+              placeholder="输入订单号或商城账号姓名"
+            />
+            <button class="admin-button admin-button-small" type="submit">查询</button>
+          </form>
         </div>
       </div>
 
@@ -67,6 +78,10 @@
             <strong>{{ order.contactName || '--' }}</strong>
           </div>
           <div>
+            <span>联系邮箱</span>
+            <strong>{{ order.contactValue || '--' }}</strong>
+          </div>
+          <div>
             <span>联系电话</span>
             <strong>{{ order.phone || '--' }}</strong>
           </div>
@@ -74,7 +89,7 @@
             <span>物流单号</span>
             <strong>{{ trackingDrafts[order.id] || order.trackingNo || '暂未填写' }}</strong>
           </div>
-          <div>
+          <div class="full-span">
             <span>收货地址</span>
             <strong>{{ order.shippingAddress || '--' }}</strong>
           </div>
@@ -132,13 +147,14 @@
               :disabled="statusDrafts[order.id] === 'cancelled'"
             />
             <input
-              v-model.number="shippingFeeDrafts[order.id]"
+              :value="shippingFeeDrafts[order.id]"
               class="admin-field"
               type="number"
               min="0"
               step="0.01"
               placeholder="请输入运费"
               :disabled="statusDrafts[order.id] === 'cancelled'"
+              @input="updateShippingFeeDraft(order.id, $event)"
             />
           </div>
 
@@ -177,6 +193,8 @@ const admin = useAdminStore()
 const selectedTimeRange = ref('all')
 const selectedStatus = ref('all')
 const selectedCategory = ref('all')
+const keywordDraft = ref('')
+const keyword = ref('')
 const currentPage = ref(1)
 const pageSize = ref(6)
 const trackingDrafts = reactive({})
@@ -191,14 +209,14 @@ watch(
     orders.forEach((order) => {
       trackingDrafts[order.id] = order.trackingNo || ''
       paymentLinkDrafts[order.id] = order.paymentLink || ''
-      shippingFeeDrafts[order.id] = Number(order.shippingFee || 0)
+      shippingFeeDrafts[order.id] = Number(order.shippingFee || 0) > 0 ? String(order.shippingFee) : ''
       statusDrafts[order.id] = order.status || 'pending_payment'
     })
   },
   { immediate: true }
 )
 
-watch([selectedTimeRange, selectedStatus, selectedCategory, pageSize], () => {
+watch([selectedTimeRange, selectedStatus, selectedCategory, keyword, pageSize], () => {
   currentPage.value = 1
 })
 
@@ -215,16 +233,21 @@ const categoryOptions = computed(() => {
   return Array.from(map.entries()).map(([value, label]) => ({ value, label }))
 })
 
-const filteredOrders = computed(() =>
-  admin.orders.filter((order) => {
+const filteredOrders = computed(() => {
+  const normalizedKeyword = keyword.value.trim().toLowerCase()
+  return admin.orders.filter((order) => {
     const statusMatch = selectedStatus.value === 'all' || order.status === selectedStatus.value
     const timeMatch = matchesTimeRange(order.createdAt, selectedTimeRange.value)
     const categoryMatch =
       selectedCategory.value === 'all' ||
       (order.items || []).some((item) => item.categoryKey === selectedCategory.value)
-    return statusMatch && timeMatch && categoryMatch
+    const keywordMatch =
+      !normalizedKeyword ||
+      String(order.orderNo || '').toLowerCase().includes(normalizedKeyword) ||
+      String(order.userName || '').toLowerCase().includes(normalizedKeyword)
+    return statusMatch && timeMatch && categoryMatch && keywordMatch
   })
-)
+})
 
 const paginatedOrders = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -241,6 +264,14 @@ watch(
   },
   { immediate: true }
 )
+
+function applyKeyword() {
+  keyword.value = keywordDraft.value.trim()
+}
+
+function updateShippingFeeDraft(orderId, event) {
+  shippingFeeDrafts[orderId] = event.target.value
+}
 
 function matchesTimeRange(value, range) {
   if (range === 'all') return true
@@ -295,17 +326,23 @@ function formatDate(value) {
   }).format(date)
 }
 
+function parseShippingFee(value) {
+  if (value === '' || value === null || value === undefined) return 0
+  const fee = Number(value)
+  return Number.isNaN(fee) ? Number.NaN : fee
+}
+
 function displayTotal(order) {
   const itemsTotal = Number(order.items?.reduce((sum, item) => sum + Number(item.totalPrice || 0), 0) || 0)
-  const shippingFee = Number(shippingFeeDrafts[order.id] ?? order.shippingFee ?? 0)
-  return itemsTotal + shippingFee
+  const shippingFee = parseShippingFee(shippingFeeDrafts[order.id])
+  return itemsTotal + (Number.isNaN(shippingFee) ? 0 : shippingFee)
 }
 
 async function saveOrder(order) {
   const nextStatus = statusDrafts[order.id] || order.status || 'pending_payment'
   const nextTrackingNo = (trackingDrafts[order.id] || '').trim()
   const nextPaymentLink = (paymentLinkDrafts[order.id] || '').trim()
-  const nextShippingFee = Number(shippingFeeDrafts[order.id] || 0)
+  const nextShippingFee = parseShippingFee(shippingFeeDrafts[order.id])
 
   if (nextStatus === 'shipped' && !nextTrackingNo) {
     window.alert('订单状态改为已发货时，必须填写物流单号。')
@@ -327,6 +364,7 @@ async function exportOrders() {
       timeRange: selectedTimeRange.value,
       status: selectedStatus.value,
       category: selectedCategory.value,
+      keyword: keyword.value,
       includeImages: '1',
     })
     const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
@@ -360,6 +398,21 @@ onMounted(() => {
 
 .page-head h1 {
   margin: 0 0 6px;
+}
+
+.orders-filter-row-full {
+  grid-template-columns: repeat(3, minmax(0, 220px)) minmax(320px, 1fr);
+}
+
+.order-search-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.admin-button-small {
+  min-height: 46px;
+  padding: 0 14px;
 }
 
 .order-item-main {
@@ -418,6 +471,14 @@ onMounted(() => {
 }
 
 @media (max-width: 1080px) {
+  .orders-filter-row-full {
+    grid-template-columns: 1fr;
+  }
+
+  .order-search-form {
+    grid-template-columns: 1fr;
+  }
+
   .order-item-main {
     width: 100%;
   }

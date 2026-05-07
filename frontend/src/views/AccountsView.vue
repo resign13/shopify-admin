@@ -6,7 +6,7 @@
         <div v-for="item in admin.storeUsers" :key="item.id" class="list-row stack-row">
           <div>
             <strong>{{ item.name }}</strong>
-            <p>{{ item.companyName }} · {{ item.email }}</p>
+            <p>{{ item.companyName ? `${item.companyName} · ${item.email}` : item.email }}</p>
             <p class="small-note">{{ item.status === 'active' ? '启用' : '停用' }}</p>
           </div>
 
@@ -21,7 +21,7 @@
         <h2>{{ form.id ? '编辑商城账号' : '新建商城账号' }}</h2>
         <form class="editor-form" @submit.prevent="save">
           <input v-model.trim="form.name" class="admin-field" placeholder="姓名" />
-          <input v-model.trim="form.companyName" class="admin-field" placeholder="公司名称" />
+          <input v-model.trim="form.companyName" class="admin-field" placeholder="公司名称（选填）" />
           <input v-model.trim="form.email" class="admin-field" placeholder="邮箱" />
           <input
             v-model.trim="form.password"
