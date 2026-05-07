@@ -292,13 +292,13 @@ const panelOpen = reactive({
 const bannerSlots = [
   { key: 'bestSeller', label: 'Best Seller 海报', tip: '首页 Best Seller 模块顶部海报' },
   { key: 'newArrival', label: 'New Arrival 海报', tip: '首页 New Arrival 模块顶部海报' },
-  { key: 'specialPrice', label: 'Special Price 海报', tip: '首页 Special Price 模块顶部海报' },
+  { key: 'specialPrice', label: 'PRE-ORDER 海报', tip: '首页 PRE-ORDER 模块顶部海报' },
 ]
 
 const sectionSlots = [
   { key: 'bestSeller', title: 'Best Seller 模块', description: '设置首页 Best Seller 模块展示的商品。' },
   { key: 'newArrival', title: 'New Arrival 模块', description: '设置首页 New Arrival 模块展示的商品。' },
-  { key: 'specialPrice', title: 'Special Price 模块', description: '设置首页 Special Price 模块展示的商品。' },
+  { key: 'specialPrice', title: 'PRE-ORDER 模块', description: '设置首页 PRE-ORDER 模块展示的商品。' },
 ]
 
 function emptyForm() {

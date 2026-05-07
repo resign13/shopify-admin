@@ -169,8 +169,8 @@ const modules = [
   },
   {
     key: 'specialPrice',
-    title: 'Special Price',
-    shortTitle: 'Special Price',
+    title: 'PRE-ORDER',
+    shortTitle: 'PRE-ORDER',
     description: '报名到特价专区的 View All 页面',
   },
 ]

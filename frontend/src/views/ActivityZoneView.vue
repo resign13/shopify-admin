@@ -6,7 +6,7 @@
           <div>
             <h1>活动专区</h1>
             <p class="small-note">
-              这里单独管理 Best Seller、New Arrival、Special Price 三个独立页面的商品。
+              这里单独管理 Best Seller、New Arrival、PRE-ORDER 三个独立页面的商品。
             </p>
           </div>
         </div>
@@ -182,8 +182,8 @@ const sectionSlots = [
   },
   {
     key: 'specialPrice',
-    title: 'Special Price 活动页',
-    description: '配置前台 Special Price 模块 View All 对应独立页面的商品。',
+    title: 'PRE-ORDER 活动页',
+    description: '配置前台 PRE-ORDER 模块 View All 对应独立页面的商品。',
   },
 ]
 

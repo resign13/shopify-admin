@@ -210,8 +210,8 @@ const modules = [
   },
   {
     key: 'specialPrice',
-    title: 'Special Price',
-    shortTitle: 'Special Price',
+    title: 'PRE-ORDER',
+    shortTitle: 'PRE-ORDER',
     description: '管理特价专区的 View All 商品',
   },
 ]
