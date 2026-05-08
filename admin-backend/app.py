@@ -538,7 +538,7 @@ def validate_category_payload(payload: dict[str, Any]) -> str | None:
     labels = payload.get("labels") or payload.get("name")
     if not isinstance(labels, dict):
         return "Invalid field: labels"
-    for lang in SUPPORTED_LANGS:
+    for lang in ("zh", "en"):
         if not str(labels.get(lang, "")).strip():
             return f"Missing field: labels.{lang}"
     try:

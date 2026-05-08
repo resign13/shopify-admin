@@ -42,11 +42,6 @@
             class="admin-field admin-textarea"
             placeholder="中文分类名"
           ></textarea>
-          <textarea
-            v-model.trim="form.labels.fr"
-            class="admin-field admin-textarea"
-            placeholder="法语分类名"
-          ></textarea>
           <p v-if="errorText" class="admin-error">{{ errorText }}</p>
           <button class="admin-button" type="submit">
             {{ saving ? '保存中...' : '保存分类' }}
@@ -72,7 +67,7 @@ function emptyForm() {
     id: null,
     key: '',
     sortOrder: 0,
-    labels: { zh: '', en: '', fr: '' },
+    labels: { zh: '', en: '' },
   }
 }
 
@@ -90,7 +85,6 @@ function editItem(item) {
   form.labels = {
     zh: item.labels?.zh || '',
     en: item.labels?.en || '',
-    fr: item.labels?.fr || '',
   }
   errorText.value = ''
 }
