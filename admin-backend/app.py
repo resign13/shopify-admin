@@ -91,7 +91,7 @@ mimetypes.add_type("image/webp", ".webp")
 F = TypeVar("F", bound=Callable[..., Any])
 SERVICE_TOKEN = os.environ.get("LUMIERE_SERVICE_TOKEN", "lumiere-service-token")
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
-SUPPORTED_LANGS = {"zh", "en", "fr"}
+SUPPORTED_LANGS = {"zh", "en"}
 DEFAULT_LANG = "zh"
 ORDER_STATUSES = {"pending_payment", "paid", "shipped", "completed", "cancelled"}
 ORDER_STATUS_LABELS = {
@@ -525,7 +525,7 @@ def validate_banner_payload(payload: dict[str, Any]) -> str | None:
         bundle = payload.get(field, {})
         if not isinstance(bundle, dict):
             return f"Invalid field: {field}"
-        for lang in ["zh", "en", "fr"]:
+        for lang in ["zh", "en"]:
             if not str(bundle.get(lang, "")).strip():
                 return f"Missing field: {field}.{lang}"
     return None

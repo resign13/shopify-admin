@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 REPO_DIR = BASE_DIR.parent
 SCHEMA_SQL_FILE = REPO_DIR / "db" / "postgres" / "init_lumiere_admin.sql"
 DEFAULT_LANG = "zh"
-SUPPORTED_LANGS = ("zh", "en", "fr")
+SUPPORTED_LANGS = ("zh", "en")
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
 ORDER_STATUSES = ("pending_payment", "paid", "shipped", "completed", "cancelled")
 

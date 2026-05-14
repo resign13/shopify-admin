@@ -238,7 +238,6 @@ function matchesKeyword(item, keyword) {
     item.sku,
     item.name?.zh,
     item.name?.en,
-    item.name?.fr,
     item.categoryLabel,
   ]
     .filter(Boolean)

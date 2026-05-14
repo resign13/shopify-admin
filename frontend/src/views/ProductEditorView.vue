@@ -679,7 +679,7 @@ function populateForm(item) {
   resetForm()
   form.categoryKey = item.categoryKey
   form.familyCode = item.colorGroup || item.productCode || item.slug
-  form.title = item.name?.zh || item.name?.en || item.name?.fr || ''
+  form.title = item.name?.zh || item.name?.en || ''
   form.origin = item.origin || 'China'
   form.featured = Boolean(item.featured)
   form.sizes = [...(item.sizes || ['S', 'M', 'L', 'XL'])]

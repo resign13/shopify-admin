@@ -22,13 +22,10 @@
           <input v-model.trim="form.ctaPath" class="admin-field" placeholder="按钮跳转路径" />
           <textarea v-model.trim="form.title.zh" class="admin-field admin-textarea" placeholder="中文标题"></textarea>
           <textarea v-model.trim="form.title.en" class="admin-field admin-textarea" placeholder="英文标题"></textarea>
-          <textarea v-model.trim="form.title.fr" class="admin-field admin-textarea" placeholder="法文标题"></textarea>
           <textarea v-model.trim="form.subtitle.zh" class="admin-field admin-textarea" placeholder="中文副标题"></textarea>
           <textarea v-model.trim="form.subtitle.en" class="admin-field admin-textarea" placeholder="英文副标题"></textarea>
-          <textarea v-model.trim="form.subtitle.fr" class="admin-field admin-textarea" placeholder="法文副标题"></textarea>
           <textarea v-model.trim="form.ctaLabel.zh" class="admin-field admin-textarea" placeholder="中文按钮文案"></textarea>
           <textarea v-model.trim="form.ctaLabel.en" class="admin-field admin-textarea" placeholder="英文按钮文案"></textarea>
-          <textarea v-model.trim="form.ctaLabel.fr" class="admin-field admin-textarea" placeholder="法文按钮文案"></textarea>
           <button class="admin-button" type="submit">保存轮播图</button>
         </form>
       </section>
@@ -49,9 +46,9 @@ function emptyForm() {
     id: null,
     image: '',
     ctaPath: '/shop',
-    title: { zh: '', en: '', fr: '' },
-    subtitle: { zh: '', en: '', fr: '' },
-    ctaLabel: { zh: '', en: '', fr: '' },
+    title: { zh: '', en: '' },
+    subtitle: { zh: '', en: '' },
+    ctaLabel: { zh: '', en: '' },
   }
 }
 

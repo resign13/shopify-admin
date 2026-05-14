@@ -329,7 +329,6 @@ const filteredProducts = computed(() => {
     const haystack = [
       item.name?.zh,
       item.name?.en,
-      item.name?.fr,
       item.productCode,
       item.sku,
     ]
