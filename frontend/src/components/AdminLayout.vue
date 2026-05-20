@@ -1,10 +1,18 @@
 ﻿<template>
   <div class="admin-shell">
     <aside class="sidebar">
-      <div class="brand-block">
-        <h2>GINGTTO 管理后台</h2>
-        <p>{{ auth.user?.name || '未登录用户' }}</p>
-        <span class="role-chip">{{ roleLabel }}</span>
+      <div class="topbar-main">
+        <div class="brand-block">
+          <div>
+            <h2>GINGTTO 管理后台</h2>
+            <p>{{ auth.user?.name || '未登录用户' }}</p>
+          </div>
+          <span class="role-chip">{{ roleLabel }}</span>
+        </div>
+
+        <button class="admin-button ghost logout-button" type="button" @click="logout">
+          退出登录
+        </button>
       </div>
 
       <nav class="sidebar-nav">
@@ -12,10 +20,6 @@
           {{ item.label }}
         </RouterLink>
       </nav>
-
-      <button class="admin-button ghost logout-button" type="button" @click="logout">
-        退出登录
-      </button>
     </aside>
 
     <section class="admin-content">
@@ -62,9 +66,18 @@ async function logout() {
 </script>
 
 <style scoped>
+.topbar-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .brand-block {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
 }
 
 .brand-block h2,
@@ -72,23 +85,45 @@ async function logout() {
   margin: 0;
 }
 
+.brand-block h2 {
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
 .brand-block p {
+  margin-top: 4px;
   color: rgba(255, 255, 255, 0.76);
+  font-size: 0.9rem;
 }
 
 .role-chip {
   display: inline-flex;
   width: fit-content;
   align-items: center;
-  min-height: 30px;
-  padding: 0 12px;
+  min-height: 28px;
+  padding: 0 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.14);
   color: white;
-  font-size: 0.88rem;
+  font-size: 0.82rem;
+  white-space: nowrap;
 }
 
 .logout-button {
-  margin-top: auto;
+  min-height: 38px;
+  padding: 0 14px;
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .topbar-main,
+  .brand-block {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .logout-button {
+    width: 100%;
+  }
 }
 </style>
