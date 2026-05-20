@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="admin-shell">
     <aside class="sidebar">
       <div class="brand-block">
@@ -46,6 +46,7 @@ const allNavItems = [
   { to: '/activity-zone/manage', label: '活动管理', roles: ['admin', 'sales'] },
   { to: '/categories', label: '商品分类', roles: ['admin', 'sales'] },
   { to: '/products', label: '商品管理', roles: ['admin', 'sales'] },
+  { to: '/inventory', label: '库存管理', roles: ['admin', 'sales', 'warehouse'] },
   { to: '/store-accounts', label: '商城账号', roles: ['admin'] },
   { to: '/admin-users', label: '后台账号', roles: ['admin'] },
   { to: '/orders', label: '订单管理', roles: ['admin', 'sales', 'warehouse'] },

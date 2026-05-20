@@ -943,6 +943,13 @@ def products() -> Any:
     return jsonify({"items": list_products()})
 
 
+@app.get("/api/admin/inventory")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def inventory_products() -> Any:
+    return jsonify({"items": list_products()})
+
+
 @app.post("/api/admin/products")
 @require_auth
 @require_roles("admin", "sales")

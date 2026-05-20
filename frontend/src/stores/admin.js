@@ -139,6 +139,7 @@ export const useAdminStore = defineStore('admin-data', {
   state: () => ({
     dashboard: null,
     products: [],
+    inventoryItems: [],
     banners: [],
     homeConfig: null,
     categories: [],
@@ -158,6 +159,11 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       const data = await request('/api/admin/products', { headers: authHeaders(auth.token) })
       this.products = data.items
+    },
+    async loadInventory() {
+      const auth = useAdminAuthStore()
+      const data = await request('/api/admin/inventory', { headers: authHeaders(auth.token) })
+      this.inventoryItems = data.items
     },
     async loadCategories() {
       const auth = useAdminAuthStore()
