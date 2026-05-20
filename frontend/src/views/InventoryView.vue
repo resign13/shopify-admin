@@ -65,7 +65,6 @@
               <tr>
                 <th>颜色 SKU</th>
                 <th>图片</th>
-                <th>商品名称</th>
                 <th>颜色</th>
                 <th>分类</th>
                 <th v-for="size in visibleSizes" :key="size">{{ size }}</th>
