@@ -6,7 +6,7 @@
           <div>
             <h1>库存管理</h1>
             <p class="small-note">
-              按颜色 SKU 展示商品图片、各尺码库存和当前总库存，查看方式尽量贴近你现在用的 Excel。
+              在这里可以直接修改各颜色 SKU 的尺码库存，保存后会同步到商品管理和其他读取同一库存数据的页面。
             </p>
           </div>
         </div>
@@ -56,6 +56,7 @@
         </div>
 
         <p v-if="error" class="admin-error">{{ error }}</p>
+        <p v-else-if="saveMessage" class="inventory-success">{{ saveMessage }}</p>
         <div v-if="loading" class="small-note">库存数据加载中...</div>
         <div v-else-if="!inventoryRows.length" class="empty-state">暂无符合条件的库存数据。</div>
 
@@ -69,6 +70,7 @@
                 <th>分类</th>
                 <th v-for="size in visibleSizes" :key="size">{{ size }}</th>
                 <th>当前库存</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody>
@@ -85,13 +87,57 @@
                 </td>
                 <td>{{ item.colorName || '未设置颜色' }}</td>
                 <td>{{ categoryLabel(item) }}</td>
-                <td v-for="size in visibleSizes" :key="`${item.id}-${size}`">
-                  <span class="stock-chip" :class="{ zero: readSizeStock(item, size) === 0 }">
-                    {{ readSizeStock(item, size) }}
-                  </span>
+                <td v-for="size in visibleSizes" :key="`${item.id}-${size}`" class="stock-cell">
+                  <template v-if="hasSize(item, size)">
+                    <input
+                      v-if="isEditing(item.id)"
+                      v-model="draftStocks[String(item.id)][size]"
+                      class="stock-input"
+                      type="number"
+                      min="0"
+                      step="1"
+                    />
+                    <span
+                      v-else
+                      class="stock-chip"
+                      :class="{ zero: readSizeStock(item, size) === 0 }"
+                    >
+                      {{ readSizeStock(item, size) }}
+                    </span>
+                  </template>
+                  <span v-else class="stock-chip zero empty-chip">—</span>
                 </td>
                 <td class="total-stock-cell">
-                  <strong>{{ item.totalStock }}</strong>
+                  <strong>{{ displayTotalStock(item) }}</strong>
+                </td>
+                <td class="actions-cell">
+                  <div v-if="isEditing(item.id)" class="row-actions">
+                    <button
+                      class="admin-button"
+                      type="button"
+                      :disabled="savingId === item.id"
+                      @click="saveRow(item)"
+                    >
+                      {{ savingId === item.id ? '保存中...' : '保存' }}
+                    </button>
+                    <button
+                      class="admin-button ghost"
+                      type="button"
+                      :disabled="savingId === item.id"
+                      @click="cancelEdit()"
+                    >
+                      取消
+                    </button>
+                  </div>
+                  <button
+                    v-else
+                    class="admin-button ghost"
+                    type="button"
+                    :disabled="savingId > 0"
+                    @click="startEdit(item)"
+                  >
+                    修改库存
+                  </button>
                 </td>
               </tr>
             </tbody>
@@ -115,6 +161,10 @@ const keywordDraft = ref('')
 const keyword = ref('')
 const loading = ref(false)
 const error = ref('')
+const saveMessage = ref('')
+const editingId = ref(0)
+const savingId = ref(0)
+const draftStocks = ref({})
 
 const inventoryRows = computed(() => {
   const normalizedKeyword = keyword.value.trim().toLowerCase()
@@ -199,6 +249,74 @@ function readSizeStock(item, size) {
   return Number(item.sizeStockMap?.[size] || 0)
 }
 
+function hasSize(item, size) {
+  return (item.rowSizes || []).includes(size)
+}
+
+function isEditing(productId) {
+  return Number(editingId.value) === Number(productId)
+}
+
+function startEdit(item) {
+  error.value = ''
+  saveMessage.value = ''
+  editingId.value = Number(item.id)
+  draftStocks.value[String(item.id)] = Object.fromEntries(
+    (item.rowSizes || []).map((size) => [size, String(readSizeStock(item, size))])
+  )
+}
+
+function cancelEdit() {
+  if (editingId.value) {
+    delete draftStocks.value[String(editingId.value)]
+  }
+  editingId.value = 0
+}
+
+function displayTotalStock(item) {
+  if (!isEditing(item.id)) {
+    return Number(item.totalStock || 0)
+  }
+  const draft = draftStocks.value[String(item.id)] || {}
+  return (item.rowSizes || []).reduce((total, size) => total + toSafeInt(draft[size]), 0)
+}
+
+function toSafeInt(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return 0
+  if (number < 0) return 0
+  return Math.floor(number)
+}
+
+async function saveRow(item) {
+  const productId = Number(item.id)
+  const draft = draftStocks.value[String(productId)] || {}
+  const payload = {}
+
+  for (const size of item.rowSizes || []) {
+    const rawValue = draft[size]
+    const number = Number(rawValue)
+    if (!Number.isFinite(number) || number < 0 || !Number.isInteger(number)) {
+      error.value = `${item.sku || item.productCode} / ${size} 的库存必须是大于等于 0 的整数`
+      return
+    }
+    payload[size] = number
+  }
+
+  savingId.value = productId
+  error.value = ''
+  saveMessage.value = ''
+  try {
+    await admin.saveInventory(productId, payload)
+    saveMessage.value = `${item.sku || item.productCode} 库存已更新`
+    cancelEdit()
+  } catch (err) {
+    error.value = err.message || '库存保存失败'
+  } finally {
+    savingId.value = 0
+  }
+}
+
 function applyFilters() {
   selectedCategory.value = selectedCategoryDraft.value
   keyword.value = keywordDraft.value.trim()
@@ -281,6 +399,10 @@ onMounted(loadPage)
   color: var(--accent);
 }
 
+.inventory-success {
+  color: #2d7b46;
+}
+
 .inventory-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--line);
@@ -290,7 +412,7 @@ onMounted(loadPage)
 
 .inventory-table {
   width: 100%;
-  min-width: 1080px;
+  min-width: 1180px;
   border-collapse: collapse;
 }
 
@@ -357,6 +479,10 @@ onMounted(loadPage)
   border: 1px dashed var(--line);
 }
 
+.stock-cell {
+  min-width: 76px;
+}
+
 .stock-chip {
   display: inline-flex;
   align-items: center;
@@ -375,8 +501,32 @@ onMounted(loadPage)
   color: var(--muted);
 }
 
+.empty-chip {
+  min-width: 32px;
+}
+
+.stock-input {
+  width: 72px;
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: white;
+  text-align: center;
+}
+
 .total-stock-cell strong {
   color: var(--accent);
+}
+
+.actions-cell {
+  min-width: 176px;
+}
+
+.row-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
 }
 
 .empty-state {
@@ -389,6 +539,10 @@ onMounted(loadPage)
   .filter-row,
   .inventory-summary-grid {
     grid-template-columns: 1fr;
+  }
+
+  .row-actions {
+    flex-direction: column;
   }
 }
 </style>

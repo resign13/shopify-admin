@@ -165,6 +165,25 @@ export const useAdminStore = defineStore('admin-data', {
       const data = await request('/api/admin/inventory', { headers: authHeaders(auth.token) })
       this.inventoryItems = data.items
     },
+    async saveInventory(productId, sizeStocks) {
+      const auth = useAdminAuthStore()
+      const data = await request(`/api/admin/inventory/${productId}`, {
+        method: 'PUT',
+        headers: authHeaders(auth.token),
+        body: JSON.stringify({ sizeStocks }),
+      })
+      const updated = data.product
+      const syncList = (items) => {
+        const index = items.findIndex((item) => Number(item.id || 0) === Number(updated.id || 0))
+        if (index >= 0) {
+          items.splice(index, 1, updated)
+        }
+      }
+      syncList(this.inventoryItems)
+      syncList(this.products)
+      await this.loadDashboard()
+      return updated
+    },
     async loadCategories() {
       const auth = useAdminAuthStore()
       const data = await request('/api/admin/categories', { headers: authHeaders(auth.token) })

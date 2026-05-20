@@ -860,6 +860,77 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
     return get_product_by_id(product_id)
 
 
+
+def update_product_inventory(product_id: int, size_stocks: dict[str, Any]) -> dict[str, Any] | None:
+    normalized: dict[str, int] = {}
+    for size_code, stock_value in (size_stocks or {}).items():
+        size_key = str(size_code or "").strip()
+        if not size_key:
+            continue
+        try:
+            stock = int(stock_value)
+        except Exception as exc:  # noqa: BLE001
+            raise ValueError(f"Invalid size stock for {size_key}") from exc
+        if stock < 0:
+            raise ValueError(f"Invalid size stock for {size_key}")
+        normalized[size_key] = stock
+
+    if not normalized:
+        raise ValueError("Missing field: sizeStocks")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM products WHERE id = %s AND is_active = TRUE", (product_id,))
+            if not cur.fetchone():
+                return None
+
+            cur.execute(
+                """
+                SELECT size_code
+                FROM product_size_prices
+                WHERE product_id = %s
+                ORDER BY sort_order, id
+                """,
+                (product_id,),
+            )
+            rows = cur.fetchall()
+            if not rows:
+                raise ValueError("Product has no size inventory")
+
+            existing_sizes = [str(row["size_code"]) for row in rows]
+            unknown_sizes = [size for size in normalized if size not in existing_sizes]
+            if unknown_sizes:
+                raise ValueError(f"Unknown sizes: {', '.join(unknown_sizes)}")
+
+            for size_code, stock in normalized.items():
+                cur.execute(
+                    """
+                    UPDATE product_size_prices
+                    SET stock = %s
+                    WHERE product_id = %s AND size_code = %s
+                    """,
+                    (stock, product_id, size_code),
+                )
+
+            cur.execute(
+                "SELECT COALESCE(SUM(stock), 0) AS total_stock FROM product_size_prices WHERE product_id = %s",
+                (product_id,),
+            )
+            total_stock = int((cur.fetchone() or {}).get("total_stock") or 0)
+            cur.execute(
+                """
+                UPDATE products
+                SET stock = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                """,
+                (total_stock, product_id),
+            )
+        conn.commit()
+
+    return get_product_by_id(product_id)
+
+
 def delete_product(product_id: int) -> bool:
     with get_connection() as conn:
         with conn.cursor() as cur:

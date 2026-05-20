@@ -79,6 +79,7 @@ from db import (
     update_category,
     update_order_status,
     update_product,
+    update_product_inventory,
     update_store_user,
 )
 
@@ -948,6 +949,23 @@ def products() -> Any:
 @require_roles("admin", "sales", "warehouse")
 def inventory_products() -> Any:
     return jsonify({"items": list_products()})
+
+
+@app.put("/api/admin/inventory/<int:product_id>")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def update_inventory_route(product_id: int) -> Any:
+    payload = request.get_json(silent=True) or {}
+    size_stocks = payload.get("sizeStocks")
+    if not isinstance(size_stocks, dict) or not size_stocks:
+        return jsonify({"message": "Missing field: sizeStocks"}), 400
+    try:
+        product = update_product_inventory(product_id, size_stocks)
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+    if not product:
+        return jsonify({"message": "Product not found"}), 404
+    return jsonify({"message": "Inventory updated", "product": product})
 
 
 @app.post("/api/admin/products")
