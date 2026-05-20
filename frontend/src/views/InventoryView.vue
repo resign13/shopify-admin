@@ -84,9 +84,6 @@
                     <span v-else>暂无图片</span>
                   </div>
                 </td>
-                <td class="product-cell">
-                  <strong>{{ displayName(item) }}</strong>
-                </td>
                 <td>{{ item.colorName || '未设置颜色' }}</td>
                 <td>{{ categoryLabel(item) }}</td>
                 <td v-for="size in visibleSizes" :key="`${item.id}-${size}`">
@@ -319,14 +316,12 @@ onMounted(loadPage)
   background: rgba(255, 255, 255, 0.72);
 }
 
-.sku-cell,
-.product-cell {
+.sku-cell {
   text-align: left !important;
   white-space: normal;
 }
 
-.sku-cell strong,
-.product-cell strong {
+.sku-cell strong {
   display: block;
 }
 
