@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import os
+from copy import copy
 import secrets
 import sys
 import mimetypes
@@ -20,7 +21,7 @@ if LOCAL_VENDOR_DIR.exists():
 
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
@@ -59,6 +60,7 @@ from db import (
     get_admin_user_by_session_token,
     get_banner_by_id,
     get_homepage_config,
+    get_order_by_id,
     get_product_by_id,
     get_product_by_slug,
     get_store_user_by_email,
@@ -233,6 +235,7 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
         "小计(USD)",
         "订单总额(USD)",
         "备注",
+        "换标PDF",
     ]
     worksheet.append(headers)
     for cell in worksheet[1]:
@@ -265,6 +268,7 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                     item.get("totalPrice") or 0,
                     order.get("totalAmount") or 0,
                     order.get("note") or "",
+                    order.get("labelPdfUrl") or "",
                 ]
             )
             worksheet.row_dimensions[current_row].height = 72
@@ -291,6 +295,173 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
     workbook.save(output)
     output.seek(0)
     return output
+
+PROFORMA_TEMPLATE_PATH = Path(
+    os.environ.get("PROFORMA_TEMPLATE_PATH", r"E:\PROFORMA INVIOCE-GINGTTO to dear  -20260211.xlsx")
+).expanduser()
+
+
+def copy_row_style(worksheet: Any, source_row: int, target_row: int, max_col: int = 6) -> None:
+    worksheet.row_dimensions[target_row].height = worksheet.row_dimensions[source_row].height
+    for column in range(1, max_col + 1):
+        source = worksheet.cell(source_row, column)
+        target = worksheet.cell(target_row, column)
+        if source.has_style:
+            target._style = copy(source._style)
+        target.font = copy(source.font)
+        target.fill = copy(source.fill)
+        target.border = copy(source.border)
+        target.alignment = copy(source.alignment)
+        target.number_format = source.number_format
+        target.protection = copy(source.protection)
+
+
+def normalize_order_shipping_fee(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def build_invoice_party_name(order: dict[str, Any]) -> str:
+    return (
+        str(order.get("companyName") or "").strip()
+        or str(order.get("contactName") or "").strip()
+        or str(order.get("userName") or "").strip()
+        or "--"
+    )
+
+
+def build_invoice_email(order: dict[str, Any]) -> str:
+    return str(order.get("contactValue") or "").strip() or str(order.get("userEmail") or "").strip()
+
+
+def build_invoice_address(order: dict[str, Any]) -> str:
+    explicit = str(order.get("shippingAddress") or "").strip()
+    if explicit:
+        return explicit
+    parts = [
+        str(order.get("address") or "").strip(),
+        str(order.get("apartment") or "").strip(),
+        str(order.get("city") or "").strip(),
+        str(order.get("state") or "").strip(),
+        str(order.get("zip") or "").strip(),
+        str(order.get("country") or "").strip(),
+    ]
+    return ", ".join(part for part in parts if part)
+
+
+def build_invoice_item_description(item: dict[str, Any]) -> str:
+    lines: list[str] = []
+    product_name = str(item.get("productName") or "").strip()
+    sku = str(item.get("sku") or "").strip()
+    category = str(item.get("categoryLabel") or item.get("categoryKey") or "").strip()
+    if product_name:
+        lines.append(product_name)
+    if sku:
+        lines.append(f"SKU: {sku}")
+    if category:
+        lines.append(f"Category: {category}")
+    return "\n".join(lines) or "--"
+
+
+def reset_invoice_summary_merges(worksheet: Any, shipping_row: int, total_row: int, payment_row: int) -> None:
+    for merged_range in list(worksheet.merged_cells.ranges):
+        if merged_range.min_col == 3 and merged_range.max_col == 5 and merged_range.min_row >= 16:
+            worksheet.unmerge_cells(str(merged_range))
+    for row in (shipping_row, total_row, payment_row):
+        worksheet.merge_cells(start_row=row, start_column=3, end_row=row, end_column=5)
+
+
+def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
+    if not PROFORMA_TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"未找到订单详情导出模板: {PROFORMA_TEMPLATE_PATH}")
+
+    shipping_fee = normalize_order_shipping_fee(order.get("shippingFee"))
+    if shipping_fee <= 0:
+        raise ValueError("请先输入运费并保存订单")
+
+    workbook = load_workbook(PROFORMA_TEMPLATE_PATH)
+    worksheet = workbook["PI"] if "PI" in workbook.sheetnames else workbook.active
+
+    items = [item for item in (order.get("items") or []) if isinstance(item, dict)]
+    if not items:
+        items = [{}]
+
+    item_start_row = 13
+    template_item_rows = 3
+    template_last_item_row = item_start_row + template_item_rows - 1
+    required_item_rows = max(len(items), template_item_rows)
+    extra_rows = required_item_rows - template_item_rows
+
+    if extra_rows > 0:
+        insert_at = template_last_item_row + 1
+        worksheet.insert_rows(insert_at, extra_rows)
+        for offset in range(extra_rows):
+            copy_row_style(worksheet, template_last_item_row, insert_at + offset)
+
+    shipping_row = item_start_row + required_item_rows
+    total_row = shipping_row + 1
+    payment_row = shipping_row + 2
+
+    reset_invoice_summary_merges(worksheet, shipping_row, total_row, payment_row)
+
+    worksheet["B5"] = str(order.get("orderNo") or "")
+    worksheet["E5"] = datetime.now().strftime("%Y.%m.%d")
+    worksheet["B6"] = build_invoice_party_name(order)
+    worksheet["E6"] = build_invoice_email(order)
+    worksheet["E7"] = str(order.get("phone") or "").strip()
+    worksheet["B9"] = build_invoice_address(order)
+    worksheet["B9"].alignment = copy(worksheet["B6"].alignment)
+
+    for row in range(item_start_row, shipping_row):
+        worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 72)
+        for column in range(1, 7):
+            worksheet.cell(row, column).value = None
+
+    for index, item in enumerate(items):
+        row = item_start_row + index
+        quantity = int(item.get("quantity") or 0)
+        unit_price = float(item.get("unitPrice") or 0)
+        total_price = float(item.get("totalPrice") or 0) or quantity * unit_price
+        worksheet[f"A{row}"] = build_invoice_item_description(item)
+        worksheet[f"C{row}"] = str(item.get("sizeCode") or "").strip() or "--"
+        worksheet[f"D{row}"] = quantity
+        worksheet[f"E{row}"] = unit_price
+        worksheet[f"F{row}"] = total_price
+        worksheet[f"A{row}"].alignment = copy(worksheet[f"A{template_last_item_row}"].alignment)
+        worksheet[f"C{row}"].alignment = copy(worksheet[f"C{template_last_item_row}"].alignment)
+        worksheet[f"D{row}"].alignment = copy(worksheet[f"D{template_last_item_row}"].alignment)
+        worksheet[f"E{row}"].alignment = copy(worksheet[f"E{template_last_item_row}"].alignment)
+        worksheet[f"F{row}"].alignment = copy(worksheet[f"F{template_last_item_row}"].alignment)
+
+        image_bytes = fetch_image_bytes(str(item.get("image") or ""))
+        if image_bytes:
+            excel_image = build_excel_image(image_bytes)
+            if excel_image:
+                worksheet.add_image(excel_image, f"B{row}")
+
+    worksheet[f"B{shipping_row}"] = "Shipping Cost"
+    worksheet[f"F{shipping_row}"] = shipping_fee
+    worksheet[f"B{total_row}"] = "Total"
+    worksheet[f"F{total_row}"] = f"=SUM(F{item_start_row}:F{shipping_row})"
+    worksheet[f"B{payment_row}"] = "Payment"
+    worksheet[f"F{payment_row}"] = f"=F{total_row}"
+    remarks = []
+    if str(order.get("note") or "").strip():
+        remarks.append(f"Note: {str(order.get('note') or '').strip()}")
+    if str(order.get("labelPdfUrl") or "").strip():
+        remarks.append(f"Label PDF: {str(order.get('labelPdfUrl') or '').strip()}")
+    if remarks:
+        worksheet["A21"] = "\n".join(remarks)
+        worksheet["A21"].alignment = Alignment(wrap_text=True, vertical="top")
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
 ADMIN_USER_ROLES = {"admin", "sales", "warehouse"}
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
@@ -645,8 +816,8 @@ def build_homepage_payload(lang: str) -> dict[str, Any]:
     ]
 
     stats = [
-        {"label": {"zh": "在线 SKU", "en": "Live SKUs", "fr": "SKU en ligne"}[lang], "value": str(count_products())},
-        {"label": {"zh": "现货库存", "en": "Units in stock", "fr": "Unites en stock"}[lang], "value": str(count_units_in_stock())},
+        {"label": {"zh": "在线 SKU", "en": "Live SKUs"}[lang], "value": str(count_products())},
+        {"label": {"zh": "现货库存", "en": "Units in stock"}[lang], "value": str(count_units_in_stock())},
     ]
 
     return {
@@ -905,6 +1076,7 @@ def service_create_order() -> Any:
                 "country": str(payload.get("country", "")).strip(),
                 "shippingAddress": str(payload["shippingAddress"]).strip(),
                 "note": str(payload.get("note", "")).strip(),
+                "labelPdfUrl": str(payload.get("labelPdfUrl", "")).strip(),
             }
         )
     except ValueError as error:
@@ -1341,6 +1513,12 @@ def export_orders() -> Any:
     category = str(request.args.get("category", "all")).strip() or "all"
     keyword = str(request.args.get("keyword", "")).strip()
     include_images = parse_bool(request.args.get("includeImages", "1"))
+    order_ids_raw = str(request.args.get("orderIds", "")).strip()
+    selected_order_ids = {
+        int(item)
+        for item in order_ids_raw.split(",")
+        if str(item).strip().isdigit()
+    }
     orders = filter_orders(
         list_orders(),
         time_range=time_range,
@@ -1348,12 +1526,37 @@ def export_orders() -> Any:
         category=category,
         keyword=keyword,
     )
+    if selected_order_ids:
+        orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     file_stream = build_orders_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(
         file_stream,
         as_attachment=True,
         download_name=f"orders_export_{timestamp}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/api/admin/orders/<int:order_id>/invoice")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def export_order_invoice(order_id: int) -> Any:
+    order = get_order_by_id(order_id)
+    if not order:
+        return jsonify({"message": "Order not found"}), 404
+    try:
+        file_stream = build_order_invoice_export(order)
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+    except FileNotFoundError as error:
+        return jsonify({"message": str(error)}), 500
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    order_no = secure_filename(str(order.get("orderNo") or order_id)) or f"order_{order_id}"
+    return send_file(
+        file_stream,
+        as_attachment=True,
+        download_name=f"proforma_{order_no}_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 

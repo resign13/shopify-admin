@@ -222,6 +222,7 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_no VARCHAR(120)")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_link TEXT")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_fee NUMERIC(12, 2) NOT NULL DEFAULT 0")
+    cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS label_pdf_url TEXT")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
     _migrate_order_status_values(cur)
@@ -1784,6 +1785,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None) -> list
           o.tracking_no,
           o.payment_link,
           o.shipping_fee,
+          o.label_pdf_url,
           o.shipped_at,
           o.completed_at,
           o.shipping_address,
@@ -1834,6 +1836,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None) -> list
                 "trackingNo": row.get("tracking_no") or "",
                 "paymentLink": row.get("payment_link") or "",
                 "shippingFee": _num(row.get("shipping_fee") or 0),
+                "labelPdfUrl": row.get("label_pdf_url") or "",
                 "shippedAt": _iso(row["shipped_at"]) if row.get("shipped_at") else "",
                 "completedAt": _iso(row["completed_at"]) if row.get("completed_at") else "",
                 "marketingOptIn": bool(row.get("marketing_opt_in")),
@@ -1951,10 +1954,10 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                 """
                 INSERT INTO orders (
                   order_no, store_user_id, status, contact_name, phone, country,
-                  shipping_address, note, total_amount, created_at, updated_at
+                  shipping_address, note, label_pdf_url, total_amount, created_at, updated_at
                 )
                 VALUES (
-                  %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                  %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
                 )
                 RETURNING id
                 """,
@@ -1966,6 +1969,7 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                     payload.get("country", ""),
                     payload["shippingAddress"],
                     payload.get("note", ""),
+                    payload.get("labelPdfUrl", ""),
                     total_price,
                 ),
             )

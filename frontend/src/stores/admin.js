@@ -52,6 +52,7 @@ function normalizeGroupedOrder(order = {}) {
     zip: order.zip || '',
     shippingAddress: order.shippingAddress || '',
     note: order.note || '',
+    labelPdfUrl: order.labelPdfUrl || '',
     totalAmount,
     trackingNo: order.trackingNo || '',
     paymentLink: order.paymentLink || '',
@@ -91,6 +92,7 @@ function groupLegacyOrders(rows = []) {
         zip: row.zip || '',
         shippingAddress: row.shippingAddress || '',
         note: row.note || '',
+        labelPdfUrl: row.labelPdfUrl || '',
         totalAmount: 0,
         trackingNo: row.trackingNo || '',
         paymentLink: row.paymentLink || '',
@@ -348,6 +350,26 @@ export const useAdminStore = defineStore('admin-data', {
           /^\/api/,
           `${API_BASE}/api`
         ),
+        {
+          headers: authHeaders(auth.token),
+        }
+      )
+      if (!response.ok) {
+        let message = 'Export failed'
+        try {
+          const data = await response.json()
+          message = data.message || message
+        } catch {
+          // ignore json parse failure for file responses
+        }
+        throw new Error(message)
+      }
+      return response.blob()
+    },
+    async exportOrderInvoice(orderId) {
+      const auth = useAdminAuthStore()
+      const response = await fetch(
+        `/api/admin/orders/${orderId}/invoice`.replace(/^\/api/, `${API_BASE}/api`),
         {
           headers: authHeaders(auth.token),
         }

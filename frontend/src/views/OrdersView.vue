@@ -9,9 +9,19 @@
               支持按时间、状态、分类和关键词筛选订单，并维护付款链接、物流单号、运费和订单状态。
             </p>
           </div>
-          <button class="admin-button" type="button" :disabled="exporting" @click="exportOrders">
-            {{ exporting ? '导出中...' : '导出订单 Excel' }}
-          </button>
+          <div class="page-head-actions">
+            <button
+              class="admin-button ghost"
+              type="button"
+              :disabled="!selectedCount || exporting"
+              @click="clearSelection"
+            >
+              清空勾选
+            </button>
+            <button class="admin-button" type="button" :disabled="exporting" @click="exportOrders">
+              {{ exporting ? '导出中...' : exportButtonText }}
+            </button>
+          </div>
         </div>
 
         <div class="orders-filter-row orders-filter-row-wide orders-filter-row-full">
@@ -50,25 +60,62 @@
             <button class="admin-button admin-button-small" type="submit">查询</button>
           </form>
         </div>
+
+        <div class="selection-toolbar">
+          <label class="selection-check">
+            <input
+              type="checkbox"
+              :checked="allFilteredSelected"
+              :indeterminate.prop="someFilteredSelected && !allFilteredSelected"
+              @change="toggleAllFilteredOrders($event)"
+            />
+            <span>勾选当前筛选结果</span>
+          </label>
+          <div class="selection-summary">
+            已勾选 <strong>{{ selectedCount }}</strong> 个订单
+            <span class="small-note">当前筛选结果 {{ filteredOrders.length }} 个</span>
+          </div>
+        </div>
       </div>
 
       <article v-for="order in paginatedOrders" :key="order.id" class="admin-card order-card">
         <div class="order-card-head">
-          <div>
-            <strong>{{ order.orderNo }}</strong>
-            <p>{{ formatOrderOwner(order) }}</p>
-            <p>{{ formatDate(order.createdAt) }} / {{ formatStatus(statusDrafts[order.id] || order.status) }}</p>
+          <div class="order-card-title">
+            <label class="selection-check order-check">
+              <input
+                type="checkbox"
+                :checked="isSelected(order.id)"
+                @change="toggleOrderSelection(order.id, $event.target.checked)"
+              />
+            </label>
+
+            <div>
+              <strong>{{ order.orderNo }}</strong>
+              <p>{{ formatOrderOwner(order) }}</p>
+              <p>{{ formatDate(order.createdAt) }} / {{ formatStatus(statusDrafts[order.id] || order.status) }}</p>
+            </div>
           </div>
 
           <div class="order-head-side">
-            <select v-model="statusDrafts[order.id]" class="admin-field status-select">
-              <option value="pending_payment">待付款</option>
-              <option value="paid">已付款</option>
-              <option value="shipped">已发货</option>
-              <option value="completed">已完成</option>
-              <option value="cancelled">已取消</option>
-            </select>
-            <strong>${{ displayTotal(order).toFixed(2) }}</strong>
+            <button
+              class="admin-button ghost order-invoice-button"
+              type="button"
+              :disabled="invoiceExportingId === order.id"
+              @click="exportOrderInvoice(order)"
+            >
+              {{ invoiceExportingId === order.id ? '导出中...' : '导出订单详情' }}
+            </button>
+
+            <div class="order-head-meta">
+              <select v-model="statusDrafts[order.id]" class="admin-field status-select">
+                <option value="pending_payment">待付款</option>
+                <option value="paid">已付款</option>
+                <option value="shipped">已发货</option>
+                <option value="completed">已完成</option>
+                <option value="cancelled">已取消</option>
+              </select>
+              <strong>${{ displayTotal(order).toFixed(2) }}</strong>
+            </div>
           </div>
         </div>
 
@@ -92,6 +139,17 @@
           <div class="full-span">
             <span>收货地址</span>
             <strong>{{ order.shippingAddress || '--' }}</strong>
+          </div>
+          <div class="full-span">
+            <span>订单备注</span>
+            <strong>{{ order.note || '--' }}</strong>
+          </div>
+          <div class="full-span">
+            <span>换标 PDF</span>
+            <strong v-if="order.labelPdfUrl">
+              <a :href="order.labelPdfUrl" target="_blank" rel="noreferrer">{{ order.labelPdfUrl }}</a>
+            </strong>
+            <strong v-else>--</strong>
           </div>
         </div>
 
@@ -202,6 +260,8 @@ const paymentLinkDrafts = reactive({})
 const shippingFeeDrafts = reactive({})
 const statusDrafts = reactive({})
 const exporting = ref(false)
+const invoiceExportingId = ref(0)
+const selectedOrderIds = ref([])
 
 watch(
   () => admin.orders,
@@ -212,6 +272,8 @@ watch(
       shippingFeeDrafts[order.id] = Number(order.shippingFee || 0) > 0 ? String(order.shippingFee) : ''
       statusDrafts[order.id] = order.status || 'pending_payment'
     })
+    const validIds = new Set(orders.map((order) => Number(order.id)))
+    selectedOrderIds.value = selectedOrderIds.value.filter((id) => validIds.has(Number(id)))
   },
   { immediate: true }
 )
@@ -249,6 +311,25 @@ const filteredOrders = computed(() => {
   })
 })
 
+const filteredOrderIds = computed(() => filteredOrders.value.map((order) => Number(order.id)))
+const selectedCount = computed(() => selectedOrderIds.value.length)
+
+const allFilteredSelected = computed(() => {
+  if (!filteredOrderIds.value.length) return false
+  const selectedSet = new Set(selectedOrderIds.value.map((id) => Number(id)))
+  return filteredOrderIds.value.every((id) => selectedSet.has(id))
+})
+
+const someFilteredSelected = computed(() => {
+  if (!filteredOrderIds.value.length) return false
+  const selectedSet = new Set(selectedOrderIds.value.map((id) => Number(id)))
+  return filteredOrderIds.value.some((id) => selectedSet.has(id))
+})
+
+const exportButtonText = computed(() =>
+  selectedCount.value ? `导出已勾选 ${selectedCount.value} 个订单` : '导出当前筛选订单 Excel'
+)
+
 const paginatedOrders = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
   return filteredOrders.value.slice(start, start + pageSize.value)
@@ -258,9 +339,7 @@ watch(
   () => filteredOrders.value.length,
   (count) => {
     const totalPages = Math.max(1, Math.ceil(count / pageSize.value))
-    if (currentPage.value > totalPages) {
-      currentPage.value = totalPages
-    }
+    if (currentPage.value > totalPages) currentPage.value = totalPages
   },
   { immediate: true }
 )
@@ -271,6 +350,30 @@ function applyKeyword() {
 
 function updateShippingFeeDraft(orderId, event) {
   shippingFeeDrafts[orderId] = event.target.value
+}
+
+function isSelected(orderId) {
+  return selectedOrderIds.value.includes(Number(orderId))
+}
+
+function toggleOrderSelection(orderId, checked) {
+  const normalizedId = Number(orderId)
+  const next = new Set(selectedOrderIds.value.map((id) => Number(id)))
+  if (checked) next.add(normalizedId)
+  else next.delete(normalizedId)
+  selectedOrderIds.value = Array.from(next)
+}
+
+function toggleAllFilteredOrders(event) {
+  const checked = Boolean(event.target.checked)
+  const next = new Set(selectedOrderIds.value.map((id) => Number(id)))
+  if (checked) filteredOrderIds.value.forEach((id) => next.add(id))
+  else filteredOrderIds.value.forEach((id) => next.delete(id))
+  selectedOrderIds.value = Array.from(next)
+}
+
+function clearSelection() {
+  selectedOrderIds.value = []
 }
 
 function formatOrderOwner(order) {
@@ -345,6 +448,43 @@ function displayTotal(order) {
   return itemsTotal + (Number.isNaN(shippingFee) ? 0 : shippingFee)
 }
 
+function hasSavedShippingFee(order) {
+  const savedShippingFee = Number(order.shippingFee || 0)
+  if (!(savedShippingFee > 0)) return false
+  const draftShippingFee = parseShippingFee(shippingFeeDrafts[order.id])
+  if (Number.isNaN(draftShippingFee)) return false
+  return Math.abs(draftShippingFee - savedShippingFee) < 0.0001
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+async function exportOrderInvoice(order) {
+  if (!hasSavedShippingFee(order)) {
+    window.alert('请先输入运费并保存订单')
+    return
+  }
+
+  invoiceExportingId.value = order.id
+  try {
+    const blob = await admin.exportOrderInvoice(order.id)
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+    downloadBlob(blob, `proforma_${order.orderNo || order.id}_${timestamp}.xlsx`)
+  } catch (error) {
+    window.alert(error.message || '导出订单详情失败')
+  } finally {
+    if (invoiceExportingId.value === order.id) invoiceExportingId.value = 0
+  }
+}
+
 async function saveOrder(order) {
   const nextStatus = statusDrafts[order.id] || order.status || 'pending_payment'
   const nextTrackingNo = (trackingDrafts[order.id] || '').trim()
@@ -367,22 +507,22 @@ async function saveOrder(order) {
 async function exportOrders() {
   exporting.value = true
   try {
-    const blob = await admin.exportOrders({
+    const filters = {
       timeRange: selectedTimeRange.value,
       status: selectedStatus.value,
       category: selectedCategory.value,
       keyword: keyword.value,
       includeImages: '1',
-    })
+    }
+    if (selectedOrderIds.value.length) filters.orderIds = selectedOrderIds.value.join(',')
+    const blob = await admin.exportOrders(filters)
     const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `orders_export_${timestamp}.xlsx`
-    document.body.appendChild(link)
-    link.click()
-    link.remove()
-    URL.revokeObjectURL(url)
+    downloadBlob(
+      blob,
+      selectedOrderIds.value.length
+        ? `orders_selected_export_${timestamp}.xlsx`
+        : `orders_export_${timestamp}.xlsx`
+    )
   } catch (error) {
     window.alert(error.message || '导出订单失败')
   } finally {
@@ -407,6 +547,13 @@ onMounted(() => {
   margin: 0 0 6px;
 }
 
+.page-head-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .orders-filter-row-full {
   grid-template-columns: repeat(3, minmax(0, 220px)) minmax(320px, 1fr);
 }
@@ -415,6 +562,60 @@ onMounted(() => {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
+}
+
+.selection-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(110, 85, 61, 0.12);
+  flex-wrap: wrap;
+}
+
+.selection-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.selection-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.order-card-title {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.order-head-side {
+  display: grid;
+  gap: 10px;
+  justify-items: end;
+  align-items: flex-start;
+}
+
+.order-head-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.order-invoice-button {
+  min-width: 148px;
+}
+
+.order-check {
+  padding-top: 2px;
 }
 
 .admin-button-small {
@@ -491,6 +692,25 @@ onMounted(() => {
   }
 
   .right-actions {
+    justify-content: flex-start;
+  }
+
+  .page-head,
+  .selection-toolbar,
+  .order-card-title {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .order-head-side,
+  .order-head-meta {
+    width: 100%;
+    justify-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .page-head-actions {
+    width: 100%;
     justify-content: flex-start;
   }
 }

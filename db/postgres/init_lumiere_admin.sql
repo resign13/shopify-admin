@@ -1,4 +1,4 @@
-﻿BEGIN;
+BEGIN;
 
 CREATE TABLE IF NOT EXISTS admin_users (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS product_categories (
 CREATE TABLE IF NOT EXISTS product_category_translations (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   category_id BIGINT NOT NULL REFERENCES product_categories(id) ON DELETE CASCADE,
-  lang_code VARCHAR(8) NOT NULL CHECK (lang_code IN ('zh', 'en', 'fr')),
+  lang_code VARCHAR(8) NOT NULL CHECK (lang_code IN ('zh', 'en')),
   label VARCHAR(255) NOT NULL,
   UNIQUE (category_id, lang_code)
 );
@@ -80,7 +80,7 @@ CREATE INDEX IF NOT EXISTS idx_products_featured
 CREATE TABLE IF NOT EXISTS product_translations (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  lang_code VARCHAR(8) NOT NULL CHECK (lang_code IN ('zh', 'en', 'fr')),
+  lang_code VARCHAR(8) NOT NULL CHECK (lang_code IN ('zh', 'en')),
   name VARCHAR(255) NOT NULL,
   summary TEXT,
   description TEXT,
@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS banners (
 CREATE TABLE IF NOT EXISTS banner_translations (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   banner_id BIGINT NOT NULL REFERENCES banners(id) ON DELETE CASCADE,
-  lang_code VARCHAR(8) NOT NULL CHECK (lang_code IN ('zh', 'en', 'fr')),
+  lang_code VARCHAR(8) NOT NULL CHECK (lang_code IN ('zh', 'en')),
   title VARCHAR(255) NOT NULL,
   subtitle TEXT,
   cta_label VARCHAR(120),
@@ -236,19 +236,14 @@ JOIN (
   VALUES
     ('womenswear', 'zh', '濂宠'),
     ('womenswear', 'en', 'Womenswear'),
-    ('womenswear', 'fr', 'Mode femme'),
     ('menswear', 'zh', '鐢疯'),
     ('menswear', 'en', 'Menswear'),
-    ('menswear', 'fr', 'Mode homme'),
     ('pants', 'zh', '瑁よ'),
     ('pants', 'en', 'Pants'),
-    ('pants', 'fr', 'Pantalons'),
     ('denim', 'zh', '鐗涗粩'),
     ('denim', 'en', 'Denim'),
-    ('denim', 'fr', 'Denim'),
     ('outerwear', 'zh', '澶栧'),
     ('outerwear', 'en', 'Outerwear'),
-    ('outerwear', 'fr', 'Vetements d''exterieur')
 ) AS v(category_key, lang_code, label)
   ON v.category_key = pc.category_key
 ON CONFLICT (category_id, lang_code) DO NOTHING;
@@ -294,10 +289,8 @@ JOIN (
   VALUES
     ('atelier-linen-shirt-dress', 'zh', 'Atelier Linen Shirt Dress', 'Premium resort-style linen dress for boutique fashion programs.', 'Fluid drape and easy silhouette with customization support for fabric, trims and labels.'),
     ('atelier-linen-shirt-dress', 'en', 'Atelier Linen Shirt Dress', 'Premium resort-style linen dress for boutique fashion programs.', 'Fluid drape and easy silhouette with customization support for fabric, trims and labels.'),
-    ('atelier-linen-shirt-dress', 'fr', 'Robe chemise en lin Atelier', 'Robe en lin premium esprit resort pour les programmes mode boutique.', 'Beau tombe et silhouette decontractee avec personnalisation des tissus, finitions et etiquettes.'),
     ('signature-oxford-shirt', 'zh', 'Signature Oxford Shirt', 'Classic shirt program for menswear brands and uniform buyers.', 'High-density cotton yarn with customizable labels, embroidery and packaging.'),
     ('signature-oxford-shirt', 'en', 'Signature Oxford Shirt', 'Classic shirt program for menswear brands and uniform buyers.', 'High-density cotton yarn with customizable labels, embroidery and packaging.'),
-    ('signature-oxford-shirt', 'fr', 'Chemise Oxford Signature', 'Programme chemise classique pour les marques homme et l uniforme.', 'Coton haute densite avec etiquettes, broderies et packaging personnalisables.')
 ) AS v(slug, lang_code, name, summary, description)
   ON v.slug = p.slug
 ON CONFLICT (product_id, lang_code) DO NOTHING;
@@ -372,10 +365,8 @@ JOIN (
   VALUES
     ('https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1600&q=80', 'zh', '2026 鏄ュ鏈嶈涓绘帹绯诲垪', '鑱氱劍濂宠銆佺敺瑁呬笌瑁よ澶ц揣娆惧紡锛屽簱瀛樺疄鏃跺彲鏌ャ€?, '杩涘叆鍟嗗煄'),
     ('https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1600&q=80', 'en', 'Spring Summer 2026 Apparel Highlights', 'Focus on dresses, shirts and pants with live stock visibility.', 'Shop Now'),
-    ('https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1600&q=80', 'fr', 'Temps forts apparel printemps ete 2026', 'Focus sur robes, chemises et pantalons avec stock visible en temps reel.', 'Entrer en boutique'),
     ('https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1600&q=80', 'zh', '瑁よ涓庣墰浠旂郴鍒楁寔缁ˉ璐?, '鏀寔瀹㈡埛鍦ㄧ嚎涓嬪崟锛岃鍗曡嚜鍔ㄨ繘鍏ュ悗鍙扮鐞嗙銆?, '鏌ョ湅搴撳瓨'),
     ('https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1600&q=80', 'en', 'Pants and Denim Restock Program', 'Customers can place orders online and sync them to the admin panel.', 'Check Inventory'),
-    ('https://images.unsplash.com/photo-1512436991641-6745cdb1723f?auto=format&fit=crop&w=1600&q=80', 'fr', 'Programme de reassort pantalons et denim', 'Les clients commandent en ligne et les commandes remontent dans l admin.', 'Voir le stock')
 ) AS v(image_url, lang_code, title, subtitle, cta_label)
   ON v.image_url = b.image_url
 ON CONFLICT (banner_id, lang_code) DO NOTHING;
