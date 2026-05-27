@@ -145,7 +145,7 @@
             <strong>{{ order.note || '--' }}</strong>
           </div>
           <div class="full-span">
-            <span>备注图片</span>
+            <span>备注附件</span>
             <strong v-if="orderLabelImages(order).length" class="admin-label-images">
               <a
                 v-for="(imageUrl, imageIndex) in orderLabelImages(order)"
@@ -154,7 +154,7 @@
                 target="_blank"
                 rel="noreferrer"
               >
-                图片 {{ imageIndex + 1 }}
+                附件 {{ imageIndex + 1 }}
               </a>
             </strong>
             <strong v-else>--</strong>
