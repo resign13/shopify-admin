@@ -235,7 +235,7 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
         "小计(USD)",
         "订单总额(USD)",
         "备注",
-        "换标PDF",
+        "备注图片",
     ]
     worksheet.append(headers)
     for cell in worksheet[1]:
@@ -268,7 +268,7 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                     item.get("totalPrice") or 0,
                     order.get("totalAmount") or 0,
                     order.get("note") or "",
-                    order.get("labelPdfUrl") or "",
+                    ", ".join(order.get("labelImageUrls") or ([order.get("labelPdfUrl")] if order.get("labelPdfUrl") else [])),
                 ]
             )
             worksheet.row_dimensions[current_row].height = 72
@@ -450,8 +450,9 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     remarks = []
     if str(order.get("note") or "").strip():
         remarks.append(f"Note: {str(order.get('note') or '').strip()}")
-    if str(order.get("labelPdfUrl") or "").strip():
-        remarks.append(f"Label PDF: {str(order.get('labelPdfUrl') or '').strip()}")
+    label_images = order.get("labelImageUrls") or ([order.get("labelPdfUrl")] if order.get("labelPdfUrl") else [])
+    if label_images:
+        remarks.append("Label Images: " + ", ".join(str(item) for item in label_images if str(item or "").strip()))
     if remarks:
         worksheet["A21"] = "\n".join(remarks)
         worksheet["A21"].alignment = Alignment(wrap_text=True, vertical="top")
@@ -1076,6 +1077,7 @@ def service_create_order() -> Any:
                 "country": str(payload.get("country", "")).strip(),
                 "shippingAddress": str(payload["shippingAddress"]).strip(),
                 "note": str(payload.get("note", "")).strip(),
+                "labelImageUrls": payload.get("labelImageUrls") or payload.get("labelImageUrl") or [],
                 "labelPdfUrl": str(payload.get("labelPdfUrl", "")).strip(),
             }
         )

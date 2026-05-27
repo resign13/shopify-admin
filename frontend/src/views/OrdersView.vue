@@ -145,9 +145,17 @@
             <strong>{{ order.note || '--' }}</strong>
           </div>
           <div class="full-span">
-            <span>换标 PDF</span>
-            <strong v-if="order.labelPdfUrl">
-              <a :href="order.labelPdfUrl" target="_blank" rel="noreferrer">{{ order.labelPdfUrl }}</a>
+            <span>备注图片</span>
+            <strong v-if="orderLabelImages(order).length" class="admin-label-images">
+              <a
+                v-for="(imageUrl, imageIndex) in orderLabelImages(order)"
+                :key="imageUrl"
+                :href="imageUrl"
+                target="_blank"
+                rel="noreferrer"
+              >
+                图片 {{ imageIndex + 1 }}
+              </a>
             </strong>
             <strong v-else>--</strong>
           </div>
@@ -456,6 +464,11 @@ function hasSavedShippingFee(order) {
   return Math.abs(draftShippingFee - savedShippingFee) < 0.0001
 }
 
+function orderLabelImages(order) {
+  if (Array.isArray(order.labelImageUrls)) return order.labelImageUrls.filter(Boolean).slice(0, 5)
+  return order.labelPdfUrl ? [order.labelPdfUrl] : []
+}
+
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob)
   const link = document.createElement('a')
@@ -536,6 +549,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.admin-label-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .page-head {
   display: flex;
   align-items: flex-start;

@@ -223,6 +223,7 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_link TEXT")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_fee NUMERIC(12, 2) NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS label_pdf_url TEXT")
+    cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS label_image_urls TEXT NOT NULL DEFAULT '[]'")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
     _migrate_order_status_values(cur)
@@ -242,6 +243,35 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE homepage_configs ADD COLUMN IF NOT EXISTS hero_banner_images TEXT NOT NULL DEFAULT '{}'")
     cur.execute("ALTER TABLE homepage_configs ADD COLUMN IF NOT EXISTS collection_product_ids TEXT NOT NULL DEFAULT '{}'")
 
+
+
+def _json_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item or "").strip()]
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except Exception:
+            return [value.strip()]
+        if isinstance(parsed, list):
+            return [str(item).strip() for item in parsed if str(item or "").strip()]
+        if isinstance(parsed, str) and parsed.strip():
+            return [parsed.strip()]
+    return []
+
+
+def _serialize_label_image_urls(value: Any, fallback: str = "") -> str:
+    urls = _json_list(value)[:5]
+    if not urls and fallback:
+        urls = [str(fallback).strip()]
+    return json.dumps(urls[:5], ensure_ascii=False)
+
+
+def _parse_label_image_urls(row: dict[str, Any]) -> list[str]:
+    urls = _json_list(row.get("label_image_urls"))[:5]
+    if not urls and str(row.get("label_pdf_url") or "").strip():
+        urls = [str(row.get("label_pdf_url") or "").strip()]
+    return urls
 
 def ensure_database_ready() -> None:
     try:
@@ -1786,6 +1816,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None) -> list
           o.payment_link,
           o.shipping_fee,
           o.label_pdf_url,
+          o.label_image_urls,
           o.shipped_at,
           o.completed_at,
           o.shipping_address,
@@ -1837,6 +1868,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None) -> list
                 "paymentLink": row.get("payment_link") or "",
                 "shippingFee": _num(row.get("shipping_fee") or 0),
                 "labelPdfUrl": row.get("label_pdf_url") or "",
+                "labelImageUrls": _parse_label_image_urls(row),
                 "shippedAt": _iso(row["shipped_at"]) if row.get("shipped_at") else "",
                 "completedAt": _iso(row["completed_at"]) if row.get("completed_at") else "",
                 "marketingOptIn": bool(row.get("marketing_opt_in")),
@@ -1954,10 +1986,10 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                 """
                 INSERT INTO orders (
                   order_no, store_user_id, status, contact_name, phone, country,
-                  shipping_address, note, label_pdf_url, total_amount, created_at, updated_at
+                  shipping_address, note, label_pdf_url, label_image_urls, total_amount, created_at, updated_at
                 )
                 VALUES (
-                  %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                  %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
                 )
                 RETURNING id
                 """,
@@ -1970,6 +2002,7 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                     payload["shippingAddress"],
                     payload.get("note", ""),
                     payload.get("labelPdfUrl", ""),
+                    _serialize_label_image_urls(payload.get("labelImageUrls"), payload.get("labelPdfUrl", "")),
                     total_price,
                 ),
             )
