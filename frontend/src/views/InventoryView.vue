@@ -167,76 +167,26 @@ const savingId = ref(0)
 const draftStocks = ref({})
 
 
-const MERGED_SIZE_GROUPS = [
-  { key: 'S/28', aliases: ['S', '28'] },
-  { key: 'M/30', aliases: ['M', '30'] },
-  { key: 'L/32', aliases: ['L', '32'] },
-  { key: 'XL/34', aliases: ['XL', '34'] },
-  { key: 'XXL/36', aliases: ['XXL', '36'] },
-  { key: 'XXXL/38', aliases: ['XXXL', '38'] },
-]
-
-const MERGED_SIZE_ALIAS_MAP = Object.fromEntries(
-  MERGED_SIZE_GROUPS.flatMap((group) =>
-    group.aliases.map((alias) => [alias, group])
-  )
-)
+const ALPHA_SIZE_ORDER = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL']
+const NUMERIC_SIZE_ORDER = ['28', '30', '32', '34', '36', '38']
+const PREFERRED_SIZE_ORDER = [...ALPHA_SIZE_ORDER, ...NUMERIC_SIZE_ORDER]
+const SIZE_ORDER_INDEX = Object.fromEntries(PREFERRED_SIZE_ORDER.map((size, index) => [size, index]))
 
 function normalizeSizeCode(size) {
   return String(size || '').trim().toUpperCase()
 }
 
-function displaySizeKey(size) {
-  const normalized = normalizeSizeCode(size)
-  return MERGED_SIZE_ALIAS_MAP[normalized]?.key || normalized
-}
-
-function displaySizeAliases(size) {
-  const normalized = normalizeSizeCode(size)
-  return MERGED_SIZE_ALIAS_MAP[normalized]?.aliases || [normalized]
-}
-
-function itemDisplaySizes(item) {
-  const seen = new Set()
-  const result = []
-  for (const rawSize of item.rowSizes || []) {
-    const key = displaySizeKey(rawSize)
-    if (key && !seen.has(key)) {
-      seen.add(key)
-      result.push(key)
-    }
-  }
-  return result
-}
-
-function distributeMergedStock(total, aliases, previousMap) {
-  const normalizedAliases = aliases.map(normalizeSizeCode).filter(Boolean)
-  if (!normalizedAliases.length) return {}
-  if (normalizedAliases.length === 1) return { [normalizedAliases[0]]: total }
-
-  const previousValues = normalizedAliases.map((alias) => Math.max(0, Number(previousMap[alias] || 0)))
-  const previousTotal = previousValues.reduce((sum, value) => sum + value, 0)
-
-  if (previousTotal <= 0) {
-    return Object.fromEntries(normalizedAliases.map((alias, index) => [alias, index === 0 ? total : 0]))
-  }
-
-  const floors = previousValues.map((value) => Math.floor((total * value) / previousTotal))
-  let remainder = total - floors.reduce((sum, value) => sum + value, 0)
-  const fractions = previousValues
-    .map((value, index) => ({
-      index,
-      fraction: (total * value) / previousTotal - floors[index],
-    }))
-    .sort((a, b) => b.fraction - a.fraction || a.index - b.index)
-
-  for (const item of fractions) {
-    if (remainder <= 0) break
-    floors[item.index] += 1
-    remainder -= 1
-  }
-
-  return Object.fromEntries(normalizedAliases.map((alias, index) => [alias, floors[index]]))
+function sortSizes(sizes) {
+  return [...sizes].sort((a, b) => {
+    const left = normalizeSizeCode(a)
+    const right = normalizeSizeCode(b)
+    const leftIndex = SIZE_ORDER_INDEX[left]
+    const rightIndex = SIZE_ORDER_INDEX[right]
+    const leftRank = Number.isInteger(leftIndex) ? leftIndex : 10_000
+    const rightRank = Number.isInteger(rightIndex) ? rightIndex : 10_000
+    if (leftRank !== rightRank) return leftRank - rightRank
+    return left.localeCompare(right, 'en', { numeric: true })
+  })
 }
 
 const inventoryRows = computed(() => {
@@ -292,14 +242,15 @@ const visibleSizes = computed(() => {
   const seen = new Set()
   const items = []
   for (const row of inventoryRows.value) {
-    for (const size of itemDisplaySizes(row)) {
-      if (size && !seen.has(size)) {
-        seen.add(size)
-        items.push(size)
+    for (const size of row.rowSizes || []) {
+      const normalized = normalizeSizeCode(size)
+      if (normalized && !seen.has(normalized)) {
+        seen.add(normalized)
+        items.push(normalized)
       }
     }
   }
-  return items
+  return sortSizes(items)
 })
 
 const totalStock = computed(() =>
@@ -318,20 +269,17 @@ function categoryLabel(item) {
   return item.categoryLabel || matched?.labels?.zh || matched?.label || item.categoryKey || '--'
 }
 
-function readExactSizeStock(item, size) {
-  return Number(item.sizeStockMap?.[normalizeSizeCode(size)] || 0)
-}
-
 function readSizeStock(item, size) {
-  return displaySizeAliases(size).reduce((total, alias) => total + readExactSizeStock(item, alias), 0)
+  return Number(item.sizeStockMap?.[normalizeSizeCode(size)] || 0)
 }
 
 function hasSize(item, size) {
   const rowSizes = (item.rowSizes || []).map(normalizeSizeCode)
-  return displaySizeAliases(size).some((alias) => rowSizes.includes(alias))
+  return rowSizes.includes(normalizeSizeCode(size))
 }
 
 function isEditing(productId) {
+
   return Number(editingId.value) === Number(productId)
 }
 
@@ -340,7 +288,7 @@ function startEdit(item) {
   saveMessage.value = ''
   editingId.value = Number(item.id)
   draftStocks.value[String(item.id)] = Object.fromEntries(
-    itemDisplaySizes(item).map((size) => [size, String(readSizeStock(item, size))])
+    (item.rowSizes || []).map((size) => [normalizeSizeCode(size), String(readSizeStock(item, size))])
   )
 }
 
@@ -356,7 +304,7 @@ function displayTotalStock(item) {
     return Number(item.totalStock || 0)
   }
   const draft = draftStocks.value[String(item.id)] || {}
-  return itemDisplaySizes(item).reduce((total, size) => total + toSafeInt(draft[size]), 0)
+  return (item.rowSizes || []).reduce((total, size) => total + toSafeInt(draft[normalizeSizeCode(size)]), 0)
 }
 
 function toSafeInt(value) {
@@ -370,21 +318,16 @@ async function saveRow(item) {
   const productId = Number(item.id)
   const draft = draftStocks.value[String(productId)] || {}
   const payload = {}
-  const previousMap = Object.fromEntries(
-    (item.rowSizes || []).map((size) => [normalizeSizeCode(size), readExactSizeStock(item, size)])
-  )
 
-  for (const size of itemDisplaySizes(item)) {
-    const rawValue = draft[size]
+  for (const size of item.rowSizes || []) {
+    const normalizedSize = normalizeSizeCode(size)
+    const rawValue = draft[normalizedSize]
     const number = Number(rawValue)
     if (!Number.isFinite(number) || number < 0 || !Number.isInteger(number)) {
-      error.value = `${item.sku || item.productCode} / ${size} 的库存必须是大于等于 0 的整数`
+      error.value = `${item.sku || item.productCode} / ${normalizedSize} 的库存必须是大于等于 0 的整数`
       return
     }
-
-    const aliases = displaySizeAliases(size).filter((alias) => (item.rowSizes || []).includes(alias))
-    const expanded = distributeMergedStock(number, aliases.length ? aliases : [size], previousMap)
-    Object.assign(payload, expanded)
+    payload[normalizedSize] = number
   }
 
   savingId.value = productId
