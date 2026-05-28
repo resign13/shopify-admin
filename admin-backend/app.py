@@ -211,6 +211,34 @@ def autosize_columns(worksheet: Any) -> None:
         worksheet.column_dimensions[get_column_letter(column_index)].width = min(max(width + 2, 12), 42)
 
 
+def set_fixed_column_widths(worksheet: Any, widths: dict[str, float]) -> None:
+    for column, width in widths.items():
+        worksheet.column_dimensions[str(column).upper()].width = float(width)
+
+
+def estimate_text_row_height(
+    value: Any,
+    *,
+    line_width: int = 28,
+    min_height: float = 24.0,
+    line_height: float = 18.0,
+    max_height: float = 120.0,
+) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return min_height
+
+    visual_lines = 0
+    for raw_line in text.splitlines() or [""]:
+        line = raw_line.strip()
+        if not line:
+            visual_lines += 1
+            continue
+        visual_lines += max(1, (len(line) + line_width - 1) // line_width)
+
+    return min(max_height, max(min_height, visual_lines * line_height))
+
+
 def is_image_attachment(url: str) -> bool:
     value = str(url or "").strip().lower()
     return bool(re.search(r"\.(?:jpg|jpeg|png|webp)(?:$|[?#])", value))
@@ -401,10 +429,27 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
         attachment_images, attachment_files = split_order_attachments(order)
         owner_name = str(order.get("userName") or "--").strip() or "--"
 
+        worksheet.sheet_view.showGridLines = False
+        set_fixed_column_widths(
+            worksheet,
+            {
+                "A": 24,
+                "B": 19,
+                "C": 4,
+                "D": 14,
+                "E": 4,
+                "F": 14,
+            },
+        )
+
         worksheet["A1"] = owner_name
         worksheet["A1"].font = Font(size=20, bold=True)
+        worksheet["A1"].alignment = Alignment(vertical="center")
         worksheet["F1"] = "快递"
         worksheet["F1"].font = Font(size=18, bold=True)
+        worksheet["F1"].alignment = Alignment(horizontal="right", vertical="center")
+        worksheet.row_dimensions[1].height = 28
+
         worksheet["A3"] = "客户："
         worksheet["B3"] = str(order.get("contactName") or "--").strip() or "--"
         worksheet["A4"] = "电话："
@@ -414,19 +459,30 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
         worksheet["A6"] = "订单号："
         worksheet["B6"] = order_no
 
-        for cell in ("A3", "A4", "A5", "A6"):
-            worksheet[cell].font = Font(bold=True)
+        for label_cell in ("A3", "A4", "A5", "A6"):
+            worksheet[label_cell].font = Font(bold=True)
+            worksheet[label_cell].alignment = Alignment(horizontal="right", vertical="center")
+
+        for value_cell in ("B3", "B4", "B6"):
+            worksheet[value_cell].alignment = Alignment(vertical="center")
+
+        worksheet.merge_cells("B5:F5")
         worksheet["B5"].alignment = Alignment(wrap_text=True, vertical="top")
+        worksheet.row_dimensions[3].height = 22
+        worksheet.row_dimensions[4].height = 22
+        worksheet.row_dimensions[5].height = estimate_text_row_height(worksheet["B5"].value, line_width=42, min_height=40, line_height=18, max_height=88)
+        worksheet.row_dimensions[6].height = 22
 
         table_row = 8
         header_fill = PatternFill(fill_type="solid", fgColor="FFF36A")
-        headers = [("A", "型号"), ("B", "图片"), ("D", "规格"), ("F", "总数量")]
+        headers = [("A", "型号规格"), ("B", "图片"), ("D", "尺码"), ("F", "数量")]
         for column, title in headers:
             cell = worksheet[f"{column}{table_row}"]
             cell.value = title
             cell.font = Font(bold=True)
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
+        worksheet.row_dimensions[table_row].height = 24
 
         items = [item for item in (order.get("items") or []) if isinstance(item, dict)] or [{}]
         current_row = table_row + 1
@@ -440,11 +496,11 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
             worksheet[f"A{current_row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
             worksheet[f"D{current_row}"].alignment = Alignment(horizontal="center", vertical="center")
             worksheet[f"F{current_row}"].alignment = Alignment(horizontal="center", vertical="center")
-            worksheet.row_dimensions[current_row].height = 110
+            worksheet.row_dimensions[current_row].height = 86
             if include_images:
                 image_bytes = fetch_image_bytes(str(item.get("image") or ""))
                 if image_bytes:
-                    excel_image = build_excel_image(image_bytes, width=120, height=100)
+                    excel_image = build_excel_image(image_bytes, width=104, height=82)
                     if excel_image:
                         worksheet.add_image(excel_image, f"B{current_row}")
             current_row += 1
@@ -454,41 +510,49 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
         worksheet[f"F{summary_row}"] = total_quantity
         worksheet[f"D{summary_row}"].font = Font(bold=True)
         worksheet[f"F{summary_row}"].font = Font(bold=True)
+        worksheet[f"D{summary_row}"].alignment = Alignment(horizontal="right", vertical="center")
+        worksheet[f"F{summary_row}"].alignment = Alignment(horizontal="center", vertical="center")
+        worksheet.row_dimensions[summary_row].height = 24
 
         footer_row = summary_row + 2
         worksheet[f"A{footer_row}"] = "备注："
         worksheet[f"A{footer_row}"].font = Font(bold=True)
+        worksheet.merge_cells(start_row=footer_row, start_column=2, end_row=footer_row, end_column=6)
         worksheet[f"B{footer_row}"] = str(order.get("note") or "").strip() or "--"
         worksheet[f"B{footer_row}"].alignment = Alignment(wrap_text=True, vertical="top")
+        worksheet.row_dimensions[footer_row].height = estimate_text_row_height(worksheet[f"B{footer_row}"].value, line_width=58, min_height=34, line_height=18, max_height=96)
 
         attachment_text_row = footer_row + 1
         if attachment_files:
             worksheet[f"A{attachment_text_row}"] = "附件："
             worksheet[f"A{attachment_text_row}"].font = Font(bold=True)
+            worksheet.merge_cells(start_row=attachment_text_row, start_column=2, end_row=attachment_text_row, end_column=6)
             worksheet[f"B{attachment_text_row}"] = "\n".join(attachment_files)
             worksheet[f"B{attachment_text_row}"].alignment = Alignment(wrap_text=True, vertical="top")
+            worksheet.row_dimensions[attachment_text_row].height = estimate_text_row_height(worksheet[f"B{attachment_text_row}"].value, line_width=58, min_height=28, line_height=18, max_height=90)
 
-        image_row = attachment_text_row + 2
         if attachment_images:
-            worksheet[f"A{image_row}"] = "附件图片："
-            worksheet[f"A{image_row}"].font = Font(bold=True)
-            for image_index, image_url in enumerate(attachment_images[:3]):
+            image_label_row = attachment_text_row + 2
+            worksheet[f"A{image_label_row}"] = "附件图片："
+            worksheet[f"A{image_label_row}"].font = Font(bold=True)
+            worksheet.row_dimensions[image_label_row].height = 22
+
+            attachment_anchor_columns = ["B", "D", "F"]
+            attachment_anchor_rows = [image_label_row + 1, image_label_row + 6]
+            for anchor_row in attachment_anchor_rows:
+                worksheet.row_dimensions[anchor_row].height = 82
+
+            for image_index, image_url in enumerate(attachment_images[:6]):
                 image_bytes = fetch_image_bytes(image_url)
                 if not image_bytes:
                     continue
-                attachment_image = build_excel_image(image_bytes, width=120, height=120)
+                attachment_image = build_excel_image(image_bytes, width=84, height=84)
                 if not attachment_image:
                     continue
-                anchor_col = ["B", "D", "F"][image_index]
-                worksheet.add_image(attachment_image, f"{anchor_col}{image_row}")
-            worksheet.row_dimensions[image_row].height = 98
+                anchor_col = attachment_anchor_columns[image_index % len(attachment_anchor_columns)]
+                anchor_row = attachment_anchor_rows[image_index // len(attachment_anchor_columns)]
+                worksheet.add_image(attachment_image, f"{anchor_col}{anchor_row}")
 
-        worksheet.column_dimensions["A"].width = 22
-        worksheet.column_dimensions["B"].width = 18
-        worksheet.column_dimensions["C"].width = 4
-        worksheet.column_dimensions["D"].width = 18
-        worksheet.column_dimensions["E"].width = 4
-        worksheet.column_dimensions["F"].width = 12
         worksheet.freeze_panes = "A8"
 
     output = BytesIO()
@@ -507,14 +571,15 @@ def reset_invoice_summary_merges(worksheet: Any, shipping_row: int, total_row: i
 
 def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     if not PROFORMA_TEMPLATE_PATH.exists():
-        raise FileNotFoundError(f"未找到订单详情导出模板: {PROFORMA_TEMPLATE_PATH}")
+        raise FileNotFoundError(f"未找到形式发票导出模板: {PROFORMA_TEMPLATE_PATH}")
 
     shipping_fee = normalize_order_shipping_fee(order.get("shippingFee"))
     if shipping_fee <= 0:
-        raise ValueError("请先输入运费并保存订单")
+        raise ValueError("请先填写运费后再导出 PI")
 
     workbook = load_workbook(PROFORMA_TEMPLATE_PATH)
     worksheet = workbook["PI"] if "PI" in workbook.sheetnames else workbook.active
+    worksheet.sheet_view.showGridLines = False
 
     items = [item for item in (order.get("items") or []) if isinstance(item, dict)]
     if not items:
@@ -546,10 +611,20 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet["B9"] = build_invoice_address(order)
     worksheet["B9"].alignment = copy(worksheet["B6"].alignment)
 
-    worksheet.column_dimensions["B"].width = max(float(worksheet.column_dimensions["B"].width or 0), 19)
+    set_fixed_column_widths(
+        worksheet,
+        {
+            "B": max(float(worksheet.column_dimensions["B"].width or 0), 19),
+            "C": max(float(worksheet.column_dimensions["C"].width or 0), 10),
+            "D": max(float(worksheet.column_dimensions["D"].width or 0), 10),
+            "E": max(float(worksheet.column_dimensions["E"].width or 0), 12),
+            "F": max(float(worksheet.column_dimensions["F"].width or 0), 12),
+        },
+    )
+    worksheet.row_dimensions[9].height = estimate_text_row_height(worksheet["B9"].value, line_width=34, min_height=34, line_height=18, max_height=72)
 
     for row in range(item_start_row, shipping_row):
-        worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 118)
+        worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 92)
         for column in range(1, 7):
             worksheet.cell(row, column).value = None
 
@@ -571,7 +646,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         if image_bytes:
-            excel_image = build_excel_image(image_bytes, width=86, height=112)
+            excel_image = build_excel_image(image_bytes, width=82, height=82)
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
 
@@ -581,6 +656,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet[f"F{total_row}"] = f"=SUM(F{item_start_row}:F{shipping_row})"
     worksheet[f"B{payment_row}"] = "Payment"
     worksheet[f"F{payment_row}"] = f"=F{total_row}"
+
     attachment_images, attachment_files = split_order_attachments(order)
     remarks = []
     if str(order.get("note") or "").strip():
@@ -590,20 +666,28 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     if remarks:
         worksheet["A21"] = "\n".join(remarks)
         worksheet["A21"].alignment = Alignment(wrap_text=True, vertical="top")
+    worksheet.row_dimensions[21].height = estimate_text_row_height(worksheet["A21"].value, line_width=70, min_height=28, line_height=18, max_height=88)
 
-    attachment_anchor_rows = [22, 27]
+    if attachment_images:
+        worksheet["A22"] = "Attachment Images"
+        worksheet["A22"].font = Font(bold=True)
+        worksheet.row_dimensions[22].height = 22
+
+    attachment_anchor_rows = [23, 29]
     attachment_anchor_columns = ["A", "C", "E"]
+    for anchor_row in attachment_anchor_rows:
+        worksheet.row_dimensions[anchor_row].height = 82
+
     for image_index, attachment_url in enumerate(attachment_images[:6]):
         try:
             attachment_bytes = fetch_image_bytes(attachment_url)
             if not attachment_bytes:
                 continue
-            attachment_image = build_excel_image(attachment_bytes, width=104, height=104)
+            attachment_image = build_excel_image(attachment_bytes, width=92, height=92)
             if not attachment_image:
                 continue
             row = attachment_anchor_rows[image_index // len(attachment_anchor_columns)]
             column = attachment_anchor_columns[image_index % len(attachment_anchor_columns)]
-            worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 84)
             worksheet.add_image(attachment_image, f"{column}{row}")
         except Exception:
             continue
