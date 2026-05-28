@@ -19,7 +19,7 @@
               清空已选
             </button>
             <button
-              class="admin-button ghost"
+              class="admin-button sheet-export-button"
               type="button"
               :disabled="exporting || sheetExporting"
               @click="exportOrdersBySheet"
@@ -680,6 +680,23 @@ onMounted(() => {
   gap: 10px;
   flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.sheet-export-button {
+  background: #c97e48;
+  border-color: #c97e48;
+  color: #fff;
+}
+
+.sheet-export-button:hover:not(:disabled) {
+  background: #b96e37;
+  border-color: #b96e37;
+}
+
+.sheet-export-button:disabled {
+  background: rgba(201, 126, 72, 0.45);
+  border-color: rgba(201, 126, 72, 0.45);
+  color: rgba(255, 255, 255, 0.92);
 }
 
 .orders-filter-row-full {

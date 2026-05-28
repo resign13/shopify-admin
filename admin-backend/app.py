@@ -24,7 +24,7 @@ from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image as PILImage
 from psycopg.errors import ForeignKeyViolation
@@ -418,21 +418,14 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
             worksheet[cell].font = Font(bold=True)
         worksheet["B5"].alignment = Alignment(wrap_text=True, vertical="top")
 
-        label_row = 8
-        if attachment_images:
-            worksheet[f"A{label_row}"] = "标签："
-            worksheet[f"A{label_row}"].font = Font(bold=True)
-            label_image = build_excel_image(fetch_image_bytes(attachment_images[0]) or b"", width=120, height=90)
-            if label_image:
-                worksheet.add_image(label_image, f"B{label_row}")
-            label_row += 5
-
-        table_row = label_row + 1
+        table_row = 8
+        header_fill = PatternFill(fill_type="solid", fgColor="FFF36A")
         headers = [("A", "型号"), ("B", "图片"), ("D", "规格"), ("F", "总数量")]
         for column, title in headers:
             cell = worksheet[f"{column}{table_row}"]
             cell.value = title
             cell.font = Font(bold=True)
+            cell.fill = header_fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
         items = [item for item in (order.get("items") or []) if isinstance(item, dict)] or [{}]
@@ -496,7 +489,7 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
         worksheet.column_dimensions["D"].width = 18
         worksheet.column_dimensions["E"].width = 4
         worksheet.column_dimensions["F"].width = 12
-        worksheet.freeze_panes = "A9"
+        worksheet.freeze_panes = "A8"
 
     output = BytesIO()
     workbook.save(output)
