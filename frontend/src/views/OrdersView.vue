@@ -13,12 +13,20 @@
             <button
               class="admin-button ghost"
               type="button"
-              :disabled="!selectedCount || exporting"
+              :disabled="!selectedCount || exporting || sheetExporting"
               @click="clearSelection"
             >
-              清空勾选
+              清空已选
             </button>
-            <button class="admin-button" type="button" :disabled="exporting" @click="exportOrders">
+            <button
+              class="admin-button ghost"
+              type="button"
+              :disabled="exporting || sheetExporting"
+              @click="exportOrdersBySheet"
+            >
+              {{ sheetExporting ? '导出中...' : sheetExportButtonText }}
+            </button>
+            <button class="admin-button" type="button" :disabled="exporting || sheetExporting" @click="exportOrders">
               {{ exporting ? '导出中...' : exportButtonText }}
             </button>
           </div>
@@ -272,6 +280,7 @@ const paymentLinkDrafts = reactive({})
 const shippingFeeDrafts = reactive({})
 const statusDrafts = reactive({})
 const exporting = ref(false)
+const sheetExporting = ref(false)
 const invoiceExportingId = ref(0)
 const selectedOrderIds = ref([])
 
@@ -550,6 +559,33 @@ async function exportOrders() {
     window.alert(error.message || '导出订单失败')
   } finally {
     exporting.value = false
+  }
+}
+
+
+async function exportOrdersBySheet() {
+  sheetExporting.value = true
+  try {
+    const filters = {
+      timeRange: selectedTimeRange.value,
+      status: selectedStatus.value,
+      category: selectedCategory.value,
+      keyword: keyword.value,
+      includeImages: '1',
+    }
+    if (selectedOrderIds.value.length) filters.orderIds = selectedOrderIds.value.join(',')
+    const blob = await admin.exportOrdersBySheet(filters)
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
+    downloadBlob(
+      blob,
+      selectedOrderIds.value.length
+        ? `orders_by_sheet_selected_${timestamp}.xlsx`
+        : `orders_by_sheet_${timestamp}.xlsx`
+    )
+  } catch (error) {
+    window.alert(error.message || '��Sheet����ʧ��')
+  } finally {
+    sheetExporting.value = false
   }
 }
 

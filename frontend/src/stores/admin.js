@@ -368,6 +368,35 @@ export const useAdminStore = defineStore('admin-data', {
       }
       return response.blob()
     },
+    async exportOrdersBySheet(filters = {}) {
+      const auth = useAdminAuthStore()
+      const params = new URLSearchParams()
+      Object.entries(filters || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          params.set(key, String(value))
+        }
+      })
+      const response = await fetch(
+        `/api/admin/orders/export-by-sheet${params.toString() ? `?${params.toString()}` : ''}`.replace(
+          /^\/api/,
+          `${API_BASE}/api`
+        ),
+        {
+          headers: authHeaders(auth.token),
+        }
+      )
+      if (!response.ok) {
+        let message = 'Export failed'
+        try {
+          const data = await response.json()
+          message = data.message || message
+        } catch {
+          // ignore json parse failure for file responses
+        }
+        throw new Error(message)
+      }
+      return response.blob()
+    },
     async exportOrderInvoice(orderId) {
       const auth = useAdminAuthStore()
       const response = await fetch(

@@ -236,24 +236,15 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
     worksheet.title = "Orders"
     headers = [
         "订单号",
-        "下单时间",
-        "订单状态",
-        "客户公司",
+        "业务员",
         "客户邮箱",
         "联系人",
         "联系电话",
-        "国家",
         "收货地址",
-        "物流单号",
         "商品图片",
-        "商品名称",
         "SKU",
         "尺码",
-        "商品分类",
         "数量",
-        "单价(USD)",
-        "小计(USD)",
-        "订单总额(USD)",
         "备注",
         "备注附件",
         "附件图片1",
@@ -273,24 +264,15 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
             worksheet.append(
                 [
                     order.get("orderNo") or "",
-                    order.get("createdAt") or "",
-                    ORDER_STATUS_LABELS.get(str(order.get("status") or ""), str(order.get("status") or "")),
-                    order.get("companyName") or "",
+                    order.get("userName") or "",
                     order.get("userEmail") or "",
                     order.get("contactName") or "",
                     order.get("phone") or "",
-                    order.get("country") or "",
                     order.get("shippingAddress") or "",
-                    order.get("trackingNo") or "",
                     "",
-                    item.get("productName") or "",
                     item.get("sku") or "",
                     item.get("sizeCode") or "",
-                    item.get("categoryLabel") or item.get("categoryKey") or "",
                     item.get("quantity") or 0,
-                    item.get("unitPrice") or 0,
-                    item.get("totalPrice") or 0,
-                    order.get("totalAmount") or 0,
                     order.get("note") or "",
                     ", ".join(attachment_files),
                     "",
@@ -308,10 +290,10 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                     try:
                         excel_image = build_excel_image(image_bytes, width=86, height=112)
                         if excel_image:
-                            worksheet.add_image(excel_image, f"K{current_row}")
+                            worksheet.add_image(excel_image, f"G{current_row}")
                     except Exception:
                         pass
-                for attachment_index, attachment_url in enumerate(attachment_images[:3], start=22):
+                for attachment_index, attachment_url in enumerate(attachment_images[:3], start=13):
                     try:
                         attachment_bytes = fetch_image_bytes(attachment_url)
                         if not attachment_bytes:
@@ -326,11 +308,11 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
 
     worksheet.freeze_panes = "A2"
     autosize_columns(worksheet)
-    worksheet.column_dimensions["K"].width = 16
-    worksheet.column_dimensions["U"].width = max(float(worksheet.column_dimensions["U"].width or 0), 28)
-    worksheet.column_dimensions["V"].width = 16
-    worksheet.column_dimensions["W"].width = 16
-    worksheet.column_dimensions["X"].width = 16
+    worksheet.column_dimensions["G"].width = 16
+    worksheet.column_dimensions["L"].width = max(float(worksheet.column_dimensions["L"].width or 0), 28)
+    worksheet.column_dimensions["M"].width = 16
+    worksheet.column_dimensions["N"].width = 16
+    worksheet.column_dimensions["O"].width = 16
 
     output = BytesIO()
     workbook.save(output)
@@ -395,6 +377,130 @@ def build_invoice_address(order: dict[str, Any]) -> str:
 def build_invoice_item_description(item: dict[str, Any]) -> str:
     sku = str(item.get("sku") or "").strip()
     return sku or "--"
+
+
+def safe_sheet_title(value: Any, fallback: str = "Sheet") -> str:
+    text = str(value or "").strip() or fallback
+    text = text.translate({ord(ch): "_" for ch in "[]:*?/\\"})
+    return text[:31]
+
+
+def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
+    workbook = Workbook()
+    default_sheet = workbook.active
+    workbook.remove(default_sheet)
+
+    if not orders:
+        empty_sheet = workbook.create_sheet(title="Orders")
+        empty_sheet["A1"] = "No orders"
+
+    for index, order in enumerate(orders, start=1):
+        order_no = str(order.get("orderNo") or f"order_{index}").strip() or f"order_{index}"
+        worksheet = workbook.create_sheet(title=safe_sheet_title(order_no, f"order_{index}"))
+        attachment_images, attachment_files = split_order_attachments(order)
+        owner_name = str(order.get("userName") or "--").strip() or "--"
+
+        worksheet["A1"] = owner_name
+        worksheet["A1"].font = Font(size=20, bold=True)
+        worksheet["F1"] = "快递"
+        worksheet["F1"].font = Font(size=18, bold=True)
+        worksheet["A3"] = "客户："
+        worksheet["B3"] = str(order.get("contactName") or "--").strip() or "--"
+        worksheet["A4"] = "电话："
+        worksheet["B4"] = str(order.get("phone") or "--").strip() or "--"
+        worksheet["A5"] = "地址："
+        worksheet["B5"] = build_invoice_address(order) or "--"
+        worksheet["A6"] = "订单号："
+        worksheet["B6"] = order_no
+
+        for cell in ("A3", "A4", "A5", "A6"):
+            worksheet[cell].font = Font(bold=True)
+        worksheet["B5"].alignment = Alignment(wrap_text=True, vertical="top")
+
+        label_row = 8
+        if attachment_images:
+            worksheet[f"A{label_row}"] = "标签："
+            worksheet[f"A{label_row}"].font = Font(bold=True)
+            label_image = build_excel_image(fetch_image_bytes(attachment_images[0]) or b"", width=120, height=90)
+            if label_image:
+                worksheet.add_image(label_image, f"B{label_row}")
+            label_row += 5
+
+        table_row = label_row + 1
+        headers = [("A", "型号"), ("B", "图片"), ("D", "规格"), ("F", "总数量")]
+        for column, title in headers:
+            cell = worksheet[f"{column}{table_row}"]
+            cell.value = title
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        items = [item for item in (order.get("items") or []) if isinstance(item, dict)] or [{}]
+        current_row = table_row + 1
+        total_quantity = 0
+        for item in items:
+            quantity = int(item.get("quantity") or 0)
+            total_quantity += quantity
+            worksheet[f"A{current_row}"] = str(item.get("sku") or item.get("productName") or "--").strip() or "--"
+            worksheet[f"D{current_row}"] = str(item.get("sizeCode") or "--").strip() or "--"
+            worksheet[f"F{current_row}"] = quantity
+            worksheet[f"A{current_row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            worksheet[f"D{current_row}"].alignment = Alignment(horizontal="center", vertical="center")
+            worksheet[f"F{current_row}"].alignment = Alignment(horizontal="center", vertical="center")
+            worksheet.row_dimensions[current_row].height = 110
+            if include_images:
+                image_bytes = fetch_image_bytes(str(item.get("image") or ""))
+                if image_bytes:
+                    excel_image = build_excel_image(image_bytes, width=120, height=100)
+                    if excel_image:
+                        worksheet.add_image(excel_image, f"B{current_row}")
+            current_row += 1
+
+        summary_row = current_row
+        worksheet[f"D{summary_row}"] = "总件数："
+        worksheet[f"F{summary_row}"] = total_quantity
+        worksheet[f"D{summary_row}"].font = Font(bold=True)
+        worksheet[f"F{summary_row}"].font = Font(bold=True)
+
+        footer_row = summary_row + 2
+        worksheet[f"A{footer_row}"] = "备注："
+        worksheet[f"A{footer_row}"].font = Font(bold=True)
+        worksheet[f"B{footer_row}"] = str(order.get("note") or "").strip() or "--"
+        worksheet[f"B{footer_row}"].alignment = Alignment(wrap_text=True, vertical="top")
+
+        attachment_text_row = footer_row + 1
+        if attachment_files:
+            worksheet[f"A{attachment_text_row}"] = "附件："
+            worksheet[f"A{attachment_text_row}"].font = Font(bold=True)
+            worksheet[f"B{attachment_text_row}"] = "\n".join(attachment_files)
+            worksheet[f"B{attachment_text_row}"].alignment = Alignment(wrap_text=True, vertical="top")
+
+        image_row = attachment_text_row + 2
+        if attachment_images:
+            worksheet[f"A{image_row}"] = "附件图片："
+            worksheet[f"A{image_row}"].font = Font(bold=True)
+            for image_index, image_url in enumerate(attachment_images[:3]):
+                image_bytes = fetch_image_bytes(image_url)
+                if not image_bytes:
+                    continue
+                attachment_image = build_excel_image(image_bytes, width=120, height=120)
+                if not attachment_image:
+                    continue
+                anchor_col = ["B", "D", "F"][image_index]
+                worksheet.add_image(attachment_image, f"{anchor_col}{image_row}")
+            worksheet.row_dimensions[image_row].height = 98
+
+        worksheet.column_dimensions["A"].width = 22
+        worksheet.column_dimensions["B"].width = 18
+        worksheet.column_dimensions["C"].width = 4
+        worksheet.column_dimensions["D"].width = 18
+        worksheet.column_dimensions["E"].width = 4
+        worksheet.column_dimensions["F"].width = 12
+        worksheet.freeze_panes = "A9"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
 
 
 def reset_invoice_summary_merges(worksheet: Any, shipping_row: int, total_row: int, payment_row: int) -> None:
@@ -1587,6 +1693,40 @@ def export_orders() -> Any:
         file_stream,
         as_attachment=True,
         download_name=f"orders_export_{timestamp}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@app.get("/api/admin/orders/export-by-sheet")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def export_orders_by_sheet() -> Any:
+    time_range = str(request.args.get("timeRange", "all")).strip() or "all"
+    status = str(request.args.get("status", "all")).strip() or "all"
+    category = str(request.args.get("category", "all")).strip() or "all"
+    keyword = str(request.args.get("keyword", "")).strip()
+    include_images = parse_bool(request.args.get("includeImages", "1"))
+    order_ids_raw = str(request.args.get("orderIds", "")).strip()
+    selected_order_ids = {
+        int(item)
+        for item in order_ids_raw.split(",")
+        if str(item).strip().isdigit()
+    }
+    orders = filter_orders(
+        list_orders(),
+        time_range=time_range,
+        status=status,
+        category=category,
+        keyword=keyword,
+    )
+    if selected_order_ids:
+        orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
+    file_stream = build_orders_sheet_export(orders, include_images=include_images)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return send_file(
+        file_stream,
+        as_attachment=True,
+        download_name=f"orders_by_sheet_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
