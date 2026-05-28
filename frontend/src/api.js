@@ -20,18 +20,25 @@ function resolveApiBase() {
 
 export const API_BASE = resolveApiBase()
 
+import { beginRequestLoading, endRequestLoading } from './loading'
+
 export async function request(path, options = {}) {
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-      ...(options.headers || {}),
-    },
-  })
-  const data = await response.json()
-  if (!response.ok) {
-    throw new Error(data.message || 'Request failed')
+  beginRequestLoading()
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(options.headers || {}),
+      },
+    })
+    const data = await response.json()
+    if (!response.ok) {
+      throw new Error(data.message || 'Request failed')
+    }
+    return data
+  } finally {
+    endRequestLoading()
   }
-  return data
 }

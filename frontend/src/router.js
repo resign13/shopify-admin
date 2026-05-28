@@ -14,6 +14,7 @@ import ProductEditorView from './views/ProductEditorView.vue'
 import ProductsView from './views/ProductsView.vue'
 import { pinia } from './stores'
 import { useAdminAuthStore } from './stores/auth'
+import { startRouteLoading, stopRouteLoading } from './loading'
 
 function withAuth(component, roles) {
   return {
@@ -48,6 +49,7 @@ const router = createRouter({
 })
 
 router.beforeEach(async (to) => {
+  startRouteLoading()
   const auth = useAdminAuthStore(pinia)
   if (!auth.initialized) {
     await auth.initialize()
@@ -68,3 +70,14 @@ router.beforeEach(async (to) => {
 })
 
 export default router
+
+
+router.afterEach(() => {
+  window.setTimeout(() => {
+    stopRouteLoading()
+  }, 120)
+})
+
+router.onError(() => {
+  stopRouteLoading()
+})

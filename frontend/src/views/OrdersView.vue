@@ -86,14 +86,27 @@
         </div>
       </div>
 
-      <article v-for="order in paginatedOrders" :key="order.id" class="admin-card order-card">
-        <div class="order-card-head">
+      <article
+        v-for="order in paginatedOrders"
+        :key="order.id"
+        class="admin-card order-card"
+        :class="{ expanded: isOrderExpanded(order.id) }"
+      >
+        <div
+          class="order-card-head"
+          role="button"
+          tabindex="0"
+          @click="toggleOrderExpanded(order.id)"
+          @keydown.enter.prevent="toggleOrderExpanded(order.id)"
+          @keydown.space.prevent="toggleOrderExpanded(order.id)"
+        >
           <div class="order-card-title">
             <label class="selection-check order-check">
               <input
                 type="checkbox"
                 :checked="isSelected(order.id)"
-                @change="toggleOrderSelection(order.id, $event.target.checked)"
+                @change.stop="toggleOrderSelection(order.id, $event.target.checked)"
+                @click.stop
               />
             </label>
 
@@ -109,13 +122,13 @@
               class="admin-button ghost order-invoice-button"
               type="button"
               :disabled="invoiceExportingId === order.id"
-              @click="exportOrderInvoice(order)"
+              @click.stop="exportOrderInvoice(order)"
             >
               {{ invoiceExportingId === order.id ? '导出中...' : '导出订单详情' }}
             </button>
 
             <div class="order-head-meta">
-              <select v-model="statusDrafts[order.id]" class="admin-field status-select">
+              <select v-model="statusDrafts[order.id]" class="admin-field status-select" @click.stop>
                 <option value="pending_payment">待付款</option>
                 <option value="paid">已付款</option>
                 <option value="shipped">已发货</option>
@@ -124,10 +137,12 @@
               </select>
               <strong>${{ displayTotal(order).toFixed(2) }}</strong>
             </div>
+            <span class="order-expand-indicator">{{ isOrderExpanded(order.id) ? '收起' : '展开' }}</span>
           </div>
         </div>
 
-        <div class="order-summary-grid">
+        <div v-show="isOrderExpanded(order.id)" class="order-card-details">
+          <div class="order-summary-grid">
           <div>
             <span>联系人</span>
             <strong>{{ order.contactName || '--' }}</strong>
@@ -242,6 +257,7 @@
             </button>
           </div>
         </div>
+        </div>
       </article>
 
       <div v-if="!filteredOrders.length" class="admin-card">当前筛选条件下暂无订单。</div>
@@ -283,6 +299,7 @@ const exporting = ref(false)
 const sheetExporting = ref(false)
 const invoiceExportingId = ref(0)
 const selectedOrderIds = ref([])
+const expandedOrderIds = ref([])
 
 watch(
   () => admin.orders,
@@ -295,6 +312,7 @@ watch(
     })
     const validIds = new Set(orders.map((order) => Number(order.id)))
     selectedOrderIds.value = selectedOrderIds.value.filter((id) => validIds.has(Number(id)))
+    expandedOrderIds.value = expandedOrderIds.value.filter((id) => validIds.has(Number(id)))
   },
   { immediate: true }
 )
@@ -350,6 +368,9 @@ const someFilteredSelected = computed(() => {
 const exportButtonText = computed(() =>
   selectedCount.value ? `导出已勾选 ${selectedCount.value} 个订单` : '导出当前筛选订单 Excel'
 )
+const sheetExportButtonText = computed(() =>
+  selectedCount.value ? `按订单分Sheet导出 ${selectedCount.value} 个订单` : '按订单分Sheet导出'
+)
 
 const paginatedOrders = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value
@@ -395,6 +416,18 @@ function toggleAllFilteredOrders(event) {
 
 function clearSelection() {
   selectedOrderIds.value = []
+}
+
+function isOrderExpanded(orderId) {
+  return expandedOrderIds.value.includes(Number(orderId))
+}
+
+function toggleOrderExpanded(orderId) {
+  const normalizedId = Number(orderId)
+  const next = new Set(expandedOrderIds.value.map((id) => Number(id)))
+  if (next.has(normalizedId)) next.delete(normalizedId)
+  else next.add(normalizedId)
+  expandedOrderIds.value = Array.from(next)
 }
 
 function formatOrderOwner(order) {
@@ -583,7 +616,7 @@ async function exportOrdersBySheet() {
         : `orders_by_sheet_${timestamp}.xlsx`
     )
   } catch (error) {
-    window.alert(error.message || '��Sheet����ʧ��')
+    window.alert(error.message || '按订单分Sheet导出失败')
   } finally {
     sheetExporting.value = false
   }
@@ -682,6 +715,37 @@ onMounted(() => {
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.order-card {
+  overflow: hidden;
+}
+
+.order-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  cursor: pointer;
+}
+
+.order-card-head:focus-visible {
+  outline: 2px solid rgba(201, 126, 72, 0.55);
+  outline-offset: 4px;
+}
+
+.order-card-details {
+  margin-top: 18px;
+}
+
+.order-expand-indicator {
+  font-size: 13px;
+  color: #8a6a55;
+  white-space: nowrap;
+}
+
+.order-card.expanded .order-expand-indicator {
+  color: #c97e48;
 }
 
 .order-card-title {
@@ -792,7 +856,8 @@ onMounted(() => {
 
   .page-head,
   .selection-toolbar,
-  .order-card-title {
+  .order-card-title,
+  .order-card-head {
     flex-direction: column;
     align-items: flex-start;
   }
