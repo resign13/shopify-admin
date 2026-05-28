@@ -184,7 +184,7 @@ def fetch_image_bytes(url: str) -> bytes | None:
         return None
 
 
-def build_excel_image(image_bytes: bytes) -> OpenpyxlImage | None:
+def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70) -> OpenpyxlImage | None:
     try:
         with PILImage.open(BytesIO(image_bytes)) as img:
             converted = img.convert("RGBA")
@@ -192,8 +192,8 @@ def build_excel_image(image_bytes: bytes) -> OpenpyxlImage | None:
             converted.save(output, format="PNG")
             output.seek(0)
             excel_image = OpenpyxlImage(output)
-            excel_image.width = 54
-            excel_image.height = 70
+            excel_image.width = width
+            excel_image.height = height
             return excel_image
     except Exception:
         return None
@@ -352,17 +352,8 @@ def build_invoice_address(order: dict[str, Any]) -> str:
 
 
 def build_invoice_item_description(item: dict[str, Any]) -> str:
-    lines: list[str] = []
-    product_name = str(item.get("productName") or "").strip()
     sku = str(item.get("sku") or "").strip()
-    category = str(item.get("categoryLabel") or item.get("categoryKey") or "").strip()
-    if product_name:
-        lines.append(product_name)
-    if sku:
-        lines.append(f"SKU: {sku}")
-    if category:
-        lines.append(f"Category: {category}")
-    return "\n".join(lines) or "--"
+    return sku or "--"
 
 
 def reset_invoice_summary_merges(worksheet: Any, shipping_row: int, total_row: int, payment_row: int) -> None:
@@ -414,8 +405,10 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet["B9"] = build_invoice_address(order)
     worksheet["B9"].alignment = copy(worksheet["B6"].alignment)
 
+    worksheet.column_dimensions["B"].width = max(float(worksheet.column_dimensions["B"].width or 0), 19)
+
     for row in range(item_start_row, shipping_row):
-        worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 72)
+        worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 118)
         for column in range(1, 7):
             worksheet.cell(row, column).value = None
 
@@ -437,7 +430,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         if image_bytes:
-            excel_image = build_excel_image(image_bytes)
+            excel_image = build_excel_image(image_bytes, width=86, height=112)
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
 
