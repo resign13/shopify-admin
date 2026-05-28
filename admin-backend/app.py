@@ -210,6 +210,26 @@ def autosize_columns(worksheet: Any) -> None:
         worksheet.column_dimensions[get_column_letter(column_index)].width = min(max(width + 2, 12), 42)
 
 
+def is_image_attachment(url: str) -> bool:
+    value = str(url or "").strip().lower()
+    return bool(re.search(r"\.(?:jpg|jpeg|png|webp)(?:$|[?#])", value))
+
+
+def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]]:
+    raw = order.get("labelImageUrls") or ([order.get("labelPdfUrl")] if order.get("labelPdfUrl") else [])
+    image_urls: list[str] = []
+    file_urls: list[str] = []
+    for item in raw:
+        url = str(item or "").strip()
+        if not url:
+            continue
+        if is_image_attachment(url):
+            image_urls.append(url)
+        else:
+            file_urls.append(url)
+    return image_urls[:5], file_urls[:5]
+
+
 def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
     workbook = Workbook()
     worksheet = workbook.active
@@ -236,6 +256,9 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
         "订单总额(USD)",
         "备注",
         "备注附件",
+        "附件图片1",
+        "附件图片2",
+        "附件图片3",
     ]
     worksheet.append(headers)
     for cell in worksheet[1]:
@@ -245,6 +268,7 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
     current_row = 2
     for order in orders:
         rows = order.get("items") or [{}]
+        attachment_images, attachment_files = split_order_attachments(order)
         for item in rows:
             worksheet.append(
                 [
@@ -268,10 +292,13 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                     item.get("totalPrice") or 0,
                     order.get("totalAmount") or 0,
                     order.get("note") or "",
-                    ", ".join(order.get("labelImageUrls") or ([order.get("labelPdfUrl")] if order.get("labelPdfUrl") else [])),
+                    ", ".join(attachment_files),
+                    "",
+                    "",
+                    "",
                 ]
             )
-            worksheet.row_dimensions[current_row].height = 72
+            worksheet.row_dimensions[current_row].height = 118
             for cell in worksheet[current_row]:
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
 
@@ -279,17 +306,31 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
                 image_bytes = fetch_image_bytes(str(item.get("image") or ""))
                 if image_bytes:
                     try:
-                        excel_image = build_excel_image(image_bytes)
+                        excel_image = build_excel_image(image_bytes, width=86, height=112)
                         if excel_image:
                             worksheet.add_image(excel_image, f"K{current_row}")
                     except Exception:
                         pass
+                for attachment_index, attachment_url in enumerate(attachment_images[:3], start=22):
+                    try:
+                        attachment_bytes = fetch_image_bytes(attachment_url)
+                        if not attachment_bytes:
+                            continue
+                        attachment_image = build_excel_image(attachment_bytes, width=86, height=86)
+                        if attachment_image:
+                            worksheet.add_image(attachment_image, f"{get_column_letter(attachment_index)}{current_row}")
+                    except Exception:
+                        continue
 
             current_row += 1
 
     worksheet.freeze_panes = "A2"
-    worksheet.column_dimensions["K"].width = 14
     autosize_columns(worksheet)
+    worksheet.column_dimensions["K"].width = 16
+    worksheet.column_dimensions["U"].width = max(float(worksheet.column_dimensions["U"].width or 0), 28)
+    worksheet.column_dimensions["V"].width = 16
+    worksheet.column_dimensions["W"].width = 16
+    worksheet.column_dimensions["X"].width = 16
 
     output = BytesIO()
     workbook.save(output)
@@ -440,15 +481,32 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet[f"F{total_row}"] = f"=SUM(F{item_start_row}:F{shipping_row})"
     worksheet[f"B{payment_row}"] = "Payment"
     worksheet[f"F{payment_row}"] = f"=F{total_row}"
+    attachment_images, attachment_files = split_order_attachments(order)
     remarks = []
     if str(order.get("note") or "").strip():
         remarks.append(f"Note: {str(order.get('note') or '').strip()}")
-    label_images = order.get("labelImageUrls") or ([order.get("labelPdfUrl")] if order.get("labelPdfUrl") else [])
-    if label_images:
-        remarks.append("Attachments: " + ", ".join(str(item) for item in label_images if str(item or "").strip()))
+    if attachment_files:
+        remarks.append("Attachments: " + ", ".join(attachment_files))
     if remarks:
         worksheet["A21"] = "\n".join(remarks)
         worksheet["A21"].alignment = Alignment(wrap_text=True, vertical="top")
+
+    attachment_anchor_rows = [22, 27]
+    attachment_anchor_columns = ["A", "C", "E"]
+    for image_index, attachment_url in enumerate(attachment_images[:6]):
+        try:
+            attachment_bytes = fetch_image_bytes(attachment_url)
+            if not attachment_bytes:
+                continue
+            attachment_image = build_excel_image(attachment_bytes, width=104, height=104)
+            if not attachment_image:
+                continue
+            row = attachment_anchor_rows[image_index // len(attachment_anchor_columns)]
+            column = attachment_anchor_columns[image_index % len(attachment_anchor_columns)]
+            worksheet.row_dimensions[row].height = max(worksheet.row_dimensions[row].height or 0, 84)
+            worksheet.add_image(attachment_image, f"{column}{row}")
+        except Exception:
+            continue
 
     output = BytesIO()
     workbook.save(output)

@@ -146,17 +146,21 @@
           </div>
           <div class="full-span">
             <span>备注附件</span>
-            <strong v-if="orderLabelImages(order).length" class="admin-label-images">
+            <div v-if="orderAttachments(order).length" class="admin-attachment-list">
               <a
-                v-for="(imageUrl, imageIndex) in orderLabelImages(order)"
-                :key="imageUrl"
-                :href="imageUrl"
+                v-for="(attachment, imageIndex) in orderAttachments(order)"
+                :key="attachment.url"
+                :href="attachment.url"
                 target="_blank"
                 rel="noreferrer"
+                class="admin-attachment-item"
+                :class="{ file: !attachment.isImage }"
               >
-                附件 {{ imageIndex + 1 }}
+                <img v-if="attachment.isImage" :src="attachment.url" :alt="`附件 ${imageIndex + 1}`" />
+                <div v-else class="admin-attachment-file">PDF</div>
+                <span>附件 {{ imageIndex + 1 }}</span>
               </a>
-            </strong>
+            </div>
             <strong v-else>--</strong>
           </div>
         </div>
@@ -464,9 +468,15 @@ function hasSavedShippingFee(order) {
   return Math.abs(draftShippingFee - savedShippingFee) < 0.0001
 }
 
-function orderLabelImages(order) {
-  if (Array.isArray(order.labelImageUrls)) return order.labelImageUrls.filter(Boolean).slice(0, 5)
-  return order.labelPdfUrl ? [order.labelPdfUrl] : []
+function isImageAttachment(url) {
+  return /\.(jpe?g|png|webp)(?:$|[?#])/i.test(String(url || ''))
+}
+
+function orderAttachments(order) {
+  const urls = Array.isArray(order.labelImageUrls)
+    ? order.labelImageUrls.filter(Boolean).slice(0, 5)
+    : (order.labelPdfUrl ? [order.labelPdfUrl] : [])
+  return urls.map((url) => ({ url, isImage: isImageAttachment(url) }))
 }
 
 function downloadBlob(blob, filename) {
@@ -549,10 +559,40 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.admin-label-images {
+.admin-attachment-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 12px;
+}
+
+.admin-attachment-item {
+  display: grid;
+  gap: 6px;
+  width: 112px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.admin-attachment-item img,
+.admin-attachment-file {
+  width: 112px;
+  height: 112px;
+  border-radius: 14px;
+  border: 1px solid rgba(110, 85, 61, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+  object-fit: cover;
+}
+
+.admin-attachment-file {
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.admin-attachment-item span {
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .page-head {
