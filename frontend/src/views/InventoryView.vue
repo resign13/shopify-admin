@@ -167,13 +167,31 @@ const savingId = ref(0)
 const draftStocks = ref({})
 
 
-const ALPHA_SIZE_ORDER = ['S', 'M', 'L', 'XL', 'XXL', 'XXXL']
-const NUMERIC_SIZE_ORDER = ['28', '30', '32', '34', '36', '38']
-const PREFERRED_SIZE_ORDER = [...ALPHA_SIZE_ORDER, ...NUMERIC_SIZE_ORDER]
-const SIZE_ORDER_INDEX = Object.fromEntries(PREFERRED_SIZE_ORDER.map((size, index) => [size, index]))
+const COMMON_SIZE_COLUMNS = [
+  { key: 'S/28', aliases: ['S', '28'] },
+  { key: 'M/30', aliases: ['M', '30'] },
+  { key: 'L/32', aliases: ['L', '32'] },
+  { key: 'XL/34', aliases: ['XL', '34'] },
+  { key: 'XXL/36', aliases: ['XXL', '36'] },
+  { key: 'XXXL/38', aliases: ['XXXL', '38'] },
+]
+
+const SIZE_ALIAS_TO_COLUMN = Object.fromEntries(
+  COMMON_SIZE_COLUMNS.flatMap((item) => item.aliases.map((alias) => [alias, item.key]))
+)
 
 function normalizeSizeCode(size) {
   return String(size || '').trim().toUpperCase()
+}
+
+function visibleColumnKey(size) {
+  const normalized = normalizeSizeCode(size)
+  return SIZE_ALIAS_TO_COLUMN[normalized] || normalized
+}
+
+function columnAliases(columnKey) {
+  const matched = COMMON_SIZE_COLUMNS.find((item) => item.key === columnKey)
+  return matched ? matched.aliases.map(normalizeSizeCode) : [normalizeSizeCode(columnKey)]
 }
 
 function sortSizes(sizes) {
@@ -238,20 +256,7 @@ const inventoryRows = computed(() => {
     )
 })
 
-const visibleSizes = computed(() => {
-  const seen = new Set()
-  const items = []
-  for (const row of inventoryRows.value) {
-    for (const size of row.rowSizes || []) {
-      const normalized = normalizeSizeCode(size)
-      if (normalized && !seen.has(normalized)) {
-        seen.add(normalized)
-        items.push(normalized)
-      }
-    }
-  }
-  return sortSizes(items)
-})
+const visibleSizes = computed(() => COMMON_SIZE_COLUMNS.map((item) => item.key))
 
 const totalStock = computed(() =>
   inventoryRows.value.reduce((total, item) => total + Number(item.totalStock || 0), 0)
@@ -270,15 +275,28 @@ function categoryLabel(item) {
 }
 
 function readSizeStock(item, size) {
-  return Number(item.sizeStockMap?.[normalizeSizeCode(size)] || 0)
+  const aliases = columnAliases(size)
+  for (const alias of aliases) {
+    if (Object.prototype.hasOwnProperty.call(item.sizeStockMap || {}, alias)) {
+      return Number(item.sizeStockMap?.[alias] || 0)
+    }
+  }
+  return 0
 }
 
 function hasSize(item, size) {
   const rowSizes = (item.rowSizes || []).map(normalizeSizeCode)
-  return rowSizes.includes(normalizeSizeCode(size))
+  return columnAliases(size).some((alias) => rowSizes.includes(alias))
+}
+
+function realSizeCodeForColumn(item, size) {
+  const rowSizes = (item.rowSizes || []).map(normalizeSizeCode)
+  const alias = columnAliases(size).find((candidate) => rowSizes.includes(candidate))
+  return alias || null
 }
 
 function isEditing(productId) {
+
 
   return Number(editingId.value) === Number(productId)
 }
@@ -288,7 +306,9 @@ function startEdit(item) {
   saveMessage.value = ''
   editingId.value = Number(item.id)
   draftStocks.value[String(item.id)] = Object.fromEntries(
-    (item.rowSizes || []).map((size) => [normalizeSizeCode(size), String(readSizeStock(item, size))])
+    visibleSizes.value
+      .filter((size) => hasSize(item, size))
+      .map((size) => [size, String(readSizeStock(item, size))])
   )
 }
 
@@ -304,7 +324,7 @@ function displayTotalStock(item) {
     return Number(item.totalStock || 0)
   }
   const draft = draftStocks.value[String(item.id)] || {}
-  return (item.rowSizes || []).reduce((total, size) => total + toSafeInt(draft[normalizeSizeCode(size)]), 0)
+  return visibleSizes.value.reduce((total, size) => total + (hasSize(item, size) ? toSafeInt(draft[size]) : 0), 0)
 }
 
 function toSafeInt(value) {
@@ -319,15 +339,17 @@ async function saveRow(item) {
   const draft = draftStocks.value[String(productId)] || {}
   const payload = {}
 
-  for (const size of item.rowSizes || []) {
-    const normalizedSize = normalizeSizeCode(size)
-    const rawValue = draft[normalizedSize]
+  for (const column of visibleSizes.value) {
+    if (!hasSize(item, column)) continue
+    const realSize = realSizeCodeForColumn(item, column)
+    if (!realSize) continue
+    const rawValue = draft[column]
     const number = Number(rawValue)
     if (!Number.isFinite(number) || number < 0 || !Number.isInteger(number)) {
-      error.value = `${item.sku || item.productCode} / ${normalizedSize} 的库存必须是大于等于 0 的整数`
+      error.value = `${item.sku || item.productCode} / ${column} 的库存必须是大于等于 0 的整数`
       return
     }
-    payload[normalizedSize] = number
+    payload[realSize] = number
   }
 
   savingId.value = productId
@@ -429,6 +451,7 @@ onMounted(loadPage)
 .inventory-success {
   color: #2d7b46;
 }
+
 
 .inventory-table-wrap {
   overflow-x: auto;
