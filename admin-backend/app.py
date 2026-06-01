@@ -1500,9 +1500,17 @@ def delete_category_route(category_id: int) -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def delete_product_route(product_id: int) -> Any:
-    if not delete_product(product_id):
+    result = delete_product(product_id)
+    if not result:
         return jsonify({"message": "Product not found"}), 404
-    return jsonify({"message": "Product deleted"})
+    if result.get("action") == "hidden":
+        return jsonify(
+            {
+                "message": "Product has related orders, so it was hidden instead of deleted",
+                "action": "hidden",
+            }
+        )
+    return jsonify({"message": "Product deleted", "action": "deleted"})
 
 
 @app.get("/api/admin/banners")

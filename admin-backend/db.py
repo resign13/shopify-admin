@@ -962,7 +962,7 @@ def update_product_inventory(product_id: int, size_stocks: dict[str, Any]) -> di
     return get_product_by_id(product_id)
 
 
-def delete_product(product_id: int) -> bool:
+def delete_product(product_id: int) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -974,19 +974,38 @@ def delete_product(product_id: int) -> bool:
                 (product_id,),
             )
             row = cur.fetchone()
-            deleted = row is not None
-            if deleted:
+            if not row:
+                conn.commit()
+                return None
+
+            has_related_orders = False
+            action = "deleted"
+            if row is not None:
                 cur.execute("SELECT COUNT(*) AS total FROM order_items WHERE product_id = %s", (product_id,))
                 order_row = cur.fetchone()
                 if order_row and int(order_row["total"]) > 0:
-                    raise ValueError("Product has related orders and cannot be deleted")
-                cur.execute(
-                    """
-                    DELETE FROM products
-                    WHERE id = %s AND is_active = TRUE
-                    """,
-                    (product_id,),
-                )
+                    has_related_orders = True
+
+                if has_related_orders:
+                    cur.execute(
+                        """
+                        UPDATE products
+                        SET is_active = FALSE,
+                            updated_at = NOW()
+                        WHERE id = %s AND is_active = TRUE
+                        """,
+                        (product_id,),
+                    )
+                    action = "hidden"
+                else:
+                    cur.execute(
+                        """
+                        DELETE FROM products
+                        WHERE id = %s AND is_active = TRUE
+                        """,
+                        (product_id,),
+                    )
+
                 cur.execute(
                     """
                     SELECT section_product_ids, collection_product_ids
@@ -1029,7 +1048,7 @@ def delete_product(product_id: int) -> bool:
                         ),
                     )
         conn.commit()
-    return deleted
+    return {"action": action, "hasRelatedOrders": has_related_orders}
 
 
 def count_products() -> int:
