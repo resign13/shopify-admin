@@ -64,6 +64,7 @@
           <table class="inventory-table">
             <thead>
               <tr>
+                <th class="title-column">商品标题</th>
                 <th>颜色 SKU</th>
                 <th>图片</th>
                 <th>颜色</th>
@@ -75,6 +76,9 @@
             </thead>
             <tbody>
               <tr v-for="item in inventoryRows" :key="item.id">
+                <td class="title-cell">
+                  <strong :title="displayName(item)">{{ displayName(item) }}</strong>
+                </td>
                 <td class="sku-cell">
                   <strong>{{ item.sku || item.productCode || '--' }}</strong>
                   <p v-if="item.productCode && item.productCode !== item.sku">{{ item.productCode }}</p>
@@ -462,7 +466,7 @@ onMounted(loadPage)
 
 .inventory-table {
   width: 100%;
-  min-width: 1180px;
+  min-width: 1420px;
   border-collapse: collapse;
 }
 
@@ -483,11 +487,32 @@ onMounted(loadPage)
   font-weight: 700;
 }
 
+.title-column {
+  min-width: 240px;
+}
+
+.title-cell {
+  min-width: 240px;
+  text-align: left !important;
+  white-space: normal;
+}
+
+.title-cell strong {
+  display: -webkit-box;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  word-break: break-word;
+}
+
 .inventory-table tbody tr:hover {
   background: rgba(255, 255, 255, 0.72);
 }
 
 .sku-cell {
+  min-width: 180px;
   text-align: left !important;
   white-space: normal;
 }
@@ -503,7 +528,7 @@ onMounted(loadPage)
 }
 
 .image-cell {
-  min-width: 96px;
+  min-width: 112px;
 }
 
 .inventory-thumb {
@@ -530,7 +555,7 @@ onMounted(loadPage)
 }
 
 .stock-cell {
-  min-width: 76px;
+  min-width: 72px;
 }
 
 .stock-chip {
@@ -569,8 +594,12 @@ onMounted(loadPage)
   color: var(--accent);
 }
 
+.total-stock-cell {
+  min-width: 116px;
+}
+
 .actions-cell {
-  min-width: 176px;
+  min-width: 156px;
 }
 
 .row-actions {
