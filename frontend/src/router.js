@@ -38,7 +38,7 @@ const router = createRouter({
     { path: '/activity-zone/manage', ...withAuth(ActivityManageView, ['admin', 'sales']) },
     { path: '/categories', ...withAuth(CategoriesView, ['admin', 'sales']) },
     { path: '/products', ...withAuth(ProductsView, ['admin', 'sales']) },
-    { path: '/inventory', ...withAuth(InventoryView, ['admin', 'sales', 'warehouse']) },
+    { path: '/inventory', ...withAuth(InventoryView, ['admin', 'sales', 'warehouse', 'customer']) },
     { path: '/products/new', ...withAuth(ProductEditorView, ['admin', 'sales']) },
     { path: '/products/:id/edit', ...withAuth(ProductEditorView, ['admin', 'sales']) },
     { path: '/accounts', redirect: '/store-accounts' },

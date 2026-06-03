@@ -39,11 +39,16 @@ export const useAdminAuthStore = defineStore('admin-auth', {
     isWarehouse() {
       return this.userRole === 'warehouse'
     },
+    isCustomer() {
+      return this.userRole === 'customer'
+    },
     canManageAccounts() {
       return this.userRole === 'admin'
     },
     defaultRoute() {
-      return this.userRole === 'warehouse' ? '/orders' : '/dashboard'
+      if (this.userRole === 'warehouse') return '/orders'
+      if (this.userRole === 'customer') return '/inventory'
+      return '/dashboard'
     },
   },
   actions: {

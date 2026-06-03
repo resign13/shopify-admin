@@ -41,6 +41,7 @@ const roleLabelMap = {
   admin: '管理员',
   sales: '外贸部',
   warehouse: '仓库部',
+  customer: '客户',
 }
 
 const allNavItems = [
@@ -50,7 +51,7 @@ const allNavItems = [
   { to: '/activity-zone/manage', label: '活动管理', roles: ['admin', 'sales'] },
   { to: '/categories', label: '商品分类', roles: ['admin', 'sales'] },
   { to: '/products', label: '商品管理', roles: ['admin', 'sales'] },
-  { to: '/inventory', label: '库存管理', roles: ['admin', 'sales', 'warehouse'] },
+  { to: '/inventory', label: '库存管理', roles: ['admin', 'sales', 'warehouse', 'customer'] },
   { to: '/store-accounts', label: '商城账号', roles: ['admin'] },
   { to: '/admin-users', label: '后台账号', roles: ['admin'] },
   { to: '/orders', label: '订单管理', roles: ['admin', 'sales', 'warehouse'] },

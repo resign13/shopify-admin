@@ -3,7 +3,7 @@
     <div class="admin-page two-col">
       <section class="admin-card">
         <h1>后台账号管理</h1>
-        <p class="small-note">管理员拥有全部权限，外贸部不可管理账号，仓库部仅可进入订单管理。</p>
+        <p class="small-note">管理员拥有全部权限，外贸部不可管理账号，仓库部仅可进入订单管理，客户仅可查看库存管理。</p>
 
         <div v-for="item in admin.adminUsers" :key="item.id" class="list-row stack-row">
           <div>
@@ -36,6 +36,7 @@
             <option value="admin">管理员</option>
             <option value="sales">外贸部</option>
             <option value="warehouse">仓库部</option>
+            <option value="customer">客户</option>
           </select>
 
           <select v-model="form.status" class="admin-field" :disabled="auth.user?.id === form.id">
@@ -74,6 +75,7 @@ const roleLabelMap = {
   admin: '管理员',
   sales: '外贸部',
   warehouse: '仓库部',
+  customer: '客户',
 }
 
 const statusLabelMap = {

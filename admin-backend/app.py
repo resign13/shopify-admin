@@ -699,7 +699,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
 
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
-ADMIN_USER_ROLES = {"admin", "sales", "warehouse"}
+ADMIN_USER_ROLES = {"admin", "sales", "warehouse", "customer"}
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY", "").strip()
 CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET", "").strip()
@@ -1355,7 +1355,7 @@ def products() -> Any:
 
 @app.get("/api/admin/inventory")
 @require_auth
-@require_roles("admin", "sales", "warehouse")
+@require_roles("admin", "sales", "warehouse", "customer")
 def inventory_products() -> Any:
     return jsonify({"items": list_products()})
 

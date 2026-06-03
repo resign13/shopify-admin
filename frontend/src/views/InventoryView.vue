@@ -17,7 +17,7 @@
             <select v-model="selectedCategoryDraft" class="admin-field">
               <option value="">全部分类</option>
               <option
-                v-for="category in admin.categories"
+                v-for="category in filterCategories"
                 :key="category.key"
                 :value="category.key"
               >
@@ -71,7 +71,7 @@
                 <th>分类</th>
                 <th v-for="size in visibleSizes" :key="size">{{ size }}</th>
                 <th>当前库存</th>
-                <th>操作</th>
+                <th v-if="canEditInventory">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -94,7 +94,7 @@
                 <td v-for="size in visibleSizes" :key="`${item.id}-${size}`" class="stock-cell">
                   <template v-if="hasSize(item, size)">
                     <input
-                      v-if="isEditing(item.id)"
+                      v-if="canEditInventory && isEditing(item.id)"
                       v-model="draftStocks[String(item.id)][size]"
                       class="stock-input"
                       type="number"
@@ -114,7 +114,7 @@
                 <td class="total-stock-cell">
                   <strong>{{ displayTotalStock(item) }}</strong>
                 </td>
-                <td class="actions-cell">
+                <td v-if="canEditInventory" class="actions-cell">
                   <div v-if="isEditing(item.id)" class="row-actions">
                     <button
                       class="admin-button"
@@ -156,9 +156,11 @@
 import { computed, onMounted, ref } from 'vue'
 
 import AdminLayout from '../components/AdminLayout.vue'
+import { useAdminAuthStore } from '../stores/auth'
 import { useAdminStore } from '../stores/admin'
 
 const admin = useAdminStore()
+const auth = useAdminAuthStore()
 const selectedCategoryDraft = ref('')
 const selectedCategory = ref('')
 const keywordDraft = ref('')
@@ -169,6 +171,7 @@ const saveMessage = ref('')
 const editingId = ref(0)
 const savingId = ref(0)
 const draftStocks = ref({})
+const canEditInventory = computed(() => auth.userRole !== 'customer')
 
 
 const COMMON_SIZE_COLUMNS = [
@@ -261,6 +264,23 @@ const inventoryRows = computed(() => {
 })
 
 const visibleSizes = computed(() => COMMON_SIZE_COLUMNS.map((item) => item.key))
+const filterCategories = computed(() => {
+  if (Array.isArray(admin.categories) && admin.categories.length) {
+    return admin.categories
+  }
+
+  const mapped = new Map()
+  for (const item of admin.inventoryItems || []) {
+    const key = String(item?.categoryKey || '').trim()
+    if (!key || mapped.has(key)) continue
+    mapped.set(key, {
+      key,
+      label: item?.categoryLabel || key,
+      labels: { zh: item?.categoryLabel || key },
+    })
+  }
+  return Array.from(mapped.values())
+})
 
 const totalStock = computed(() =>
   inventoryRows.value.reduce((total, item) => total + Number(item.totalStock || 0), 0)
@@ -306,6 +326,7 @@ function isEditing(productId) {
 }
 
 function startEdit(item) {
+  if (!canEditInventory.value) return
   error.value = ''
   saveMessage.value = ''
   editingId.value = Number(item.id)
@@ -339,6 +360,7 @@ function toSafeInt(value) {
 }
 
 async function saveRow(item) {
+  if (!canEditInventory.value) return
   const productId = Number(item.id)
   const draft = draftStocks.value[String(productId)] || {}
   const payload = {}
@@ -379,7 +401,10 @@ async function loadPage() {
   loading.value = true
   error.value = ''
   try {
-    await Promise.all([admin.loadInventory(), admin.loadCategories()])
+    await admin.loadInventory()
+    if (!auth.isCustomer) {
+      await admin.loadCategories()
+    }
   } catch (err) {
     error.value = err.message || '库存数据加载失败'
   } finally {
