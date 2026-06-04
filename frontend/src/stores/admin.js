@@ -339,6 +339,26 @@ export const useAdminStore = defineStore('admin-data', {
       const data = await request('/api/admin/orders', { headers: authHeaders(auth.token) })
       this.orders = normalizeOrders(data.items)
     },
+    async deleteOrders(orderIds = []) {
+      const auth = useAdminAuthStore()
+      const normalizedIds = Array.from(
+        new Set(
+          (Array.isArray(orderIds) ? orderIds : [orderIds])
+            .map((id) => Number(id))
+            .filter((id) => Number.isInteger(id) && id > 0)
+        )
+      )
+      if (!normalizedIds.length) {
+        throw new Error('No orders selected')
+      }
+      await request('/api/admin/orders', {
+        method: 'DELETE',
+        headers: authHeaders(auth.token),
+        body: JSON.stringify({ orderIds: normalizedIds }),
+      })
+      await this.loadOrders()
+      await this.loadDashboard()
+    },
     async exportOrders(filters = {}) {
       const auth = useAdminAuthStore()
       const params = new URLSearchParams()

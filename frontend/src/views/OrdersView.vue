@@ -13,10 +13,19 @@
             <button
               class="admin-button ghost"
               type="button"
-              :disabled="!selectedCount || exporting || sheetExporting"
+              :disabled="!selectedCount || exporting || sheetExporting || deletingOrders"
               @click="clearSelection"
             >
               清空已选
+            </button>
+            <button
+              v-if="canDeleteOrders"
+              class="admin-button ghost"
+              type="button"
+              :disabled="!selectedCount || exporting || sheetExporting || deletingOrders"
+              @click="deleteSelectedOrders"
+            >
+              {{ deletingOrders ? '删除中...' : `删除订单${selectedCount ? ` (${selectedCount})` : ''}` }}
             </button>
             <button
               class="admin-button sheet-export-button"
@@ -282,8 +291,10 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import AdminLayout from '../components/AdminLayout.vue'
 import PaginationBar from '../components/PaginationBar.vue'
 import { useAdminStore } from '../stores/admin'
+import { useAdminAuthStore } from '../stores/auth'
 
 const admin = useAdminStore()
+const auth = useAdminAuthStore()
 const selectedTimeRange = ref('all')
 const selectedStatus = ref('all')
 const selectedCategory = ref('all')
@@ -297,6 +308,7 @@ const shippingFeeDrafts = reactive({})
 const statusDrafts = reactive({})
 const exporting = ref(false)
 const sheetExporting = ref(false)
+const deletingOrders = ref(false)
 const invoiceExportingId = ref(0)
 const selectedOrderIds = ref([])
 const expandedOrderIds = ref([])
@@ -352,6 +364,7 @@ const filteredOrders = computed(() => {
 
 const filteredOrderIds = computed(() => filteredOrders.value.map((order) => Number(order.id)))
 const selectedCount = computed(() => selectedOrderIds.value.length)
+const canDeleteOrders = computed(() => auth.userRole === 'admin')
 
 const allFilteredSelected = computed(() => {
   if (!filteredOrderIds.value.length) return false
@@ -416,6 +429,38 @@ function toggleAllFilteredOrders(event) {
 
 function clearSelection() {
   selectedOrderIds.value = []
+}
+
+async function deleteSelectedOrders() {
+  const orderIds = Array.from(
+    new Set(
+      selectedOrderIds.value
+        .map((id) => Number(id))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  )
+  if (!orderIds.length) {
+    window.alert('请先勾选订单')
+    return
+  }
+
+  const confirmed = window.confirm(
+    orderIds.length === 1
+      ? '确认删除这 1 个订单吗？删除后会同步恢复该订单占用的库存，且无法撤销。'
+      : `确认删除这 ${orderIds.length} 个订单吗？删除后会同步恢复这些订单占用的库存，且无法撤销。`
+  )
+  if (!confirmed) return
+
+  deletingOrders.value = true
+  try {
+    await admin.deleteOrders(orderIds)
+    clearSelection()
+    expandedOrderIds.value = expandedOrderIds.value.filter((id) => !orderIds.includes(Number(id)))
+  } catch (error) {
+    window.alert(error.message || '删除订单失败')
+  } finally {
+    deletingOrders.value = false
+  }
 }
 
 function isOrderExpanded(orderId) {

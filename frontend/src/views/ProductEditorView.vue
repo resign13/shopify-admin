@@ -5,7 +5,7 @@
         <div class="editor-page-head">
           <div>
             <h1>{{ form.editingId ? '编辑商品' : '新建商品' }}</h1>
-            <p class="small-note">按分类、标题、颜色、尺码、阶梯折扣完整维护商品资料。</p>
+            <p class="small-note">按分类、标题、颜色、尺码、阶梯价格完整维护商品资料。</p>
           </div>
           <button class="admin-button ghost" type="button" @click="goBack">返回商品管理</button>
         </div>
@@ -198,7 +198,7 @@
 
           <div class="editor-section">
             <div class="editor-section-head">
-              <strong>阶梯折扣</strong>
+              <strong>阶梯价格</strong>
               <button class="admin-button ghost mini-button" type="button" @click="addTier">添加阶梯</button>
             </div>
 
@@ -208,15 +208,14 @@
                 <span>至</span>
                 <input v-model.number="tier.maxQty" class="admin-field" type="number" min="1" placeholder="结束数量" />
                 <input
-                  v-model.number="tier.discountPercent"
+                  v-model.number="tier.price"
                   class="admin-field"
                   type="number"
                   min="0"
-                  max="100"
-                  step="0.1"
-                  placeholder="折扣百分比"
+                  step="0.01"
+                  placeholder="固定单价(USD)"
                 />
-                <span>%</span>
+                <span>USD</span>
                 <button
                   v-if="form.priceTiers.length > 1"
                   class="admin-button ghost icon-button"
@@ -304,17 +303,35 @@ const colorPalette = ref([
 
 const sizeOptions = ref(['XS', 'S', 'M', 'L', 'XL', 'XXL', '25', '26', '27', '28', '29', '30', 'one-size'])
 
-function makeTier(minQty = '', maxQty = '', discountPercent = '') {
+function makeTier(minQty = '', maxQty = '', price = '') {
   return {
     localId: crypto.randomUUID(),
     minQty,
     maxQty,
-    discountPercent,
+    price,
   }
 }
 
 function defaultTiers() {
-  return [makeTier(1, 99, 5), makeTier(100, 200, 10), makeTier(201, 1000, 15)]
+  return [makeTier()]
+}
+
+function isBlankTier(tier) {
+  return [tier.minQty, tier.maxQty, tier.price].every((value) => value === '' || value === null || value === undefined)
+}
+
+function activePriceTiers() {
+  return form.priceTiers.filter((tier) => !isBlankTier(tier))
+}
+
+function resolveExistingTierPrice(tier, basePrice = 0) {
+  const fixedPrice = Number(tier.price ?? tier.tierPrice ?? tier.tier_price ?? 0)
+  if (fixedPrice > 0) return fixedPrice
+  const discountPercent = Number(tier.discountPercent ?? tier.discount_percent ?? 0)
+  if (discountPercent > 0) {
+    return Number((Number(basePrice || 0) * (1 - discountPercent / 100)).toFixed(2))
+  }
+  return ''
 }
 
 function makeVariant(color, sizes = ['S', 'M', 'L', 'XL']) {
@@ -537,18 +554,17 @@ function validateForm() {
   if (!form.sizes.length) return '请至少选择一个尺码'
   if (!form.sizeChartImage) return '请上传尺码表图'
   if (!form.descriptionImage) return '请上传商品信息描述图'
-  if (!form.priceTiers.length) return '请至少填写一个阶梯折扣'
-
   for (const [index, tier] of form.priceTiers.entries()) {
     const row = index + 1
-    if (tier.minQty === '' || tier.maxQty === '' || tier.discountPercent === '') {
-      return `请填写完整第 ${row} 行阶梯折扣`
+    if (isBlankTier(tier)) continue
+    if (tier.minQty === '' || tier.maxQty === '' || tier.price === '') {
+      return `请填写完整第 ${row} 行阶梯价格`
     }
     if (Number(tier.minQty) < 1 || Number(tier.maxQty) < Number(tier.minQty)) {
       return `第 ${row} 行阶梯数量不正确`
     }
-    if (Number(tier.discountPercent) < 0 || Number(tier.discountPercent) > 100) {
-      return `第 ${row} 行折扣百分比不正确`
+    if (Number(tier.price) <= 0) {
+      return `第 ${row} 行固定价格必须大于 0`
     }
   }
 
@@ -612,10 +628,10 @@ async function save() {
       sizes: [...form.sizes],
       sizeChartImage: form.sizeChartImage,
       descriptionImage: form.descriptionImage,
-      priceTiers: form.priceTiers.map((tier) => ({
+      priceTiers: activePriceTiers().map((tier) => ({
         minQty: Number(tier.minQty),
         maxQty: Number(tier.maxQty),
-        discountPercent: Number(tier.discountPercent),
+        price: Number(tier.price),
       })),
     }
 
@@ -687,7 +703,7 @@ function populateForm(item) {
   form.sizeChartImage = item.sizeChartImage || ''
   form.descriptionImage = item.descriptionImage || ''
   form.priceTiers = (item.priceTiers?.length ? item.priceTiers : defaultTiers()).map((tier) =>
-    makeTier(tier.minQty, tier.maxQty, tier.discountPercent ?? tier.discount_percent ?? 0),
+    makeTier(tier.minQty, tier.maxQty, resolveExistingTierPrice(tier, item.price)),
   )
   form.editingId = item.id
   ensurePaletteColor(item.colorName, item.colorHex)

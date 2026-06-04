@@ -182,6 +182,17 @@ def _apply_schema_migrations(cur: Any) -> None:
     )
     cur.execute("ALTER TABLE product_price_tiers ADD COLUMN IF NOT EXISTS discount_percent NUMERIC(5, 2) NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE product_price_tiers ADD COLUMN IF NOT EXISTS tier_price NUMERIC(12, 2) NOT NULL DEFAULT 0")
+    cur.execute(
+        """
+        UPDATE product_price_tiers ppt
+        SET tier_price = ROUND((p.price * (1 - ppt.discount_percent / 100))::numeric, 2),
+            discount_percent = 0
+        FROM products p
+        WHERE p.id = ppt.product_id
+          AND COALESCE(ppt.discount_percent, 0) > 0
+          AND COALESCE(ppt.tier_price, 0) = 0
+        """
+    )
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 0")
     cur.execute(
         """
@@ -403,6 +414,7 @@ def _build_product_result(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         product_id = int(row["id"])
         size_price_list = size_prices[product_id]
         default_price = size_price_list[0]["price"] if size_price_list else _num(row["price"])
+        product_price_tiers = normalize_tier_prices_for_output(price_tiers[product_id], default_price)
         items.append(
             {
                 "id": product_id,
@@ -423,7 +435,7 @@ def _build_product_result(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "sizePrices": size_price_list,
                 "image": row["main_image_url"],
                 "gallery": galleries[product_id],
-                "priceTiers": price_tiers[product_id],
+                "priceTiers": product_price_tiers,
                 "sizeChartImage": row.get("size_chart_image_url") or "",
                 "descriptionImage": row.get("description_image_url") or "",
                 "name": names[product_id],
@@ -493,6 +505,42 @@ def _attach_color_options(product: dict[str, Any] | None) -> dict[str, Any] | No
     return product
 
 
+def _decimal_or_none(value: Any) -> Decimal | None:
+    if value in (None, "", "null"):
+        return None
+    try:
+        return Decimal(str(value))
+    except Exception:
+        return None
+
+
+def _fixed_tier_price(base_price: Any, tier_price: Any, discount_percent: Any) -> Decimal | None:
+    fixed_price = _decimal_or_none(tier_price)
+    if fixed_price is not None and fixed_price > 0:
+        return fixed_price
+    discount = _decimal_or_none(discount_percent)
+    if discount is not None and discount > 0:
+        return Decimal(str(base_price or 0)) * (Decimal("1") - discount / Decimal("100"))
+    return None
+
+
+def normalize_tier_prices_for_output(tiers: list[dict[str, Any]], base_price: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for tier in tiers:
+        fixed_price = _fixed_tier_price(base_price, tier.get("price"), tier.get("discountPercent") or tier.get("discount_percent"))
+        if fixed_price is None:
+            continue
+        rows.append(
+            {
+                **tier,
+                "discountPercent": 0,
+                "discount_percent": 0,
+                "price": _num(fixed_price.quantize(Decimal("0.01"))),
+            }
+        )
+    return rows
+
+
 def _resolve_tier_price(base_price: Any, tiers: list[dict[str, Any]], quantity: int) -> int | float:
     resolved = _num(base_price)
     for tier in tiers:
@@ -500,11 +548,9 @@ def _resolve_tier_price(base_price: Any, tiers: list[dict[str, Any]], quantity: 
         max_raw = tier["max_qty"]
         max_qty = int(max_raw) if max_raw is not None else None
         if quantity >= min_qty and (max_qty is None or quantity <= max_qty):
-            discount = tier.get("discount_percent")
-            if discount in (None, ""):
-                resolved = _num(tier["tier_price"])
-            else:
-                resolved = _num(Decimal(str(base_price)) * (Decimal("1") - Decimal(str(discount)) / Decimal("100")))
+            fixed_price = _fixed_tier_price(base_price, tier.get("tier_price"), tier.get("discount_percent"))
+            if fixed_price is not None:
+                resolved = _num(fixed_price.quantize(Decimal("0.01")))
     return resolved
 
 
@@ -586,29 +632,35 @@ def _get_category_id(cur: Any, category_key: str) -> int:
     return int(row["id"])
 
 
+def _payload_base_price(payload: dict[str, Any]) -> Decimal:
+    size_prices = payload.get("sizePrices") or []
+    if isinstance(size_prices, list) and size_prices:
+        first_price = size_prices[0].get("price") if isinstance(size_prices[0], dict) else None
+        if first_price not in (None, ""):
+            return Decimal(str(first_price))
+    return Decimal(str(payload.get("price", 0) or 0))
+
+
 def _normalize_price_tiers(payload: dict[str, Any]) -> list[dict[str, Any]]:
     raw_tiers = payload.get("priceTiers") or []
     if not raw_tiers:
-        base_price = Decimal(str(payload.get("price", 0) or 0))
-        raw_tiers = [
-            {"minQty": 1, "maxQty": 99, "discountPercent": Decimal("5")},
-            {"minQty": 100, "maxQty": 200, "discountPercent": Decimal("10")},
-            {"minQty": 201, "maxQty": 1000, "discountPercent": Decimal("15")},
-        ]
+        return []
 
+    base_price = _payload_base_price(payload)
     tiers: list[dict[str, Any]] = []
     for index, tier in enumerate(raw_tiers, start=1):
         min_qty = int(tier.get("minQty") or 0)
         max_raw = tier.get("maxQty")
         max_qty = None if max_raw in (None, "", "null") else int(max_raw)
-        discount_percent = Decimal(str(tier.get("discountPercent") or tier.get("discount_percent") or 0))
-        price = tier.get("price")
+        price = _fixed_tier_price(base_price, tier.get("price") or tier.get("tierPrice") or tier.get("tier_price"), tier.get("discountPercent") or tier.get("discount_percent"))
+        if price is None:
+            continue
         tiers.append(
             {
                 "minQty": min_qty,
                 "maxQty": max_qty,
-                "discountPercent": discount_percent,
-                "price": Decimal(str(price or 0)) if price not in (None, "") else None,
+                "discountPercent": Decimal("0"),
+                "price": price.quantize(Decimal("0.01")),
                 "sortOrder": index,
             }
         )
@@ -2112,6 +2164,50 @@ def update_order_status(
                 return None
         conn.commit()
     return get_order_by_id(order_id)
+
+
+def delete_orders(order_ids: list[int]) -> dict[str, Any]:
+    normalized_ids = sorted({int(order_id) for order_id in order_ids if int(order_id) > 0})
+    if not normalized_ids:
+        return {"deletedIds": [], "deletedCount": 0}
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id FROM orders WHERE id = ANY(%s) FOR UPDATE", (normalized_ids,))
+            existing_order_ids = [int(row["id"]) for row in cur.fetchall()]
+            if not existing_order_ids:
+                return {"deletedIds": [], "deletedCount": 0}
+
+            cur.execute(
+                """
+                SELECT product_id, COALESCE(size_code, '') AS size_code, SUM(quantity)::INTEGER AS quantity
+                FROM order_items
+                WHERE order_id = ANY(%s)
+                GROUP BY product_id, COALESCE(size_code, '')
+                """,
+                (existing_order_ids,),
+            )
+            for row in cur.fetchall():
+                product_id = int(row.get("product_id") or 0)
+                quantity = int(row.get("quantity") or 0)
+                size_code = str(row.get("size_code") or "").strip()
+                if product_id <= 0 or quantity <= 0:
+                    continue
+                cur.execute(
+                    "UPDATE products SET stock = stock + %s, updated_at = NOW() WHERE id = %s",
+                    (quantity, product_id),
+                )
+                if size_code:
+                    cur.execute(
+                        "UPDATE product_size_prices SET stock = stock + %s WHERE product_id = %s AND size_code = %s",
+                        (quantity, product_id, size_code),
+                    )
+
+            cur.execute("DELETE FROM orders WHERE id = ANY(%s) RETURNING id", (existing_order_ids,))
+            deleted_ids = [int(row["id"]) for row in cur.fetchall()]
+        conn.commit()
+
+    return {"deletedIds": deleted_ids, "deletedCount": len(deleted_ids)}
 
 
 def count_orders() -> int:

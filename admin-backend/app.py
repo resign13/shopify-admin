@@ -44,6 +44,7 @@ from db import (
     create_banner,
     create_category,
     create_order,
+    delete_orders,
     create_product,
     create_products_batch,
     create_store_user,
@@ -860,22 +861,22 @@ def validate_product_payload(payload: dict[str, Any]) -> str | None:
         return "Missing field: sizes"
 
     price_tiers = payload.get("priceTiers") or []
-    if not isinstance(price_tiers, list) or not price_tiers:
-        return "Missing field: priceTiers"
+    if not isinstance(price_tiers, list):
+        return "Invalid priceTiers"
 
     for index, tier in enumerate(price_tiers, start=1):
         try:
             min_qty = int(tier.get("minQty"))
             max_raw = tier.get("maxQty")
             max_qty = None if max_raw in (None, "", "null") else int(max_raw)
-            discount_percent = float(tier.get("discountPercent"))
+            price = float(tier.get("price"))
         except (TypeError, ValueError):
             return f"Invalid price tier at index {index}"
         if min_qty < 1:
             return f"Invalid price tier at index {index}"
         if max_qty is not None and max_qty < min_qty:
             return f"Invalid price tier at index {index}"
-        if discount_percent < 0 or discount_percent > 100:
+        if price <= 0:
             return f"Invalid price tier at index {index}"
 
     variants = payload.get("variants")
@@ -1859,6 +1860,39 @@ def update_order_route(order_id: int) -> Any:
     if not order:
         return jsonify({"message": "Order not found"}), 404
     return jsonify({"message": "Order updated", "order": order})
+
+
+@app.delete("/api/admin/orders")
+@require_auth
+@require_roles("admin")
+def delete_orders_route() -> Any:
+    payload = request.get_json(silent=True) or {}
+    raw_order_ids = payload.get("orderIds") or []
+    if not isinstance(raw_order_ids, list):
+        return jsonify({"message": "orderIds must be a list"}), 400
+
+    order_ids: list[int] = []
+    for item in raw_order_ids:
+        try:
+            order_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if order_id > 0:
+            order_ids.append(order_id)
+
+    if not order_ids:
+        return jsonify({"message": "Missing orderIds"}), 400
+
+    result = delete_orders(order_ids)
+    if not result["deletedCount"]:
+        return jsonify({"message": "Order not found"}), 404
+    return jsonify(
+        {
+            "message": "Orders deleted",
+            "deletedCount": result["deletedCount"],
+            "deletedIds": result["deletedIds"],
+        }
+    )
 
 
 @app.get("/favicon.svg")
