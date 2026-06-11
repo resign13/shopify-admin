@@ -53,7 +53,6 @@
 - `colorGroup`
 - `colorName`
 - `colorHex`
-- `priceTiers[]`
 - `colorOptions[]`
 
 ### `GET /api/public/products/:slug`
@@ -129,10 +128,6 @@
   "sizes": ["S", "M", "L", "XL", "XXL"],
   "sizeChartImage": "https://example.com/size-chart.jpg",
   "descriptionImage": "https://example.com/description.jpg",
-  "priceTiers": [
-    { "minQty": 1, "maxQty": 99, "discountPercent": 5 },
-    { "minQty": 100, "maxQty": 200, "discountPercent": 10 },
-    { "minQty": 201, "maxQty": 1000, "discountPercent": 15 }
   ],
   "variants": [
     {
@@ -163,7 +158,6 @@
 - `colorGroup`: 同款不同颜色的分组编码，前台通过它聚合同色组选项
 - `colorName`: 当前商品颜色名称
 - `colorHex`: 当前商品颜色色值
-- `priceTiers`: 商品详情页展示的阶梯折扣，按百分比计算
 - `sizePrices[].price`: 当前颜色 + 当前尺码的单价
 - `sizePrices[].stock`: 当前颜色 + 当前尺码的库存
 

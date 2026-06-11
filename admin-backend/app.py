@@ -742,7 +742,6 @@ def serialize_product(product: dict[str, Any], lang: str) -> dict[str, Any]:
         "categoryLabel": category_label,
         "price": product["price"],
         "formattedPrice": f"${product['price']}",
-        "priceTiers": product.get("priceTiers", []),
         "stock": product["stock"],
         "featured": bool(product.get("featured")),
         "origin": product.get("origin", ""),
@@ -860,24 +859,6 @@ def validate_product_payload(payload: dict[str, Any]) -> str | None:
     if not sizes:
         return "Missing field: sizes"
 
-    price_tiers = payload.get("priceTiers") or []
-    if not isinstance(price_tiers, list):
-        return "Invalid priceTiers"
-
-    for index, tier in enumerate(price_tiers, start=1):
-        try:
-            min_qty = int(tier.get("minQty"))
-            max_raw = tier.get("maxQty")
-            max_qty = None if max_raw in (None, "", "null") else int(max_raw)
-            price = float(tier.get("price"))
-        except (TypeError, ValueError):
-            return f"Invalid price tier at index {index}"
-        if min_qty < 1:
-            return f"Invalid price tier at index {index}"
-        if max_qty is not None and max_qty < min_qty:
-            return f"Invalid price tier at index {index}"
-        if price <= 0:
-            return f"Invalid price tier at index {index}"
 
     variants = payload.get("variants")
     if variants is None:

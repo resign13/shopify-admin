@@ -5,7 +5,7 @@
         <div class="editor-page-head">
           <div>
             <h1>{{ form.editingId ? '编辑商品' : '新建商品' }}</h1>
-            <p class="small-note">按分类、标题、颜色、尺码、阶梯价格完整维护商品资料。</p>
+            <p class="small-note">按分类、标题、颜色、尺码完整维护商品资料。</p>
           </div>
           <button class="admin-button ghost" type="button" @click="goBack">返回商品管理</button>
         </div>
@@ -198,38 +198,6 @@
 
           <div class="editor-section">
             <div class="editor-section-head">
-              <strong>阶梯价格</strong>
-              <button class="admin-button ghost mini-button" type="button" @click="addTier">添加阶梯</button>
-            </div>
-
-            <div class="tier-table">
-              <div v-for="(tier, tierIndex) in form.priceTiers" :key="tier.localId" class="tier-edit-row">
-                <input v-model.number="tier.minQty" class="admin-field" type="number" min="1" placeholder="起订量" />
-                <span>至</span>
-                <input v-model.number="tier.maxQty" class="admin-field" type="number" min="1" placeholder="结束数量" />
-                <input
-                  v-model.number="tier.price"
-                  class="admin-field"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="固定单价(USD)"
-                />
-                <span>USD</span>
-                <button
-                  v-if="form.priceTiers.length > 1"
-                  class="admin-button ghost icon-button"
-                  type="button"
-                  @click="removeTier(tierIndex)"
-                >
-                  x
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div class="editor-section">
-            <div class="editor-section-head">
               <strong>商品图片资料</strong>
               <span class="small-note">每个产品上传 1 张尺码表图和 1 张商品信息描述图。</span>
             </div>
@@ -303,36 +271,6 @@ const colorPalette = ref([
 
 const sizeOptions = ref(['XS', 'S', 'M', 'L', 'XL', 'XXL', '25', '26', '27', '28', '29', '30', 'one-size'])
 
-function makeTier(minQty = '', maxQty = '', price = '') {
-  return {
-    localId: crypto.randomUUID(),
-    minQty,
-    maxQty,
-    price,
-  }
-}
-
-function defaultTiers() {
-  return [makeTier()]
-}
-
-function isBlankTier(tier) {
-  return [tier.minQty, tier.maxQty, tier.price].every((value) => value === '' || value === null || value === undefined)
-}
-
-function activePriceTiers() {
-  return form.priceTiers.filter((tier) => !isBlankTier(tier))
-}
-
-function resolveExistingTierPrice(tier, basePrice = 0) {
-  const fixedPrice = Number(tier.price ?? tier.tierPrice ?? tier.tier_price ?? 0)
-  if (fixedPrice > 0) return fixedPrice
-  const discountPercent = Number(tier.discountPercent ?? tier.discount_percent ?? 0)
-  if (discountPercent > 0) {
-    return Number((Number(basePrice || 0) * (1 - discountPercent / 100)).toFixed(2))
-  }
-  return ''
-}
 
 function makeVariant(color, sizes = ['S', 'M', 'L', 'XL']) {
   const sizePrices = {}
@@ -363,7 +301,6 @@ function emptyForm() {
     sizes: ['S', 'M', 'L', 'XL'],
     sizeChartImage: '',
     descriptionImage: '',
-    priceTiers: defaultTiers(),
     variants: [],
   }
 }
@@ -459,13 +396,7 @@ function addCustomSize() {
   formError.value = ''
 }
 
-function addTier() {
-  form.priceTiers.push(makeTier())
-}
 
-function removeTier(index) {
-  form.priceTiers.splice(index, 1)
-}
 
 function fillAllPrices() {
   if (bulkPriceValue.value === '' || bulkPriceValue.value === null || bulkPriceValue.value === undefined) {
@@ -554,19 +485,7 @@ function validateForm() {
   if (!form.sizes.length) return '请至少选择一个尺码'
   if (!form.sizeChartImage) return '请上传尺码表图'
   if (!form.descriptionImage) return '请上传商品信息描述图'
-  for (const [index, tier] of form.priceTiers.entries()) {
-    const row = index + 1
-    if (isBlankTier(tier)) continue
-    if (tier.minQty === '' || tier.maxQty === '' || tier.price === '') {
-      return `请填写完整第 ${row} 行阶梯价格`
-    }
-    if (Number(tier.minQty) < 1 || Number(tier.maxQty) < Number(tier.minQty)) {
-      return `第 ${row} 行阶梯数量不正确`
-    }
-    if (Number(tier.price) <= 0) {
-      return `第 ${row} 行固定价格必须大于 0`
-    }
-  }
+
 
   for (const [index, variant] of form.variants.entries()) {
     const row = index + 1
@@ -628,11 +547,6 @@ async function save() {
       sizes: [...form.sizes],
       sizeChartImage: form.sizeChartImage,
       descriptionImage: form.descriptionImage,
-      priceTiers: activePriceTiers().map((tier) => ({
-        minQty: Number(tier.minQty),
-        maxQty: Number(tier.maxQty),
-        price: Number(tier.price),
-      })),
     }
 
     const variants = form.variants.map((variant) => {
@@ -702,9 +616,6 @@ function populateForm(item) {
   ensureSizeOptions(form.sizes)
   form.sizeChartImage = item.sizeChartImage || ''
   form.descriptionImage = item.descriptionImage || ''
-  form.priceTiers = (item.priceTiers?.length ? item.priceTiers : defaultTiers()).map((tier) =>
-    makeTier(tier.minQty, tier.maxQty, resolveExistingTierPrice(tier, item.price)),
-  )
   form.editingId = item.id
   ensurePaletteColor(item.colorName, item.colorHex)
   form.variants = [
@@ -939,17 +850,6 @@ watch(
   border-radius: 4px;
 }
 
-.tier-table {
-  display: grid;
-  gap: 10px;
-}
-
-.tier-edit-row {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr 1fr auto auto;
-  align-items: center;
-  gap: 10px;
-}
 
 .icon-button {
   width: 38px;
@@ -1015,7 +915,6 @@ watch(
 @media (max-width: 720px) {
   .color-picker-grid,
   .size-check-grid,
-  .tier-edit-row,
   .custom-option-row,
   .custom-size-row,
   .bulk-fill-row {

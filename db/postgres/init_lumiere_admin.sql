@@ -121,18 +121,6 @@ CREATE TABLE IF NOT EXISTS product_size_prices (
 CREATE INDEX IF NOT EXISTS idx_product_size_prices_product_id
   ON product_size_prices (product_id);
 
-CREATE TABLE IF NOT EXISTS product_price_tiers (
-  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-  min_qty INTEGER NOT NULL CHECK (min_qty > 0),
-  max_qty INTEGER,
-  discount_percent NUMERIC(5, 2) NOT NULL DEFAULT 0 CHECK (discount_percent >= 0 AND discount_percent <= 100),
-  tier_price NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (tier_price >= 0),
-  sort_order INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE INDEX IF NOT EXISTS idx_product_price_tiers_product_id
-  ON product_price_tiers (product_id);
 
 CREATE TABLE IF NOT EXISTS banners (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
