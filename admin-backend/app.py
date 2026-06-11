@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from copy import copy
+from concurrent.futures import ThreadPoolExecutor
 import secrets
 import sys
 import mimetypes
@@ -1154,14 +1155,17 @@ def upload_files() -> Any:
     files = request.files.getlist("files")
     if not files:
         return jsonify({"message": "Missing files"}), 400
-    urls: list[str] = []
-    for file in files:
-        if not file.filename:
-            continue
-        if cloudinary_enabled():
-            urls.append(upload_file_to_cloudinary(file))
-        else:
-            urls.append(save_file_locally(file))
+    valid_files = [file for file in files if file.filename]
+    if not valid_files:
+        return jsonify({"message": "Missing files"}), 400
+
+    uploader = upload_file_to_cloudinary if cloudinary_enabled() else save_file_locally
+    if len(valid_files) == 1:
+        urls = [uploader(valid_files[0])]
+    else:
+        max_workers = min(4, len(valid_files))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            urls = list(executor.map(uploader, valid_files))
     return jsonify({"urls": urls})
 
 

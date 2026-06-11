@@ -227,13 +227,23 @@ export const useAdminStore = defineStore('admin-data', {
     async saveProduct(payload) {
       const auth = useAdminAuthStore()
       const isEdit = Boolean(payload.id)
-      await request(`/api/admin/products${isEdit ? `/${payload.id}` : ''}`, {
+      const data = await request(`/api/admin/products${isEdit ? `/${payload.id}` : ''}`, {
         method: isEdit ? 'PUT' : 'POST',
         headers: authHeaders(auth.token),
         body: JSON.stringify(payload),
       })
-      await this.loadProducts()
-      await this.loadDashboard()
+      const savedProducts = Array.isArray(data.product) ? data.product : [data.product].filter(Boolean)
+      for (const product of savedProducts) {
+        const index = this.products.findIndex((item) => Number(item.id || 0) === Number(product.id || 0))
+        if (index >= 0) {
+          this.products.splice(index, 1, product)
+        } else {
+          this.products.push(product)
+        }
+      }
+      this.products.sort((left, right) => Number(left.id || 0) - Number(right.id || 0))
+      this.loadDashboard().catch(() => {})
+      return savedProducts
     },
     async deleteProduct(id) {
       const auth = useAdminAuthStore()
