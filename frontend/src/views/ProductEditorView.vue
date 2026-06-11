@@ -560,6 +560,7 @@ async function save() {
         productCode,
         sku: productCode,
         slug: productCode.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+        colorGroup: familyCode,
         colorName: variant.colorName.trim(),
         colorHex: variant.colorHex.trim(),
         stock: sizePrices.reduce((total, item) => total + Number(item.stock || 0), 0),

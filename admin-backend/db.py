@@ -422,18 +422,7 @@ def _product_base_query() -> str:
     """
 
 
-def _list_color_options(color_group: str) -> list[dict[str, Any]]:
-    if not color_group:
-        return []
-    rows = _fetch_all(
-        """
-        SELECT id, slug, product_code, color_name, color_hex, main_image_url, stock
-        FROM products
-        WHERE is_active = TRUE AND color_group = %s
-        ORDER BY id
-        """,
-        (color_group,),
-    )
+def _format_color_options(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {
             "id": int(row["id"]),
@@ -448,10 +437,55 @@ def _list_color_options(color_group: str) -> list[dict[str, Any]]:
     ]
 
 
+def _product_code_family_prefix(product_code: str) -> str:
+    code = str(product_code or "").strip()
+    for separator in ("-", "－", "_"):
+        if separator in code:
+            prefix = code.split(separator, 1)[0].strip()
+            if len(prefix) >= 3 and prefix.lower() != code.lower():
+                return prefix
+    return ""
+
+
+def _list_color_options(color_group: str, product_code: str = "") -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if color_group:
+        rows = _fetch_all(
+            """
+            SELECT id, slug, product_code, color_name, color_hex, main_image_url, stock
+            FROM products
+            WHERE is_active = TRUE AND color_group = %s
+            ORDER BY id
+            """,
+            (color_group,),
+        )
+
+    # Backward compatibility: older edits could accidentally overwrite color_group
+    # with each color variant's own product_code. In that case the query above
+    # only returns itself, so recover sibling colors by the shared product-code
+    # prefix such as CS2010-Black / CS2010-White.
+    family_prefix = _product_code_family_prefix(product_code)
+    if family_prefix and len(rows) <= 1:
+        fallback_rows = _fetch_all(
+            """
+            SELECT id, slug, product_code, color_name, color_hex, main_image_url, stock
+            FROM products
+            WHERE is_active = TRUE
+              AND (color_group = %s OR product_code = %s OR product_code ILIKE %s)
+            ORDER BY id
+            """,
+            (family_prefix, family_prefix, f"{family_prefix}-%"),
+        )
+        if len(fallback_rows) > len(rows):
+            rows = fallback_rows
+
+    return _format_color_options(rows)
+
+
 def _attach_color_options(product: dict[str, Any] | None) -> dict[str, Any] | None:
     if not product:
         return None
-    product["colorOptions"] = _list_color_options(product.get("colorGroup", ""))
+    product["colorOptions"] = _list_color_options(product.get("colorGroup", ""), product.get("productCode", ""))
     return product
 
 
@@ -665,7 +699,7 @@ def _insert_product_row(cur: Any, payload: dict[str, Any]) -> int:
             payload["slug"],
             payload["sku"],
             payload["productCode"],
-            payload.get("colorGroup") or payload["productCode"],
+            payload.get("colorGroup") or payload.get("familyCode") or payload["productCode"],
             payload.get("colorName", ""),
             payload.get("colorHex", ""),
             price,
@@ -743,10 +777,17 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
     details = _normalize_product_details(payload)
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM products WHERE id = %s AND is_active = TRUE", (product_id,))
-            if not cur.fetchone():
+            cur.execute("SELECT id, color_group FROM products WHERE id = %s AND is_active = TRUE", (product_id,))
+            existing_product = cur.fetchone()
+            if not existing_product:
                 return None
             category_id = _get_category_id(cur, payload["categoryKey"])
+            next_color_group = str(
+                payload.get("colorGroup")
+                or payload.get("familyCode")
+                or existing_product.get("color_group")
+                or payload["productCode"]
+            ).strip()
             size_prices = _normalize_size_prices(payload.get("sizePrices"), details["sizes"])
             price = size_prices[0]["price"] if size_prices else Decimal(str(payload.get("price", 0) or 0))
             stock = _sum_size_stock(size_prices) if size_prices else int(payload.get("stock", 0))
@@ -775,7 +816,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                     payload["slug"],
                     payload["sku"],
                     payload["productCode"],
-                    payload.get("colorGroup") or payload["productCode"],
+                    next_color_group,
                     payload.get("colorName", ""),
                     payload.get("colorHex", ""),
                     price,
