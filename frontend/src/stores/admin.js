@@ -7,72 +7,6 @@ function authHeaders(token) {
   return { Authorization: `Bearer ${token}` }
 }
 
-const IMAGE_COMPRESS_MAX_EDGE = 1800
-const IMAGE_COMPRESS_QUALITY = 0.82
-const IMAGE_COMPRESS_SKIP_BYTES = 900 * 1024
-
-function shouldCompressImage(file) {
-  if (!file || !file.type?.startsWith('image/')) return false
-  if (['image/gif', 'image/svg+xml', 'image/webp'].includes(file.type)) return false
-  return true
-}
-
-function loadImageFromFile(file) {
-  return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const image = new Image()
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve(image)
-    }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error('Image load failed'))
-    }
-    image.src = url
-  })
-}
-
-function canvasToBlob(canvas, type, quality) {
-  return new Promise((resolve) => {
-    canvas.toBlob((blob) => resolve(blob), type, quality)
-  })
-}
-
-async function compressImageFile(file) {
-  if (!shouldCompressImage(file)) return file
-
-  try {
-    const image = await loadImageFromFile(file)
-    const longestEdge = Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height)
-    if (file.size <= IMAGE_COMPRESS_SKIP_BYTES && longestEdge <= IMAGE_COMPRESS_MAX_EDGE) {
-      return file
-    }
-
-    const scale = Math.min(1, IMAGE_COMPRESS_MAX_EDGE / Math.max(1, longestEdge))
-    const width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale))
-    const height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale))
-    const canvas = document.createElement('canvas')
-    canvas.width = width
-    canvas.height = height
-    const context = canvas.getContext('2d')
-    if (!context) return file
-    context.drawImage(image, 0, 0, width, height)
-
-    const blob = await canvasToBlob(canvas, 'image/webp', IMAGE_COMPRESS_QUALITY)
-    if (!blob || blob.size >= file.size) return file
-
-    const baseName = String(file.name || 'upload').replace(/\.[^.]+$/, '')
-    return new File([blob], `${baseName}.webp`, { type: 'image/webp', lastModified: Date.now() })
-  } catch {
-    return file
-  }
-}
-
-async function prepareUploadFiles(files) {
-  return Promise.all((files || []).map((file) => compressImageFile(file)))
-}
-
 function normalizeOrderItem(item = {}) {
   return {
     productId: Number(item.productId || 0),
@@ -280,8 +214,7 @@ export const useAdminStore = defineStore('admin-data', {
     async uploadFiles(files) {
       const auth = useAdminAuthStore()
       const formData = new FormData()
-      const preparedFiles = await prepareUploadFiles(files)
-      for (const file of preparedFiles) {
+      for (const file of files || []) {
         if (file) formData.append('files', file)
       }
       const data = await request('/api/admin/uploads', {
