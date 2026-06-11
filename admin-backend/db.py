@@ -447,7 +447,12 @@ def _product_code_family_prefix(product_code: str) -> str:
     return ""
 
 
-def _list_color_options(color_group: str, product_code: str = "") -> list[dict[str, Any]]:
+def _list_color_options(
+    color_group: str,
+    product_code: str = "",
+    category_key: str = "",
+    names: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     if color_group:
         rows = _fetch_all(
@@ -479,13 +484,46 @@ def _list_color_options(color_group: str, product_code: str = "") -> list[dict[s
         if len(fallback_rows) > len(rows):
             rows = fallback_rows
 
+    # Some products use plain codes such as ZM4757 for each color, so there is no
+    # reliable code prefix to recover from. For those, use the product title
+    # inside the same category as the grouping fallback. Different color variants
+    # are created with the same title and category but different color_name/images.
+    name_values = list(
+        dict.fromkeys(
+            str(value or "").strip()
+            for value in (names or {}).values()
+            if str(value or "").strip()
+        )
+    )
+    if category_key and name_values and len(rows) <= 1:
+        title_rows = _fetch_all(
+            """
+            SELECT DISTINCT p.id, p.slug, p.product_code, p.color_name, p.color_hex, p.main_image_url, p.stock
+            FROM products p
+            JOIN product_categories pc ON pc.id = p.category_id
+            JOIN product_translations pt ON pt.product_id = p.id
+            WHERE p.is_active = TRUE
+              AND pc.category_key = %s
+              AND pt.name = ANY(%s)
+            ORDER BY p.id
+            """,
+            (category_key, name_values),
+        )
+        if len(title_rows) > len(rows):
+            rows = title_rows
+
     return _format_color_options(rows)
 
 
 def _attach_color_options(product: dict[str, Any] | None) -> dict[str, Any] | None:
     if not product:
         return None
-    product["colorOptions"] = _list_color_options(product.get("colorGroup", ""), product.get("productCode", ""))
+    product["colorOptions"] = _list_color_options(
+        product.get("colorGroup", ""),
+        product.get("productCode", ""),
+        product.get("categoryKey", ""),
+        product.get("name") or {},
+    )
     return product
 
 
