@@ -800,13 +800,26 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
     return output
 
 
-def reset_invoice_summary_merges(worksheet: Any, shipping_row: int, total_row: int, deposit_row: int, balance_row: int) -> None:
-    # Only touch the four dynamic summary rows. Do not unmerge or rebuild the
-    # rest of the template; the latest template's layout must stay intact.
-    target_rows = {shipping_row, total_row, deposit_row, balance_row}
+def reset_invoice_summary_merges(
+    worksheet: Any,
+    item_start_row: int,
+    balance_row: int,
+    shipping_row: int,
+    total_row: int,
+    deposit_row: int,
+) -> None:
+    # openpyxl does not reliably move every merged range when rows are inserted.
+    # The PI template only needs merges in the summary/deposit rows below the
+    # item table, so clear stale merges from the dynamic A:J block first. This
+    # prevents old Shipping/Total merges from landing inside the red-box size
+    # rows and swallowing C:G/H formulas. Header merges (rows 11-12) and the
+    # remarks/bank/signature area are left untouched.
     for merged_range in list(worksheet.merged_cells.ranges):
-        if merged_range.min_row in target_rows:
+        overlaps_dynamic_rows = not (merged_range.max_row < item_start_row or merged_range.min_row > balance_row)
+        overlaps_table_columns = not (merged_range.max_col < 1 or merged_range.min_col > 10)
+        if overlaps_dynamic_rows and overlaps_table_columns:
             worksheet.unmerge_cells(str(merged_range))
+
     for row in (shipping_row, total_row):
         worksheet.merge_cells(start_row=row, start_column=3, end_row=row, end_column=9)
     for row in (deposit_row, balance_row):
@@ -848,7 +861,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     balance_row = 21 + extra_rows
     last_item_row = product_total_row - 1
 
-    reset_invoice_summary_merges(worksheet, shipping_row, total_row, deposit_row, balance_row)
+    reset_invoice_summary_merges(worksheet, item_start_row, balance_row, shipping_row, total_row, deposit_row)
 
     # Header/customer fields: keep all original template formatting.
     worksheet["B5"] = str(order.get("orderNo") or "")
@@ -882,8 +895,6 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
         for column, quantity in (item.get("sizes") or {}).items():
             worksheet[f"{column}{row}"] = quantity
-        if not item.get("sizes") and int(item.get("quantity") or 0):
-            worksheet[f"H{row}"] = int(item.get("quantity") or 0)
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         if image_bytes:
@@ -893,11 +904,11 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
     # Summary and formulas. These are the only formula positions that move when
     # more than three item rows are inserted.
-    worksheet[f"B{product_total_row}"] = "Product\nTotal"
+    worksheet[f"B{product_total_row}"] = "Product Total"
     worksheet[f"H{product_total_row}"] = f"=SUM(H{item_start_row}:H{last_item_row})"
     worksheet[f"J{product_total_row}"] = f"=SUM(J{item_start_row}:J{last_item_row})"
 
-    worksheet[f"B{shipping_row}"] = "Shipping\nCost"
+    worksheet[f"B{shipping_row}"] = "Shipping Cost"
     worksheet[f"C{shipping_row}"] = "(DDP) Air freight: Delivery time is approximately 10-16 days."
     worksheet[f"J{shipping_row}"] = shipping_fee
 
