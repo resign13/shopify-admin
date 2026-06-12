@@ -752,6 +752,8 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
 
 
 def reset_invoice_summary_merges(worksheet: Any, shipping_row: int, total_row: int, deposit_row: int, balance_row: int) -> None:
+    # Only touch the four dynamic summary rows. Do not unmerge or rebuild the
+    # rest of the template; the latest template's layout must stay intact.
     target_rows = {shipping_row, total_row, deposit_row, balance_row}
     for merged_range in list(worksheet.merged_cells.ranges):
         if merged_range.min_row in target_rows:
@@ -790,14 +792,16 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         for offset in range(extra_rows):
             copy_row_style(worksheet, template_last_item_row, insert_at + offset, max_col=10)
 
-    product_total_row = item_start_row + required_item_rows
-    shipping_row = product_total_row + 1
-    total_row = product_total_row + 2
-    deposit_row = product_total_row + 4
-    balance_row = product_total_row + 5
+    product_total_row = 16 + extra_rows
+    shipping_row = 17 + extra_rows
+    total_row = 18 + extra_rows
+    deposit_row = 20 + extra_rows
+    balance_row = 21 + extra_rows
+    last_item_row = product_total_row - 1
 
     reset_invoice_summary_merges(worksheet, shipping_row, total_row, deposit_row, balance_row)
 
+    # Header/customer fields: keep all original template formatting.
     worksheet["B5"] = str(order.get("orderNo") or "")
     worksheet["I5"] = datetime.now().strftime("%Y.%m.%d")
     worksheet["B6"] = build_invoice_party_name(order)
@@ -808,34 +812,18 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet.row_dimensions[9].height = estimate_text_row_height(
         worksheet["B9"].value,
         line_width=72,
-        min_height=34,
+        min_height=float(worksheet.row_dimensions[9].height or 34),
         line_height=18,
         max_height=72,
     )
 
-    set_fixed_column_widths(
-        worksheet,
-        {
-            "A": 19.2,
-            "B": 12.9,
-            "C": 7.6,
-            "D": 13,
-            "E": 13,
-            "F": 13,
-            "G": 13,
-            "H": 13.8,
-            "I": 15.7,
-            "J": 21.1,
-        },
-    )
-
-    # Clear template item rows while preserving the new template styles.
+    # Clear only the data part of the item rows. Do not change column widths or
+    # the red-box Spec.(Size) layout from the template.
     for row in range(item_start_row, product_total_row):
-        worksheet.row_dimensions[row].height = 50
+        worksheet.row_dimensions[row].height = float(worksheet.row_dimensions[row].height or 50)
         for column in range(1, 11):
             worksheet.cell(row, column).value = None
 
-    template_style_row = template_last_item_row
     for index, item in enumerate(invoice_items):
         row = item_start_row + index
         worksheet[f"A{row}"] = item.get("description") or "--"
@@ -843,31 +831,24 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         worksheet[f"I{row}"] = float(item.get("unitPrice") or 0)
         worksheet[f"J{row}"] = f"=H{row}*I{row}"
 
-        for column in range(1, 11):
-            cell = worksheet.cell(row, column)
-            cell.alignment = copy(worksheet.cell(template_style_row, column).alignment)
-            cell.font = copy(worksheet.cell(template_style_row, column).font)
-            cell.border = copy(worksheet.cell(template_style_row, column).border)
-            cell.number_format = worksheet.cell(template_style_row, column).number_format
-
         for column, quantity in (item.get("sizes") or {}).items():
             worksheet[f"{column}{row}"] = quantity
-
-        # If the size is outside the new template columns, keep the total amount correct.
         if not item.get("sizes") and int(item.get("quantity") or 0):
             worksheet[f"H{row}"] = int(item.get("quantity") or 0)
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         if image_bytes:
-            excel_image = build_excel_image(image_bytes, width=62, height=48)
+            excel_image = build_excel_image(image_bytes, width=48, height=38)
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
 
-    worksheet[f"B{product_total_row}"] = "Product Total"
-    worksheet[f"H{product_total_row}"] = f"=SUM(H{item_start_row}:H{product_total_row - 1})"
-    worksheet[f"J{product_total_row}"] = f"=SUM(J{item_start_row}:J{product_total_row - 1})"
+    # Summary and formulas. These are the only formula positions that move when
+    # more than three item rows are inserted.
+    worksheet[f"B{product_total_row}"] = "Product\nTotal"
+    worksheet[f"H{product_total_row}"] = f"=SUM(H{item_start_row}:H{last_item_row})"
+    worksheet[f"J{product_total_row}"] = f"=SUM(J{item_start_row}:J{last_item_row})"
 
-    worksheet[f"B{shipping_row}"] = "Shipping Cost"
+    worksheet[f"B{shipping_row}"] = "Shipping\nCost"
     worksheet[f"C{shipping_row}"] = "(DDP) Air freight: Delivery time is approximately 10-16 days."
     worksheet[f"J{shipping_row}"] = shipping_fee
 
@@ -879,44 +860,28 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet[f"A{balance_row}"] = "50% BALANCE:"
     worksheet[f"C{balance_row}"] = f"=J{total_row}*0.5"
 
-    for row in (product_total_row, shipping_row, total_row):
-        worksheet.row_dimensions[row].height = 30
-        for column in range(1, 11):
-            worksheet.cell(row, column).alignment = copy(worksheet.cell(template_style_row + 1, column).alignment)
-            worksheet.cell(row, column).border = copy(worksheet.cell(template_style_row + 1, column).border)
-    for row in (deposit_row, balance_row):
-        worksheet.row_dimensions[row].height = 20.1
-        worksheet[f"A{row}"].font = Font(bold=True)
-        worksheet[f"C{row}"].font = Font(bold=True)
-
+    # Leave the template REMARKS, bank information and signature area untouched.
+    # Only append order-specific notes/attachments after the template if present.
     attachment_images, attachment_files = split_order_attachments(order)
     note_text = str(order.get("note") or "").strip()
-
-    # Keep the standard REMARKS and bank information from the template intact.
-    # Put order-specific notes and uploaded attachments below the signature area.
-    seller_row = max(balance_row + 11, 32 + extra_rows)
-    order_note_row = seller_row + 3
-    if note_text or attachment_files:
-        worksheet[f"A{order_note_row}"] = "ORDER NOTE / ATTACHMENTS:"
-        worksheet[f"A{order_note_row}"].font = Font(bold=True)
-        worksheet[f"A{order_note_row + 1}"] = "\n".join(
+    if note_text or attachment_files or attachment_images:
+        append_row = 72 + extra_rows
+        worksheet[f"A{append_row}"] = "ORDER NOTE / ATTACHMENTS:"
+        worksheet[f"A{append_row}"].font = Font(bold=True)
+        worksheet[f"A{append_row + 1}"] = "\n".join(
             [part for part in [f"Note: {note_text}" if note_text else "", "Attachments: " + ", ".join(attachment_files) if attachment_files else ""] if part]
         )
-        worksheet[f"A{order_note_row + 1}"].alignment = Alignment(wrap_text=True, vertical="top")
-        worksheet.row_dimensions[order_note_row + 1].height = estimate_text_row_height(
-            worksheet[f"A{order_note_row + 1}"].value,
+        worksheet[f"A{append_row + 1}"].alignment = Alignment(wrap_text=True, vertical="top")
+        worksheet.row_dimensions[append_row + 1].height = estimate_text_row_height(
+            worksheet[f"A{append_row + 1}"].value,
             line_width=100,
             min_height=26,
             line_height=18,
             max_height=80,
         )
 
-    if attachment_images:
-        image_label_row = order_note_row + 3
-        worksheet[f"A{image_label_row}"] = "Attachment Images"
-        worksheet[f"A{image_label_row}"].font = Font(bold=True)
-        attachment_anchor_rows = [image_label_row + 1, image_label_row + 7]
         attachment_anchor_columns = ["A", "C", "E"]
+        attachment_anchor_rows = [append_row + 3, append_row + 9]
         for anchor_row in attachment_anchor_rows:
             worksheet.row_dimensions[anchor_row].height = 102
         for image_index, attachment_url in enumerate(attachment_images[:6]):
@@ -932,11 +897,6 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
                 worksheet.add_image(attachment_image, f"{column}{row}")
             except Exception:
                 continue
-
-    worksheet[f"B{seller_row}"] = "QUANZHOU CHENSHENG Trading Co., Ltd."
-    worksheet[f"I{seller_row}"] = build_invoice_party_name(order)
-    worksheet[f"B{seller_row + 1}"] = "SELLER"
-    worksheet[f"I{seller_row + 1}"] = "BUYER"
 
     output = BytesIO()
     workbook.save(output)
