@@ -549,6 +549,29 @@ def copy_row_style(worksheet: Any, source_row: int, target_row: int, max_col: in
         target.protection = copy(source.protection)
 
 
+def shift_invoice_template_merges_after_insert(worksheet: Any, insert_at: int, amount: int, *, static_start_row: int) -> None:
+    if amount <= 0:
+        return
+    ranges_to_shift = []
+    for merged_range in list(worksheet.merged_cells.ranges):
+        if merged_range.min_row >= static_start_row:
+            ranges_to_shift.append(
+                (
+                    str(merged_range),
+                    merged_range.min_row + amount,
+                    merged_range.min_col,
+                    merged_range.max_row + amount,
+                    merged_range.max_col,
+                )
+            )
+
+    for original_range, *_ in ranges_to_shift:
+        worksheet.unmerge_cells(original_range)
+
+    for _, min_row, min_col, max_row, max_col in ranges_to_shift:
+        worksheet.merge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
+
+
 def normalize_order_shipping_fee(value: Any) -> float:
     try:
         return float(value or 0)
@@ -616,8 +639,23 @@ def normalize_invoice_size_code(value: Any) -> str:
 
 
 def invoice_size_column(size_code: Any) -> str:
-    normalized = normalize_invoice_size_code(size_code)
-    return INVOICE_SIZE_COLUMNS.get(normalized, "")
+    raw_text = str(size_code or "").strip().upper().replace(" ", "")
+    if not raw_text:
+        return ""
+
+    # Order items may store either the pure size (S / 28 / 2XL) or the display
+    # label used by the template (28/S, S/28, 36/2XL, etc.). The PI template
+    # already lists the size labels in C:G; item rows should only fill the
+    # quantity under the matching label, never write the size text itself.
+    candidates = [raw_text]
+    candidates.extend(part for part in re.split(r"[^A-Z0-9]+", raw_text) if part)
+
+    for candidate in candidates:
+        normalized = normalize_invoice_size_code(candidate)
+        column = INVOICE_SIZE_COLUMNS.get(normalized)
+        if column:
+            return column
+    return ""
 
 
 def build_invoice_line_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -851,6 +889,10 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     if extra_rows > 0:
         insert_at = template_last_item_row + 1
         worksheet.insert_rows(insert_at, extra_rows)
+        # openpyxl shifts cell values/styles but not all merged ranges reliably.
+        # Keep the fixed template area (remarks, bank info and signatures) aligned
+        # with the rows that were moved down by the inserted item rows.
+        shift_invoice_template_merges_after_insert(worksheet, insert_at, extra_rows, static_start_row=23)
         for offset in range(extra_rows):
             copy_row_style(worksheet, template_last_item_row, insert_at + offset, max_col=10)
 
