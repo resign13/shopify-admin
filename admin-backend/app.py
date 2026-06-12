@@ -186,18 +186,36 @@ def _parse_dashboard_datetime(value: str) -> datetime | None:
         return None
 
 
+def _dashboard_style_base_code(value: str) -> str:
+    code = str(value or '').strip()
+    if not code:
+        return ''
+    code = re.sub(r'\s+', '', code)
+    for separator in ('-', '－', '_'):
+        if separator in code:
+            prefix = code.split(separator, 1)[0].strip()
+            if prefix:
+                return prefix
+    match = re.match(r'^([A-Za-z]+\d+)', code)
+    if match:
+        return match.group(1)
+    return code
+
+
 def _dashboard_style_value(item: dict[str, Any]) -> str:
-    sku = str(item.get('sku') or '').strip()
-    name = str(item.get('productName') or '').strip()
-    return sku or name
+    raw = (
+        item.get('colorGroup')
+        or item.get('familyCode')
+        or item.get('productCode')
+        or item.get('sku')
+        or item.get('productName')
+        or ''
+    )
+    return _dashboard_style_base_code(str(raw))
 
 
 def _dashboard_style_label(item: dict[str, Any]) -> str:
-    sku = str(item.get('sku') or '').strip()
-    name = str(item.get('productName') or '').strip()
-    if sku and name and sku.lower() != name.lower():
-        return f'{sku} | {name}'
-    return sku or name
+    return _dashboard_style_value(item)
 
 
 def build_dashboard_order_filters(orders: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
@@ -237,6 +255,37 @@ def filter_dashboard_orders(orders: list[dict[str, Any]], *, style: str = 'all',
             continue
         filtered.append(order)
     return filtered
+
+
+def build_dashboard_style_summary(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summary: dict[str, dict[str, Any]] = {}
+    for order in orders:
+        order_styles: set[str] = set()
+        for item in order.get('items') or []:
+            style_code = _dashboard_style_value(item)
+            if not style_code:
+                continue
+            entry = summary.setdefault(
+                style_code,
+                {
+                    'style': style_code,
+                    'label': style_code,
+                    'quantity': 0,
+                    'orderCount': 0,
+                    'totalAmount': 0.0,
+                },
+            )
+            quantity = int(item.get('quantity') or 0)
+            entry['quantity'] += quantity
+            entry['totalAmount'] += float(item.get('totalPrice') or 0)
+            order_styles.add(style_code)
+        for style_code in order_styles:
+            summary[style_code]['orderCount'] += 1
+    rows = list(summary.values())
+    rows.sort(key=lambda item: (-int(item['quantity']), str(item['style']).lower()))
+    for row in rows:
+        row['totalAmount'] = round(float(row.get('totalAmount') or 0), 2)
+    return rows
 
 
 def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', date_to: str = '') -> dict[str, Any]:
@@ -1551,6 +1600,7 @@ def dashboard() -> Any:
                 'dateTo': str(date_to or ''),
             },
             "trend": build_dashboard_trend(filtered_orders, date_from=date_from, date_to=date_to),
+            "styleSummary": build_dashboard_style_summary(filtered_orders),
             "recentOrders": filtered_orders[:5],
         }
     )
