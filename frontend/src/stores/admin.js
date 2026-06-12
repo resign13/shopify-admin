@@ -221,6 +221,7 @@ export const useAdminStore = defineStore('admin-data', {
         method: 'POST',
         headers: authHeaders(auth.token),
         body: formData,
+        skipGlobalLoading: true,
       })
       return data.urls || []
     },

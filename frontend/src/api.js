@@ -24,10 +24,12 @@ import { beginRequestLoading, endRequestLoading } from './loading'
 
 export async function request(path, options = {}) {
   const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
-  beginRequestLoading()
+  const skipGlobalLoading = Boolean(options.skipGlobalLoading)
+  const { skipGlobalLoading: _skipGlobalLoading, ...fetchOptions } = options
+  if (!skipGlobalLoading) beginRequestLoading()
   try {
     const response = await fetch(`${API_BASE}${path}`, {
-      ...options,
+      ...fetchOptions,
       headers: {
         ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
         ...(options.headers || {}),
@@ -39,6 +41,6 @@ export async function request(path, options = {}) {
     }
     return data
   } finally {
-    endRequestLoading()
+    if (!skipGlobalLoading) endRequestLoading()
   }
 }
