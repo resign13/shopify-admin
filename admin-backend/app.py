@@ -9,7 +9,7 @@ import sys
 import mimetypes
 from base64 import b64encode
 from io import BytesIO
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -164,6 +164,136 @@ def filter_orders(
         if status_match and time_match and category_match and keyword_match:
             items.append(order)
     return items
+
+
+def _parse_dashboard_date(value: str) -> datetime.date | None:
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, '%Y-%m-%d').date()
+    except ValueError:
+        return None
+
+
+def _parse_dashboard_datetime(value: str) -> datetime | None:
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def _dashboard_style_value(item: dict[str, Any]) -> str:
+    sku = str(item.get('sku') or '').strip()
+    name = str(item.get('productName') or '').strip()
+    return sku or name
+
+
+def _dashboard_style_label(item: dict[str, Any]) -> str:
+    sku = str(item.get('sku') or '').strip()
+    name = str(item.get('productName') or '').strip()
+    if sku and name and sku.lower() != name.lower():
+        return f'{sku} | {name}'
+    return sku or name
+
+
+def build_dashboard_order_filters(orders: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
+    style_map: dict[str, str] = {}
+    countries: set[str] = set()
+    for order in orders:
+        country = str(order.get('country') or '').strip()
+        if country:
+            countries.add(country)
+        for item in order.get('items') or []:
+            value = _dashboard_style_value(item)
+            label = _dashboard_style_label(item)
+            if value and value not in style_map:
+                style_map[value] = label
+    return {
+        'styles': [{'value': key, 'label': style_map[key]} for key in sorted(style_map, key=str.lower)],
+        'countries': [{'value': key, 'label': key} for key in sorted(countries, key=str.lower)],
+    }
+
+
+def filter_dashboard_orders(orders: list[dict[str, Any]], *, style: str = 'all', country: str = 'all', date_from: str = '', date_to: str = '') -> list[dict[str, Any]]:
+    style_value = str(style or 'all').strip()
+    country_value = str(country or 'all').strip()
+    start_date = _parse_dashboard_date(date_from)
+    end_date = _parse_dashboard_date(date_to)
+    filtered: list[dict[str, Any]] = []
+    for order in orders:
+        created_at = _parse_dashboard_datetime(str(order.get('createdAt') or ''))
+        created_date = created_at.date() if created_at else None
+        if start_date and created_date and created_date < start_date:
+            continue
+        if end_date and created_date and created_date > end_date:
+            continue
+        if country_value != 'all' and str(order.get('country') or '').strip() != country_value:
+            continue
+        if style_value != 'all' and not any(_dashboard_style_value(item) == style_value for item in (order.get('items') or [])):
+            continue
+        filtered.append(order)
+    return filtered
+
+
+def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', date_to: str = '') -> dict[str, Any]:
+    today = datetime.now(UTC).date()
+    start_date = _parse_dashboard_date(date_from)
+    end_date = _parse_dashboard_date(date_to)
+    parsed_dates = [
+        value.date()
+        for value in (_parse_dashboard_datetime(str(order.get('createdAt') or '')) for order in orders)
+        if value is not None
+    ]
+    if not end_date:
+        end_date = max(parsed_dates) if parsed_dates else today
+    if not start_date:
+        start_date = min(parsed_dates) if parsed_dates else end_date - timedelta(days=29)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+
+    buckets: dict[str, dict[str, Any]] = {}
+    cursor = start_date
+    while cursor <= end_date:
+        key = cursor.isoformat()
+        buckets[key] = {'date': key, 'orderCount': 0, 'itemCount': 0, 'totalAmount': 0.0}
+        cursor += timedelta(days=1)
+
+    total_orders = 0
+    total_items = 0
+    total_amount = 0.0
+    for order in orders:
+        created_at = _parse_dashboard_datetime(str(order.get('createdAt') or ''))
+        if not created_at:
+            continue
+        key = created_at.date().isoformat()
+        if key not in buckets:
+            continue
+        item_count = int(order.get('itemCount') or 0)
+        amount = float(order.get('totalAmount') or 0)
+        buckets[key]['orderCount'] += 1
+        buckets[key]['itemCount'] += item_count
+        buckets[key]['totalAmount'] += amount
+        total_orders += 1
+        total_items += item_count
+        total_amount += amount
+
+    points = list(buckets.values())
+    max_order_count = max((int(point['orderCount']) for point in points), default=0)
+    return {
+        'points': points,
+        'summary': {
+            'orderCount': total_orders,
+            'itemCount': total_items,
+            'totalAmount': round(total_amount, 2),
+            'dateFrom': start_date.isoformat(),
+            'dateTo': end_date.isoformat(),
+            'maxOrderCount': max_order_count,
+        },
+    }
 
 
 def fetch_image_bytes(url: str) -> bytes | None:
@@ -1318,16 +1448,36 @@ def dashboard() -> Any:
     hero_count = len(
         [item for item in get_homepage_config().get("heroBanners", {}).values() if str(item or "").strip()]
     )
+    style = request.args.get('style', 'all')
+    country = request.args.get('country', 'all')
+    date_from = request.args.get('dateFrom', '')
+    date_to = request.args.get('dateTo', '')
+    all_orders = list_orders()
+    filtered_orders = filter_dashboard_orders(
+        all_orders,
+        style=style,
+        country=country,
+        date_from=date_from,
+        date_to=date_to,
+    )
     return jsonify(
         {
             "stats": [
-                {"label": "商品总数", "value": count_products()},
-                {"label": "首页海报位", "value": hero_count},
-                {"label": "商城账号", "value": count_store_users()},
-                {"label": "后台账号", "value": count_admin_users()},
-                {"label": "订单总数", "value": count_orders()},
+                {"label": "Products", "value": count_products()},
+                {"label": "Hero banners", "value": hero_count},
+                {"label": "Store accounts", "value": count_store_users()},
+                {"label": "Admin accounts", "value": count_admin_users()},
+                {"label": "Orders", "value": count_orders()},
             ],
-            "recentOrders": list_orders(limit=5),
+            "filters": build_dashboard_order_filters(all_orders),
+            "appliedFilters": {
+                'style': str(style or 'all'),
+                'country': str(country or 'all'),
+                'dateFrom': str(date_from or ''),
+                'dateTo': str(date_to or ''),
+            },
+            "trend": build_dashboard_trend(filtered_orders, date_from=date_from, date_to=date_to),
+            "recentOrders": filtered_orders[:5],
         }
     )
 

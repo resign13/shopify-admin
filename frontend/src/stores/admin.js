@@ -154,9 +154,16 @@ export const useAdminStore = defineStore('admin-data', {
     error: '',
   }),
   actions: {
-    async loadDashboard() {
+    async loadDashboard(filters = {}) {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/dashboard', { headers: authHeaders(auth.token) })
+      const params = new URLSearchParams()
+      Object.entries(filters || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '' && value !== 'all') {
+          params.set(key, String(value))
+        }
+      })
+      const query = params.toString() ? `?${params.toString()}` : ''
+      const data = await request(`/api/admin/dashboard${query}`, { headers: authHeaders(auth.token) })
       this.dashboard = data
     },
     async loadProducts() {
