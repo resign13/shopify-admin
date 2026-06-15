@@ -288,6 +288,42 @@ def build_dashboard_style_summary(orders: list[dict[str, Any]]) -> list[dict[str
     return rows
 
 
+def _dashboard_trend_granularity(start_date: Any, end_date: Any) -> str:
+    day_span = max(1, (end_date - start_date).days + 1)
+    if day_span <= 120:
+        return 'day'
+    if day_span <= 730:
+        return 'week'
+    return 'month'
+
+
+def _dashboard_bucket_start(value: Any, granularity: str) -> Any:
+    if granularity == 'month':
+        return value.replace(day=1)
+    if granularity == 'week':
+        return value - timedelta(days=value.weekday())
+    return value
+
+
+def _dashboard_next_bucket(value: Any, granularity: str) -> Any:
+    if granularity == 'month':
+        year = value.year + (1 if value.month == 12 else 0)
+        month = 1 if value.month == 12 else value.month + 1
+        return value.replace(year=year, month=month, day=1)
+    if granularity == 'week':
+        return value + timedelta(days=7)
+    return value + timedelta(days=1)
+
+
+def _dashboard_bucket_label(value: Any, granularity: str) -> str:
+    if granularity == 'month':
+        return value.strftime('%Y-%m')
+    if granularity == 'week':
+        week_end = value + timedelta(days=6)
+        return f"{value.strftime('%Y-%m-%d')}~{week_end.strftime('%m-%d')}"
+    return value.isoformat()
+
+
 def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', date_to: str = '') -> dict[str, Any]:
     today = datetime.now(UTC).date()
     start_date = _parse_dashboard_date(date_from)
@@ -304,12 +340,19 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
     if start_date > end_date:
         start_date, end_date = end_date, start_date
 
+    granularity = _dashboard_trend_granularity(start_date, end_date)
     buckets: dict[str, dict[str, Any]] = {}
-    cursor = start_date
+    cursor = _dashboard_bucket_start(start_date, granularity)
     while cursor <= end_date:
         key = cursor.isoformat()
-        buckets[key] = {'date': key, 'orderCount': 0, 'itemCount': 0, 'totalAmount': 0.0}
-        cursor += timedelta(days=1)
+        buckets[key] = {
+            'date': _dashboard_bucket_label(cursor, granularity),
+            'bucketStart': key,
+            'orderCount': 0,
+            'itemCount': 0,
+            'totalAmount': 0.0,
+        }
+        cursor = _dashboard_next_bucket(cursor, granularity)
 
     total_orders = 0
     total_items = 0
@@ -318,7 +361,8 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
         created_at = _parse_dashboard_datetime(str(order.get('createdAt') or ''))
         if not created_at:
             continue
-        key = created_at.date().isoformat()
+        bucket_start = _dashboard_bucket_start(created_at.date(), granularity)
+        key = bucket_start.isoformat()
         if key not in buckets:
             continue
         item_count = int(order.get('itemCount') or 0)
@@ -331,9 +375,12 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
         total_amount += amount
 
     points = list(buckets.values())
+    for point in points:
+        point['totalAmount'] = round(float(point.get('totalAmount') or 0), 2)
     max_order_count = max((int(point['orderCount']) for point in points), default=0)
     return {
         'points': points,
+        'granularity': granularity,
         'summary': {
             'orderCount': total_orders,
             'itemCount': total_items,

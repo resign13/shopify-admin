@@ -119,7 +119,7 @@
 
         <div v-if="trendPoints.length" class="echarts-wrap">
           <div ref="trendChartEl" class="trend-echart" aria-label="每日订单趋势交互图表"></div>
-          <p class="chart-tip">支持鼠标悬浮查看明细，拖动底部滑块缩放时间范围，右上角可还原或保存图片。</p>
+          <p class="chart-tip">支持鼠标悬浮查看明细，拖动底部滑块缩放时间范围。</p>
         </div>
         <div v-else class="empty-state">当前筛选条件下暂无订单数据。</div>
       </section>
@@ -165,10 +165,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
 import { LineChart } from 'echarts/charts'
-import { DataZoomComponent, GridComponent, LegendComponent, MarkPointComponent, ToolboxComponent, TooltipComponent } from 'echarts/components'
+import { DataZoomComponent, GridComponent, LegendComponent, MarkPointComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
-echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, ToolboxComponent, DataZoomComponent, MarkPointComponent, CanvasRenderer])
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkPointComponent, CanvasRenderer])
 
 import AdminLayout from '../components/AdminLayout.vue'
 import { useAdminStore } from '../stores/admin'
@@ -287,6 +287,7 @@ async function renderTrendChart() {
     itemCount: Number(point.itemCount || 0),
     totalAmount: Number(point.totalAmount || 0),
   }))
+  const pointCount = points.length
 
   trendChart.setOption({
     color: ['#b36e48'],
@@ -317,23 +318,12 @@ async function renderTrendChart() {
     },
     legend: {
       top: 0,
-      right: 84,
+      right: 8,
       icon: 'roundRect',
       itemWidth: 24,
       itemHeight: 4,
       textStyle: { color: '#6d5648' },
       data: ['订单数'],
-    },
-    toolbox: {
-      right: 0,
-      top: 0,
-      itemSize: 16,
-      itemGap: 12,
-      feature: {
-        dataZoom: { yAxisIndex: 'none', title: { zoom: '区域缩放', back: '缩放还原' } },
-        restore: { title: '还原' },
-        saveAsImage: { title: '保存图片', pixelRatio: 2, backgroundColor: '#ffffff' },
-      },
     },
     grid: { left: 42, right: 30, top: 54, bottom: 76, containLabel: true },
     xAxis: {
@@ -370,9 +360,11 @@ async function renderTrendChart() {
         type: 'line',
         smooth: true,
         symbol: 'circle',
-        symbolSize: 8,
-        showSymbol: true,
-        lineStyle: { width: 4, color: '#b36e48', shadowBlur: 8, shadowColor: 'rgba(179, 110, 72, 0.24)' },
+        symbolSize: pointCount <= 120 ? 8 : 5,
+        showSymbol: pointCount <= 90,
+        sampling: pointCount > 240 ? 'lttb' : undefined,
+        large: pointCount > 500,
+        lineStyle: { width: pointCount > 240 ? 3 : 4, color: '#b36e48', shadowBlur: 8, shadowColor: 'rgba(179, 110, 72, 0.24)' },
         itemStyle: { color: '#b36e48', borderColor: '#ffffff', borderWidth: 2 },
         areaStyle: {
           color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
@@ -380,7 +372,7 @@ async function renderTrendChart() {
             { offset: 1, color: 'rgba(179, 110, 72, 0.03)' },
           ]),
         },
-        markPoint: {
+        markPoint: pointCount <= 240 ? {
           symbolSize: 54,
           label: { color: '#fff', fontWeight: 700 },
           itemStyle: { color: '#b36e48' },
@@ -388,7 +380,7 @@ async function renderTrendChart() {
             { type: 'max', name: '峰值' },
             { type: 'min', name: '低点' },
           ],
-        },
+        } : undefined,
         emphasis: { focus: 'series' },
         data: points,
       },
@@ -487,11 +479,10 @@ async function resetFilters() {
 }
 
 watch(
-  trendPoints,
+  () => trendPoints.value,
   () => {
     renderTrendChart()
-  },
-  { deep: true }
+  }
 )
 
 onMounted(() => {
