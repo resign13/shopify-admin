@@ -117,20 +117,9 @@
           <div class="chart-legend"><span></span>订单数</div>
         </div>
 
-        <div v-if="trendPoints.length" class="line-chart-wrap">
-          <svg viewBox="0 0 920 320" class="line-chart" preserveAspectRatio="none" role="img" aria-label="每日订单趋势图">
-            <line v-for="guide in chartGuides" :key="guide.y" x1="52" :y1="guide.y" x2="900" :y2="guide.y" class="chart-guide" />
-            <text v-for="guide in chartGuides" :key="`label-${guide.y}`" x="42" :y="guide.y + 5" text-anchor="end" class="axis-label">{{ guide.label }}</text>
-            <polyline :points="chartPolyline" class="chart-area-line" />
-            <circle v-for="point in chartPoints" :key="point.date" :cx="point.x" :cy="point.y" r="5" class="chart-dot">
-              <title>{{ point.date }}：{{ point.orderCount }} 单，{{ point.itemCount }} 件</title>
-            </circle>
-          </svg>
-          <div class="chart-x-labels">
-            <span>{{ trendPoints[0]?.date || '' }}</span>
-            <span>{{ trendPoints[Math.floor((trendPoints.length - 1) / 2)]?.date || '' }}</span>
-            <span>{{ trendPoints[trendPoints.length - 1]?.date || '' }}</span>
-          </div>
+        <div v-if="trendPoints.length" class="echarts-wrap">
+          <div ref="trendChartEl" class="trend-echart" aria-label="每日订单趋势交互图表"></div>
+          <p class="chart-tip">支持鼠标悬浮查看明细，拖动底部滑块缩放时间范围，右上角可还原或保存图片。</p>
         </div>
         <div v-else class="empty-state">当前筛选条件下暂无订单数据。</div>
       </section>
@@ -173,13 +162,21 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { DataZoomComponent, GridComponent, LegendComponent, MarkPointComponent, ToolboxComponent, TooltipComponent } from 'echarts/components'
+import { CanvasRenderer } from 'echarts/renderers'
+
+echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, ToolboxComponent, DataZoomComponent, MarkPointComponent, CanvasRenderer])
 
 import AdminLayout from '../components/AdminLayout.vue'
 import { useAdminStore } from '../stores/admin'
 
 const admin = useAdminStore()
 const loading = ref(false)
+const trendChartEl = ref(null)
+let trendChart = null
 const datePanelOpen = ref(false)
 const activePreset = ref('last30')
 const selectingStart = ref(true)
@@ -265,32 +262,143 @@ const trendMax = computed(() => Math.max(1, Number(trendSummary.value.maxOrderCo
 const styleMax = computed(() => Math.max(1, ...styleSummary.value.map((item) => Number(item.quantity || 0))))
 const dateRangeText = computed(() => `${filters.dateFrom || '开始'} 至 ${filters.dateTo || '结束'}`)
 
-const chartPoints = computed(() => {
-  const points = trendPoints.value
-  if (!points.length) return []
-  const width = 848
-  const height = 260
-  const left = 52
-  const top = 28
-  const xStep = points.length <= 1 ? 0 : width / (points.length - 1)
-  return points.map((point, index) => ({
-    ...point,
-    x: Number((left + index * xStep).toFixed(2)),
-    y: Number((top + height - (Number(point.orderCount || 0) / trendMax.value) * height).toFixed(2)),
-  }))
-})
+function disposeTrendChart() {
+  if (trendChart) {
+    trendChart.dispose()
+    trendChart = null
+  }
+}
 
-const chartPolyline = computed(() => chartPoints.value.map((point) => `${point.x},${point.y}`).join(' '))
-const chartGuides = computed(() => {
-  const top = 28
-  const middle = 158
-  const bottom = 288
-  return [
-    { y: top, label: trendMax.value },
-    { y: middle, label: Math.round(trendMax.value / 2) },
-    { y: bottom, label: 0 },
-  ]
-})
+async function renderTrendChart() {
+  await nextTick()
+  if (!trendPoints.value.length || !trendChartEl.value) {
+    disposeTrendChart()
+    return
+  }
+
+  if (!trendChart) {
+    trendChart = echarts.init(trendChartEl.value)
+  }
+
+  const points = trendPoints.value.map((point) => ({
+    date: point.date,
+    value: Number(point.orderCount || 0),
+    orderCount: Number(point.orderCount || 0),
+    itemCount: Number(point.itemCount || 0),
+    totalAmount: Number(point.totalAmount || 0),
+  }))
+
+  trendChart.setOption({
+    color: ['#b36e48'],
+    backgroundColor: 'transparent',
+    animationDuration: 650,
+    animationEasing: 'cubicOut',
+    tooltip: {
+      trigger: 'axis',
+      backgroundColor: 'rgba(255, 255, 255, 0.96)',
+      borderColor: 'rgba(110, 85, 61, 0.16)',
+      borderWidth: 1,
+      padding: [12, 14],
+      textStyle: { color: '#2e2118' },
+      extraCssText: 'box-shadow: 0 14px 34px rgba(90,68,51,0.16); border-radius: 12px;',
+      axisPointer: {
+        type: 'line',
+        lineStyle: { color: '#b36e48', width: 1, type: 'dashed' },
+      },
+      formatter(params) {
+        const data = params?.[0]?.data || {}
+        return [
+          `<strong>${data.date || ''}</strong>`,
+          `订单数：${data.orderCount || 0}`,
+          `商品件数：${data.itemCount || 0}`,
+          `订单金额：$${Number(data.totalAmount || 0).toFixed(2)}`,
+        ].join('<br/>')
+      },
+    },
+    legend: {
+      top: 0,
+      right: 84,
+      icon: 'roundRect',
+      itemWidth: 24,
+      itemHeight: 4,
+      textStyle: { color: '#6d5648' },
+      data: ['订单数'],
+    },
+    toolbox: {
+      right: 0,
+      top: 0,
+      itemSize: 16,
+      itemGap: 12,
+      feature: {
+        dataZoom: { yAxisIndex: 'none', title: { zoom: '区域缩放', back: '缩放还原' } },
+        restore: { title: '还原' },
+        saveAsImage: { title: '保存图片', pixelRatio: 2, backgroundColor: '#ffffff' },
+      },
+    },
+    grid: { left: 42, right: 30, top: 54, bottom: 76, containLabel: true },
+    xAxis: {
+      type: 'category',
+      boundaryGap: false,
+      data: points.map((point) => point.date),
+      axisLine: { lineStyle: { color: 'rgba(110, 85, 61, 0.18)' } },
+      axisTick: { show: false },
+      axisLabel: { color: '#7a6659', hideOverlap: true },
+      splitLine: { show: false },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      axisLabel: { color: '#7a6659' },
+      splitLine: { lineStyle: { color: 'rgba(110, 85, 61, 0.12)', type: 'dashed' } },
+    },
+    dataZoom: [
+      { type: 'inside', throttle: 50 },
+      {
+        type: 'slider',
+        height: 26,
+        bottom: 24,
+        borderColor: 'rgba(110, 85, 61, 0.12)',
+        fillerColor: 'rgba(179, 110, 72, 0.16)',
+        handleStyle: { color: '#b36e48' },
+        moveHandleStyle: { color: '#b36e48' },
+        textStyle: { color: '#7a6659' },
+      },
+    ],
+    series: [
+      {
+        name: '订单数',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 8,
+        showSymbol: true,
+        lineStyle: { width: 4, color: '#b36e48', shadowBlur: 8, shadowColor: 'rgba(179, 110, 72, 0.24)' },
+        itemStyle: { color: '#b36e48', borderColor: '#ffffff', borderWidth: 2 },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            { offset: 0, color: 'rgba(179, 110, 72, 0.28)' },
+            { offset: 1, color: 'rgba(179, 110, 72, 0.03)' },
+          ]),
+        },
+        markPoint: {
+          symbolSize: 54,
+          label: { color: '#fff', fontWeight: 700 },
+          itemStyle: { color: '#b36e48' },
+          data: [
+            { type: 'max', name: '峰值' },
+            { type: 'min', name: '低点' },
+          ],
+        },
+        emphasis: { focus: 'series' },
+        data: points,
+      },
+    ],
+  }, true)
+}
+
+function resizeTrendChart() {
+  trendChart?.resize()
+}
 
 const calendarMonths = computed(() => {
   const end = parseDate(draftDates.to) || new Date()
@@ -378,8 +486,22 @@ async function resetFilters() {
   await applyFilters()
 }
 
+watch(
+  trendPoints,
+  () => {
+    renderTrendChart()
+  },
+  { deep: true }
+)
+
 onMounted(() => {
+  window.addEventListener('resize', resizeTrendChart)
   applyFilters()
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', resizeTrendChart)
+  disposeTrendChart()
 })
 </script>
 
@@ -414,13 +536,9 @@ onMounted(() => {
 .chart-head h3 { margin: 0; }
 .chart-legend { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.9rem; }
 .chart-legend span { width: 28px; height: 4px; border-radius: 999px; background: #b36e48; }
-.line-chart-wrap { display: grid; gap: 8px; }
-.line-chart { width: 100%; height: 320px; background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(250,245,239,0.64)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
-.chart-guide { stroke: rgba(110, 85, 61, 0.16); stroke-dasharray: 5 7; }
-.axis-label { fill: #7a6659; font-size: 12px; }
-.chart-area-line { fill: none; stroke: #b36e48; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
-.chart-dot { fill: #b36e48; stroke: #fff; stroke-width: 2; }
-.chart-x-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 0.85rem; }
+.echarts-wrap { display: grid; gap: 8px; }
+.trend-echart { width: 100%; height: 380px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
+.chart-tip { margin: 0; color: var(--muted); font-size: 0.86rem; }
 .style-bars { display: grid; gap: 12px; }
 .style-bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 72px; gap: 12px; align-items: center; }
 .style-bar-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -429,3 +547,4 @@ onMounted(() => {
 .style-bar-value { color: var(--muted); text-align: right; font-weight: 700; }
 @media (max-width: 1080px) { .dashboard-toolbar, .metric-grid, .date-range-editors, .calendar-preview { grid-template-columns: 1fr; } .date-range-panel { left: 0; right: auto; grid-template-columns: 1fr; } .style-bar-row { grid-template-columns: 1fr; } .style-bar-value { text-align: left; } }
 </style>
+
