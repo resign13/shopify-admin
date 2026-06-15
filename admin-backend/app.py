@@ -1956,7 +1956,7 @@ def create_store_user_route() -> Any:
     user = create_store_user(
         {
             "name": str(payload["name"]).strip(),
-            "companyName": str(payload["companyName"]).strip(),
+            "companyName": str(payload.get("companyName", "")).strip(),
             "email": email,
             "passwordHash": generate_password_hash(str(payload["password"]).strip(), method=PASSWORD_HASH_METHOD),
             "status": str(payload.get("status", "active")).strip() or "active",
