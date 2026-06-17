@@ -580,6 +580,17 @@ def copy_row_style(worksheet: Any, source_row: int, target_row: int, max_col: in
         target.protection = copy(source.protection)
 
 
+def prepare_invoice_item_row(worksheet: Any, row: int, *, source_row: int, max_col: int = 10) -> None:
+    copy_row_style(worksheet, source_row, row, max_col=max_col)
+    worksheet.row_dimensions[row].height = 44
+    for column in range(1, max_col + 1):
+        cell = worksheet.cell(row, column)
+        cell.value = None
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    worksheet[f"A{row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    worksheet[f"B{row}"].alignment = Alignment(horizontal="center", vertical="center")
+
+
 def shift_invoice_template_merges_after_insert(worksheet: Any, insert_at: int, amount: int, *, static_start_row: int) -> None:
     if amount <= 0:
         return
@@ -913,8 +924,9 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
     item_start_row = 13
     template_item_rows = 3
+    reserved_item_rows = 8
     template_last_item_row = item_start_row + template_item_rows - 1
-    required_item_rows = max(len(invoice_items), template_item_rows)
+    required_item_rows = max(len(invoice_items), reserved_item_rows)
     extra_rows = required_item_rows - template_item_rows
 
     if extra_rows > 0:
@@ -925,7 +937,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         # with the rows that were moved down by the inserted item rows.
         shift_invoice_template_merges_after_insert(worksheet, insert_at, extra_rows, static_start_row=23)
         for offset in range(extra_rows):
-            copy_row_style(worksheet, template_last_item_row, insert_at + offset, max_col=10)
+            prepare_invoice_item_row(worksheet, insert_at + offset, source_row=template_last_item_row, max_col=10)
 
     product_total_row = 16 + extra_rows
     shipping_row = 17 + extra_rows
@@ -955,12 +967,11 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     # Clear only the data part of the item rows. Do not change column widths or
     # the red-box Spec.(Size) layout from the template.
     for row in range(item_start_row, product_total_row):
-        worksheet.row_dimensions[row].height = float(worksheet.row_dimensions[row].height or 50)
-        for column in range(1, 11):
-            worksheet.cell(row, column).value = None
+        prepare_invoice_item_row(worksheet, row, source_row=template_last_item_row, max_col=10)
 
     for index, item in enumerate(invoice_items):
         row = item_start_row + index
+        worksheet.row_dimensions[row].height = 44
         worksheet[f"A{row}"] = item.get("description") or "--"
         worksheet[f"H{row}"] = f"=SUM(C{row}:G{row})"
         worksheet[f"I{row}"] = float(item.get("unitPrice") or 0)
@@ -971,7 +982,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         if image_bytes:
-            excel_image = build_excel_image(image_bytes, width=48, height=38)
+            excel_image = build_excel_image(image_bytes, width=46, height=40)
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
 
