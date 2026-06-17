@@ -907,6 +907,74 @@ def reset_invoice_summary_merges(
         worksheet.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
 
 
+def rebuild_invoice_fixed_footer(worksheet: Any, *, footer_start_row: int) -> None:
+    """Recreate the template footer after dynamic item rows."""
+    remarks_row = footer_start_row
+    packing_row = footer_start_row + 1
+    partial_row = footer_start_row + 2
+    shipment_row = footer_start_row + 3
+    payment_row = footer_start_row + 4
+    bank_title_row = footer_start_row + 5
+    bank_row = footer_start_row + 6
+    seller_name_row = footer_start_row + 9
+    seller_label_row = footer_start_row + 10
+
+    for merged_range in list(worksheet.merged_cells.ranges):
+        overlaps_footer = not (merged_range.max_row < remarks_row or merged_range.min_row > seller_label_row)
+        overlaps_table_columns = not (merged_range.max_col < 1 or merged_range.min_col > 10)
+        if overlaps_footer and overlaps_table_columns:
+            worksheet.unmerge_cells(str(merged_range))
+
+    worksheet.merge_cells(start_row=bank_row, start_column=1, end_row=bank_row, end_column=10)
+    worksheet.merge_cells(start_row=seller_name_row, start_column=9, end_row=seller_name_row, end_column=10)
+    worksheet.merge_cells(start_row=seller_label_row, start_column=9, end_row=seller_label_row, end_column=10)
+
+    # Values are normally shifted from the template by insert_rows(); keep those
+    # exact template strings.  The fallback values only protect a damaged/empty
+    # template, while the row heights/merges below fix the squeezed layout.
+    fallback_values = {
+        remarks_row: "REMARKS:",
+        packing_row: "1. Packing: Single package in Carton",
+        partial_row: "2.Partial shipments: ALLOWED       3.Transhipment: ALLOWED",
+        shipment_row: "4.Time of shipment: In  Jun. 2026",
+        payment_row: "5. Terms of payment: 100% payment for T/T sample.",
+        bank_title_row: "6.Beneficiary bank information:",
+    }
+
+    for row, value in fallback_values.items():
+        if worksheet[f"A{row}"].value in (None, ""):
+            worksheet[f"A{row}"] = value
+        worksheet[f"A{row}"].font = Font(name="Arial", size=8, bold=True)
+        worksheet[f"A{row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    if worksheet[f"B{seller_name_row}"].value in (None, ""):
+        worksheet[f"B{seller_name_row}"] = "QUANZHOU CHENSHENG Trading Co., Ltd."
+    if worksheet[f"I{seller_name_row}"].value in (None, ""):
+        worksheet[f"I{seller_name_row}"] = "=B6"
+    if worksheet[f"B{seller_label_row}"].value in (None, ""):
+        worksheet[f"B{seller_label_row}"] = "SELLER"
+    if worksheet[f"I{seller_label_row}"].value in (None, ""):
+        worksheet[f"I{seller_label_row}"] = "BUYER"
+    for cell_ref in (f"B{seller_name_row}", f"I{seller_name_row}", f"B{seller_label_row}", f"I{seller_label_row}"):
+        worksheet[cell_ref].font = Font(name="Arial", size=8, bold=True)
+        worksheet[cell_ref].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    for row in range(remarks_row, bank_title_row + 1):
+        worksheet.row_dimensions[row].height = 25
+    worksheet.row_dimensions[bank_row].height = 175
+    worksheet.row_dimensions[footer_start_row + 7].height = 15.35
+    worksheet.row_dimensions[footer_start_row + 8].height = 15.35
+    worksheet.row_dimensions[seller_name_row].height = 15.35
+    worksheet.row_dimensions[seller_label_row].height = 24
+
+    bank_cell = worksheet[f"A{bank_row}"]
+    bank_cell.font = Font(name="Arial", size=8, bold=True)
+    bank_cell.fill = PatternFill(fill_type="solid", fgColor="DDEBF0")
+    bank_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    for column in range(1, 11):
+        worksheet.cell(bank_row, column).fill = copy(bank_cell.fill)
+
+
 def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     if not PROFORMA_TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Proforma invoice template not found: {PROFORMA_TEMPLATE_PATH}")
@@ -942,11 +1010,15 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     product_total_row = 16 + extra_rows
     shipping_row = 17 + extra_rows
     total_row = 18 + extra_rows
+    spacer_row = 19 + extra_rows
     deposit_row = 20 + extra_rows
     balance_row = 21 + extra_rows
+    pre_footer_spacer_row = 22 + extra_rows
+    remarks_row = 23 + extra_rows
     last_item_row = product_total_row - 1
 
     reset_invoice_summary_merges(worksheet, item_start_row, balance_row, shipping_row, total_row, deposit_row)
+    rebuild_invoice_fixed_footer(worksheet, footer_start_row=remarks_row)
 
     # Header/customer fields: keep all original template formatting.
     worksheet["B5"] = str(order.get("orderNo") or "")
@@ -1004,12 +1076,30 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet[f"A{balance_row}"] = "50% BALANCE:"
     worksheet[f"C{balance_row}"] = f"=J{total_row}*0.5"
 
+    # Keep the moving summary/footer rows visually identical to the one-item
+    # template, so Shipping Cost and the blue bank area never get squeezed.
+    worksheet.row_dimensions[product_total_row].height = 30
+    worksheet.row_dimensions[shipping_row].height = 30
+    worksheet.row_dimensions[total_row].height = 30
+    worksheet.row_dimensions[spacer_row].height = 20.1
+    worksheet.row_dimensions[deposit_row].height = 20.1
+    worksheet.row_dimensions[balance_row].height = 20.1
+    worksheet.row_dimensions[pre_footer_spacer_row].height = 11
+
+    for row in (product_total_row, shipping_row, total_row):
+        for column in range(1, 11):
+            worksheet.cell(row, column).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    worksheet[f"C{shipping_row}"].font = Font(name="Arial", size=8, bold=True)
+    worksheet[f"C{shipping_row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for cell_ref in (f"J{product_total_row}", f"J{shipping_row}", f"J{total_row}", f"C{deposit_row}", f"C{balance_row}"):
+        worksheet[cell_ref].number_format = '$#,##0.00'
+
     # Leave the template REMARKS, bank information and signature area untouched.
     # Only append order-specific notes/attachments after the template if present.
     attachment_images, attachment_files = split_order_attachments(order)
     note_text = str(order.get("note") or "").strip()
     if note_text or attachment_files or attachment_images:
-        append_row = 72 + extra_rows
+        append_row = remarks_row + 49
         worksheet[f"A{append_row}"] = "ORDER NOTE / ATTACHMENTS:"
         worksheet[f"A{append_row}"].font = Font(bold=True)
         worksheet[f"A{append_row + 1}"] = "\n".join(
