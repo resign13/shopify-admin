@@ -128,7 +128,7 @@
         <div class="chart-head">
           <div>
             <h3>款式数量统计</h3>
-            <p class="summary-subtext">按整款编码汇总商品件数，例如 CS2010-黑色 / CS2010-白色 统一计入 CS2010。</p>
+            <p class="summary-subtext">按具体变体编码统计商品件数，不同颜色 / 不同变体会分开显示。</p>
           </div>
         </div>
 

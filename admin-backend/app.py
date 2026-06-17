@@ -186,32 +186,16 @@ def _parse_dashboard_datetime(value: str) -> datetime | None:
         return None
 
 
-def _dashboard_style_base_code(value: str) -> str:
-    code = str(value or '').strip()
-    if not code:
-        return ''
-    code = re.sub(r'\s+', '', code)
-    for separator in ('-', '－', '_'):
-        if separator in code:
-            prefix = code.split(separator, 1)[0].strip()
-            if prefix:
-                return prefix
-    match = re.match(r'^([A-Za-z]+\d+)', code)
-    if match:
-        return match.group(1)
-    return code
-
-
 def _dashboard_style_value(item: dict[str, Any]) -> str:
     raw = (
-        item.get('colorGroup')
-        or item.get('familyCode')
-        or item.get('productCode')
+        item.get('productCode')
         or item.get('sku')
         or item.get('productName')
+        or item.get('colorGroup')
+        or item.get('familyCode')
         or ''
     )
-    return _dashboard_style_base_code(str(raw))
+    return re.sub(r'\s+', '', str(raw or '').strip())
 
 
 def _dashboard_style_label(item: dict[str, Any]) -> str:
