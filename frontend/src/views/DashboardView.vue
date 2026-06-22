@@ -2,25 +2,61 @@
   <AdminLayout>
     <div class="admin-page dashboard-page">
       <section class="dashboard-toolbar admin-card">
-        <label class="field-label">
+        <div class="field-label autocomplete-field">
           <span>款式</span>
-          <select v-model="filters.style" class="admin-field" @change="applyFilters">
-            <option value="all">全部款式</option>
-            <option v-for="item in styleOptions" :key="item.value" :value="item.value">
+          <input
+            v-model="styleSearch"
+            class="admin-field autocomplete-input"
+            type="text"
+            placeholder="输入款式，例如 ZM"
+            autocomplete="off"
+            @focus="openAutocomplete('style')"
+            @input="handleAutocompleteInput('style')"
+            @keydown.enter.prevent="confirmAutocomplete('style')"
+            @keydown.esc="autocompleteOpen = ''"
+            @blur="closeAutocompleteSoon"
+          />
+          <div v-if="autocompleteOpen === 'style'" class="autocomplete-menu">
+            <button
+              v-for="item in filteredStyleOptions"
+              :key="item.value"
+              type="button"
+              :class="['autocomplete-option', { active: item.value === filters.style }]"
+              @mousedown.prevent="selectAutocomplete('style', item)"
+            >
               {{ item.label }}
-            </option>
-          </select>
-        </label>
+            </button>
+            <div v-if="!filteredStyleOptions.length" class="autocomplete-empty">没有匹配款式</div>
+          </div>
+        </div>
 
-        <label class="field-label">
+        <div class="field-label autocomplete-field">
           <span>国家</span>
-          <select v-model="filters.country" class="admin-field" @change="applyFilters">
-            <option value="all">全部国家</option>
-            <option v-for="item in countryOptions" :key="item.value" :value="item.value">
+          <input
+            v-model="countrySearch"
+            class="admin-field autocomplete-input"
+            type="text"
+            placeholder="输入国家，例如 China"
+            autocomplete="off"
+            @focus="openAutocomplete('country')"
+            @input="handleAutocompleteInput('country')"
+            @keydown.enter.prevent="confirmAutocomplete('country')"
+            @keydown.esc="autocompleteOpen = ''"
+            @blur="closeAutocompleteSoon"
+          />
+          <div v-if="autocompleteOpen === 'country'" class="autocomplete-menu">
+            <button
+              v-for="item in filteredCountryOptions"
+              :key="item.value"
+              type="button"
+              :class="['autocomplete-option', { active: item.value === filters.country }]"
+              @mousedown.prevent="selectAutocomplete('country', item)"
+            >
               {{ item.label }}
-            </option>
-          </select>
-        </label>
+            </button>
+            <div v-if="!filteredCountryOptions.length" class="autocomplete-empty">没有匹配国家</div>
+          </div>
+        </div>
 
         <div class="field-label date-range-field">
           <span>时间</span>
@@ -176,6 +212,9 @@ const salesChartEl = ref(null)
 let trendChart = null
 let salesChart = null
 const datePanelOpen = ref(false)
+const autocompleteOpen = ref('')
+const styleSearch = ref('全部款式')
+const countrySearch = ref('全部国家')
 const activePreset = ref('last30')
 const selectingStart = ref(true)
 const weekDays = ['日', '一', '二', '三', '四', '五', '六']
@@ -251,6 +290,10 @@ const draftDates = reactive({ from: filters.dateFrom, to: filters.dateTo })
 
 const styleOptions = computed(() => admin.dashboard?.filters?.styles || [])
 const countryOptions = computed(() => admin.dashboard?.filters?.countries || [])
+const allStyleOptions = computed(() => [{ value: 'all', label: '全部款式' }, ...styleOptions.value])
+const allCountryOptions = computed(() => [{ value: 'all', label: '全部国家' }, ...countryOptions.value])
+const filteredStyleOptions = computed(() => filterAutocompleteOptions(allStyleOptions.value, styleSearch.value, '全部款式'))
+const filteredCountryOptions = computed(() => filterAutocompleteOptions(allCountryOptions.value, countrySearch.value, '全部国家'))
 const trendPoints = computed(() => admin.dashboard?.trend?.points || [])
 const recentOrders = computed(() => admin.dashboard?.recentOrders || [])
 const styleSummary = computed(() => admin.dashboard?.styleSummary || [])
@@ -489,6 +532,88 @@ function resizeCharts() {
   salesChart?.resize()
 }
 
+function normalizeAutocompleteText(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function filterAutocompleteOptions(options, keyword, allLabel) {
+  const query = normalizeAutocompleteText(keyword)
+  if (!query || query === normalizeAutocompleteText(allLabel)) {
+    return options.slice(0, 30)
+  }
+  return options
+    .filter((item) => {
+      const label = normalizeAutocompleteText(item.label)
+      const value = normalizeAutocompleteText(item.value)
+      return label.includes(query) || value.includes(query)
+    })
+    .slice(0, 30)
+}
+
+function optionLabel(options, value, fallback) {
+  return options.find((item) => item.value === value)?.label || fallback
+}
+
+function syncAutocompleteLabels() {
+  styleSearch.value = optionLabel(allStyleOptions.value, filters.style, '全部款式')
+  countrySearch.value = optionLabel(allCountryOptions.value, filters.country, '全部国家')
+}
+
+function openAutocomplete(type) {
+  autocompleteOpen.value = type
+}
+
+function closeAutocompleteSoon() {
+  window.setTimeout(() => {
+    autocompleteOpen.value = ''
+    syncAutocompleteLabels()
+  }, 120)
+}
+
+function handleAutocompleteInput(type) {
+  autocompleteOpen.value = type
+}
+
+async function selectAutocomplete(type, item) {
+  if (type === 'style') {
+    filters.style = item.value
+    styleSearch.value = item.label
+  } else {
+    filters.country = item.value
+    countrySearch.value = item.label
+  }
+  autocompleteOpen.value = ''
+  await applyFilters()
+}
+
+function resolveAutocompleteTarget(type) {
+  const options = type === 'style' ? filteredStyleOptions.value : filteredCountryOptions.value
+  const keyword = type === 'style' ? styleSearch.value : countrySearch.value
+  const normalized = normalizeAutocompleteText(keyword)
+  const exact = options.find((item) => normalizeAutocompleteText(item.label) === normalized || normalizeAutocompleteText(item.value) === normalized)
+  return exact || options[0] || null
+}
+
+function applyAutocompleteInputToFilters() {
+  const styleTarget = resolveAutocompleteTarget('style')
+  const countryTarget = resolveAutocompleteTarget('country')
+  if (styleTarget) {
+    filters.style = styleTarget.value
+    styleSearch.value = styleTarget.label
+  }
+  if (countryTarget) {
+    filters.country = countryTarget.value
+    countrySearch.value = countryTarget.label
+  }
+}
+
+async function confirmAutocomplete(type) {
+  const target = resolveAutocompleteTarget(type)
+  if (target) {
+    await selectAutocomplete(type, target)
+  }
+}
+
 const calendarMonths = computed(() => {
   const end = parseDate(draftDates.to) || new Date()
   const currentMonth = new Date(end.getFullYear(), end.getMonth(), 1)
@@ -559,9 +684,11 @@ async function confirmDateRange() {
 }
 
 async function applyFilters() {
+  applyAutocompleteInputToFilters()
   loading.value = true
   try {
     await admin.loadDashboard({ ...filters })
+    syncAutocompleteLabels()
   } finally {
     loading.value = false
   }
@@ -572,6 +699,7 @@ async function resetFilters() {
   draftDates.from = filters.dateFrom
   draftDates.to = filters.dateTo
   activePreset.value = 'last30'
+  syncAutocompleteLabels()
   await applyFilters()
 }
 
@@ -604,6 +732,12 @@ onBeforeUnmount(() => {
 <style scoped>
 .dashboard-page { gap: 18px; }
 .dashboard-toolbar { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(170px, 0.8fr) minmax(260px, 1.2fr) auto auto; gap: 14px; align-items: end; overflow: visible; }
+.autocomplete-field { position: relative; }
+.autocomplete-input { width: 100%; }
+.autocomplete-menu { position: absolute; left: 0; right: 0; top: calc(100% + 8px); z-index: 45; max-height: 280px; overflow: auto; padding: 6px; border: 1px solid rgba(110, 85, 61, 0.14); border-radius: 16px; background: #fff; box-shadow: 0 18px 42px rgba(90, 68, 51, 0.18); }
+.autocomplete-option { width: 100%; min-height: 34px; padding: 8px 12px; border: 0; border-radius: 11px; background: transparent; color: var(--text); text-align: left; cursor: pointer; font-weight: 600; }
+.autocomplete-option:hover, .autocomplete-option.active { background: #b36e48; color: #fff; }
+.autocomplete-empty { padding: 12px; color: var(--muted); font-size: 0.9rem; }
 .date-range-field { position: relative; }
 .date-range-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; color: var(--text); cursor: pointer; }
 .date-range-caret { color: var(--muted); }
