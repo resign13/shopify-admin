@@ -138,26 +138,6 @@
           </div>
           <div v-else class="empty-state">当前筛选条件下暂无商品销量。</div>
         </article>
-
-        <article class="admin-card chart-card style-rank-card">
-          <div class="chart-head">
-            <div>
-              <h3>款式数量排行</h3>
-              <p class="summary-subtext">Top 12 商品件数明细，不同颜色 / 不同变体分开显示。</p>
-            </div>
-          </div>
-
-          <div v-if="topStyleSummary.length" class="style-bars compact">
-            <div v-for="item in topStyleSummary" :key="item.style" class="style-bar-row">
-              <div class="style-bar-name" :title="item.label || item.style">{{ item.label || item.style }}</div>
-              <div class="style-bar-track">
-                <div class="style-bar-fill" :style="{ width: `${styleBarPercent(item.quantity)}%` }"></div>
-              </div>
-              <div class="style-bar-value">{{ item.quantity }} 件</div>
-            </div>
-          </div>
-          <div v-else class="empty-state">当前筛选条件下暂无款式数量。</div>
-        </article>
       </section>
 
       <section class="admin-card">
@@ -654,8 +634,8 @@ onBeforeUnmount(() => {
 .chart-legend span { width: 28px; height: 4px; border-radius: 999px; background: #b36e48; }
 .echarts-wrap { display: grid; gap: 8px; }
 .trend-echart { width: 100%; height: 380px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
-.dashboard-chart-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.85fr); gap: 16px; align-items: stretch; }
-.sales-chart-card, .style-rank-card { min-width: 0; }
+.dashboard-chart-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: stretch; }
+.sales-chart-card { min-width: 0; }
 .sales-echart { width: 100%; height: 390px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
 .chart-tip { margin: 0; color: var(--muted); font-size: 0.86rem; }
 .style-bars { display: grid; gap: 12px; }
