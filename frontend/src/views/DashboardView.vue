@@ -536,9 +536,9 @@ function normalizeAutocompleteText(value) {
   return String(value || '').trim().toLowerCase()
 }
 
-function filterAutocompleteOptions(options, keyword, allLabel) {
+function filterAutocompleteOptions(options, keyword) {
   const query = normalizeAutocompleteText(keyword)
-  if (!query || query === normalizeAutocompleteText(allLabel)) {
+  if (!query) {
     return options.slice(0, 30)
   }
   return options
@@ -566,7 +566,9 @@ function openAutocomplete(type) {
 function closeAutocompleteSoon() {
   window.setTimeout(() => {
     autocompleteOpen.value = ''
-    syncAutocompleteLabels()
+    if (normalizeAutocompleteText(styleSearch.value) || normalizeAutocompleteText(countrySearch.value)) {
+      syncAutocompleteLabels()
+    }
   }, 120)
 }
 
@@ -595,15 +597,24 @@ function resolveAutocompleteTarget(type) {
 }
 
 function applyAutocompleteInputToFilters() {
-  const styleTarget = resolveAutocompleteTarget('style')
-  const countryTarget = resolveAutocompleteTarget('country')
-  if (styleTarget) {
-    filters.style = styleTarget.value
-    styleSearch.value = styleTarget.label
+  if (!normalizeAutocompleteText(styleSearch.value)) {
+    filters.style = 'all'
+  } else {
+    const styleTarget = resolveAutocompleteTarget('style')
+    if (styleTarget) {
+      filters.style = styleTarget.value
+      styleSearch.value = styleTarget.label
+    }
   }
-  if (countryTarget) {
-    filters.country = countryTarget.value
-    countrySearch.value = countryTarget.label
+
+  if (!normalizeAutocompleteText(countrySearch.value)) {
+    filters.country = 'all'
+  } else {
+    const countryTarget = resolveAutocompleteTarget('country')
+    if (countryTarget) {
+      filters.country = countryTarget.value
+      countrySearch.value = countryTarget.label
+    }
   }
 }
 
