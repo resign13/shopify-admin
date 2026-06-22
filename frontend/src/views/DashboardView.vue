@@ -124,24 +124,40 @@
         <div v-else class="empty-state">当前筛选条件下暂无订单数据。</div>
       </section>
 
-      <section class="admin-card chart-card">
-        <div class="chart-head">
-          <div>
-            <h3>款式数量统计</h3>
-            <p class="summary-subtext">按具体变体编码统计商品件数，不同颜色 / 不同变体会分开显示。</p>
-          </div>
-        </div>
-
-        <div v-if="topStyleSummary.length" class="style-bars">
-          <div v-for="item in topStyleSummary" :key="item.style" class="style-bar-row">
-            <div class="style-bar-name">{{ item.label || item.style }}</div>
-            <div class="style-bar-track">
-              <div class="style-bar-fill" :style="{ width: `${styleBarPercent(item.quantity)}%` }"></div>
+      <section class="dashboard-chart-grid">
+        <article class="admin-card chart-card sales-chart-card">
+          <div class="chart-head">
+            <div>
+              <h3>商品销量分布</h3>
+              <p class="summary-subtext">按具体变体编码统计，左侧看销量排行，右侧看销量占比。</p>
             </div>
-            <div class="style-bar-value">{{ item.quantity }} 件</div>
           </div>
-        </div>
-        <div v-else class="empty-state">当前筛选条件下暂无款式数量。</div>
+
+          <div v-if="topStyleSummary.length" class="echarts-wrap">
+            <div ref="salesChartEl" class="sales-echart" aria-label="商品销量分布图表"></div>
+          </div>
+          <div v-else class="empty-state">当前筛选条件下暂无商品销量。</div>
+        </article>
+
+        <article class="admin-card chart-card style-rank-card">
+          <div class="chart-head">
+            <div>
+              <h3>款式数量排行</h3>
+              <p class="summary-subtext">Top 12 商品件数明细，不同颜色 / 不同变体分开显示。</p>
+            </div>
+          </div>
+
+          <div v-if="topStyleSummary.length" class="style-bars compact">
+            <div v-for="item in topStyleSummary" :key="item.style" class="style-bar-row">
+              <div class="style-bar-name" :title="item.label || item.style">{{ item.label || item.style }}</div>
+              <div class="style-bar-track">
+                <div class="style-bar-fill" :style="{ width: `${styleBarPercent(item.quantity)}%` }"></div>
+              </div>
+              <div class="style-bar-value">{{ item.quantity }} 件</div>
+            </div>
+          </div>
+          <div v-else class="empty-state">当前筛选条件下暂无款式数量。</div>
+        </article>
       </section>
 
       <section class="admin-card">
@@ -164,11 +180,11 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
+import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { DataZoomComponent, GridComponent, LegendComponent, MarkPointComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 
-echarts.use([LineChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkPointComponent, CanvasRenderer])
+echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkPointComponent, CanvasRenderer])
 
 import AdminLayout from '../components/AdminLayout.vue'
 import { useAdminStore } from '../stores/admin'
@@ -176,7 +192,9 @@ import { useAdminStore } from '../stores/admin'
 const admin = useAdminStore()
 const loading = ref(false)
 const trendChartEl = ref(null)
+const salesChartEl = ref(null)
 let trendChart = null
+let salesChart = null
 const datePanelOpen = ref(false)
 const activePreset = ref('last30')
 const selectingStart = ref(true)
@@ -266,6 +284,13 @@ function disposeTrendChart() {
   if (trendChart) {
     trendChart.dispose()
     trendChart = null
+  }
+}
+
+function disposeSalesChart() {
+  if (salesChart) {
+    salesChart.dispose()
+    salesChart = null
   }
 }
 
@@ -388,8 +413,100 @@ async function renderTrendChart() {
   }, true)
 }
 
-function resizeTrendChart() {
+async function renderSalesChart() {
+  await nextTick()
+  if (!topStyleSummary.value.length || !salesChartEl.value) {
+    disposeSalesChart()
+    return
+  }
+
+  if (!salesChart) {
+    salesChart = echarts.init(salesChartEl.value)
+  }
+
+  const chartItems = topStyleSummary.value.slice(0, 10).map((item) => ({
+    name: item.label || item.style || '--',
+    value: Number(item.quantity || 0),
+    amount: Number(item.amount || 0),
+  })).filter((item) => item.value > 0)
+  const totalQuantity = styleSummary.value.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+  const shownQuantity = chartItems.reduce((sum, item) => sum + item.value, 0)
+  if (totalQuantity > shownQuantity) {
+    chartItems.push({ name: '其他', value: totalQuantity - shownQuantity, amount: 0 })
+  }
+
+  salesChart.setOption({
+    color: ['#b36e48', '#d39a71', '#8f5f3f', '#e7b98e', '#7f8f6d', '#c48a6a', '#6f5141', '#f0d4bb', '#9b735d', '#c7a48d', '#e8ded5'],
+    backgroundColor: 'transparent',
+    animationDuration: 650,
+    animationEasing: 'cubicOut',
+    tooltip: {
+      trigger: 'item',
+      backgroundColor: 'rgba(255, 255, 255, 0.96)',
+      borderColor: 'rgba(110, 85, 61, 0.16)',
+      borderWidth: 1,
+      padding: [10, 12],
+      textStyle: { color: '#2e2118' },
+      extraCssText: 'box-shadow: 0 14px 34px rgba(90,68,51,0.16); border-radius: 12px;',
+      formatter(params) {
+        const data = params.data || {}
+        const percent = totalQuantity ? ((Number(data.value || 0) / totalQuantity) * 100).toFixed(1) : '0.0'
+        return [`<strong>${data.name || ''}</strong>`, `销量：${data.value || 0} 件`, `占比：${percent}%`].join('<br/>')
+      },
+    },
+    legend: {
+      type: 'scroll',
+      orient: 'vertical',
+      right: 6,
+      top: 28,
+      bottom: 16,
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { color: '#6d5648', fontSize: 11 },
+    },
+    grid: { left: 18, right: '48%', top: 22, bottom: 18, containLabel: true },
+    xAxis: {
+      type: 'value',
+      minInterval: 1,
+      axisLabel: { color: '#7a6659' },
+      splitLine: { lineStyle: { color: 'rgba(110, 85, 61, 0.12)', type: 'dashed' } },
+    },
+    yAxis: {
+      type: 'category',
+      inverse: true,
+      data: chartItems.map((item) => item.name),
+      axisTick: { show: false },
+      axisLine: { show: false },
+      axisLabel: { color: '#4d392c', width: 96, overflow: 'truncate' },
+    },
+    series: [
+      {
+        name: '销量排行',
+        type: 'bar',
+        barWidth: 14,
+        data: chartItems.map((item) => ({ ...item })),
+        itemStyle: { borderRadius: [0, 9, 9, 0] },
+        label: { show: true, position: 'right', color: '#6d5648', formatter: '{c}' },
+        emphasis: { focus: 'series' },
+      },
+      {
+        name: '销量占比',
+        type: 'pie',
+        radius: ['42%', '68%'],
+        center: ['75%', '52%'],
+        avoidLabelOverlap: true,
+        label: { formatter: '{b}\n{d}%', color: '#4d392c', fontSize: 11 },
+        labelLine: { length: 10, length2: 8 },
+        data: chartItems,
+        emphasis: { scaleSize: 8 },
+      },
+    ],
+  }, true)
+}
+
+function resizeCharts() {
   trendChart?.resize()
+  salesChart?.resize()
 }
 
 const calendarMonths = computed(() => {
@@ -485,14 +602,22 @@ watch(
   }
 )
 
+watch(
+  () => styleSummary.value,
+  () => {
+    renderSalesChart()
+  }
+)
+
 onMounted(() => {
-  window.addEventListener('resize', resizeTrendChart)
+  window.addEventListener('resize', resizeCharts)
   applyFilters()
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', resizeTrendChart)
+  window.removeEventListener('resize', resizeCharts)
   disposeTrendChart()
+  disposeSalesChart()
 })
 </script>
 
@@ -529,13 +654,18 @@ onBeforeUnmount(() => {
 .chart-legend span { width: 28px; height: 4px; border-radius: 999px; background: #b36e48; }
 .echarts-wrap { display: grid; gap: 8px; }
 .trend-echart { width: 100%; height: 380px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
+.dashboard-chart-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(360px, 0.85fr); gap: 16px; align-items: stretch; }
+.sales-chart-card, .style-rank-card { min-width: 0; }
+.sales-echart { width: 100%; height: 390px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
 .chart-tip { margin: 0; color: var(--muted); font-size: 0.86rem; }
 .style-bars { display: grid; gap: 12px; }
+.style-bars.compact { gap: 10px; }
 .style-bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 72px; gap: 12px; align-items: center; }
 .style-bar-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .style-bar-track { height: 18px; overflow: hidden; border-radius: 999px; background: #f1e5dc; }
 .style-bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #d39a71, #b36e48); }
 .style-bar-value { color: var(--muted); text-align: right; font-weight: 700; }
+@media (max-width: 1180px) { .dashboard-chart-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1080px) { .dashboard-toolbar, .metric-grid, .date-range-editors, .calendar-preview { grid-template-columns: 1fr; } .date-range-panel { left: 0; right: auto; grid-template-columns: 1fr; } .style-bar-row { grid-template-columns: 1fr; } .style-bar-value { text-align: left; } }
 </style>
 
