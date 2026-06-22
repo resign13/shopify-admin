@@ -213,8 +213,8 @@ let trendChart = null
 let salesChart = null
 const datePanelOpen = ref(false)
 const autocompleteOpen = ref('')
-const styleSearch = ref('全部款式')
-const countrySearch = ref('全部国家')
+const styleSearch = ref('')
+const countrySearch = ref('')
 const activePreset = ref('last30')
 const selectingStart = ref(true)
 const weekDays = ['日', '一', '二', '三', '四', '五', '六']
@@ -290,10 +290,10 @@ const draftDates = reactive({ from: filters.dateFrom, to: filters.dateTo })
 
 const styleOptions = computed(() => admin.dashboard?.filters?.styles || [])
 const countryOptions = computed(() => admin.dashboard?.filters?.countries || [])
-const allStyleOptions = computed(() => [{ value: 'all', label: '全部款式' }, ...styleOptions.value])
-const allCountryOptions = computed(() => [{ value: 'all', label: '全部国家' }, ...countryOptions.value])
-const filteredStyleOptions = computed(() => filterAutocompleteOptions(allStyleOptions.value, styleSearch.value, '全部款式'))
-const filteredCountryOptions = computed(() => filterAutocompleteOptions(allCountryOptions.value, countrySearch.value, '全部国家'))
+const allStyleOptions = computed(() => styleOptions.value)
+const allCountryOptions = computed(() => countryOptions.value)
+const filteredStyleOptions = computed(() => filterAutocompleteOptions(allStyleOptions.value, styleSearch.value))
+const filteredCountryOptions = computed(() => filterAutocompleteOptions(allCountryOptions.value, countrySearch.value))
 const trendPoints = computed(() => admin.dashboard?.trend?.points || [])
 const recentOrders = computed(() => admin.dashboard?.recentOrders || [])
 const styleSummary = computed(() => admin.dashboard?.styleSummary || [])
@@ -550,13 +550,14 @@ function filterAutocompleteOptions(options, keyword) {
     .slice(0, 30)
 }
 
-function optionLabel(options, value, fallback) {
-  return options.find((item) => item.value === value)?.label || fallback
+function optionLabel(options, value) {
+  if (value === 'all') return ''
+  return options.find((item) => item.value === value)?.label || ''
 }
 
 function syncAutocompleteLabels() {
-  styleSearch.value = optionLabel(allStyleOptions.value, filters.style, '全部款式')
-  countrySearch.value = optionLabel(allCountryOptions.value, filters.country, '全部国家')
+  styleSearch.value = optionLabel(allStyleOptions.value, filters.style)
+  countrySearch.value = optionLabel(allCountryOptions.value, filters.country)
 }
 
 function openAutocomplete(type) {
@@ -566,9 +567,6 @@ function openAutocomplete(type) {
 function closeAutocompleteSoon() {
   window.setTimeout(() => {
     autocompleteOpen.value = ''
-    if (normalizeAutocompleteText(styleSearch.value) || normalizeAutocompleteText(countrySearch.value)) {
-      syncAutocompleteLabels()
-    }
   }, 120)
 }
 
@@ -699,7 +697,6 @@ async function applyFilters() {
   loading.value = true
   try {
     await admin.loadDashboard({ ...filters })
-    syncAutocompleteLabels()
   } finally {
     loading.value = false
   }
@@ -710,7 +707,8 @@ async function resetFilters() {
   draftDates.from = filters.dateFrom
   draftDates.to = filters.dateTo
   activePreset.value = 'last30'
-  syncAutocompleteLabels()
+  styleSearch.value = ''
+  countrySearch.value = ''
   await applyFilters()
 }
 
