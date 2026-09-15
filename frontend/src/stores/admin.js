@@ -176,12 +176,12 @@ export const useAdminStore = defineStore('admin-data', {
       const data = await request('/api/admin/inventory', { headers: authHeaders(auth.token) })
       this.inventoryItems = data.items
     },
-    async saveInventory(productId, sizeStocks) {
+    async saveInventory(productId, sizeStocks, contractPendingBySize = {}) {
       const auth = useAdminAuthStore()
       const data = await request(`/api/admin/inventory/${productId}`, {
         method: 'PUT',
         headers: authHeaders(auth.token),
-        body: JSON.stringify({ sizeStocks }),
+        body: JSON.stringify({ sizeStocks, contractPendingBySize }),
       })
       const updated = data.product
       const syncList = (items) => {
@@ -194,6 +194,55 @@ export const useAdminStore = defineStore('admin-data', {
       syncList(this.products)
       await this.loadDashboard()
       return updated
+    },
+    async exportInventory(filters = {}) {
+      const auth = useAdminAuthStore()
+      const params = new URLSearchParams()
+      Object.entries(filters || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
+      })
+      const response = await fetch(
+        `${API_BASE}/api/admin/inventory/export${params.toString() ? `?${params.toString()}` : ''}`,
+        { headers: authHeaders(auth.token) }
+      )
+      if (!response.ok) {
+        let message = '库存导出失败'
+        try {
+          const data = await response.json()
+          message = data.message || message
+        } catch {}
+        throw new Error(message)
+      }
+      return response.blob()
+    },
+    async previewInventoryImport(file) {
+      const auth = useAdminAuthStore()
+      const formData = new FormData()
+      formData.append('file', file)
+      const response = await fetch(`${API_BASE}/api/admin/inventory/import/preview`, {
+        method: 'POST',
+        headers: authHeaders(auth.token),
+        body: formData,
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || '库存导入预览失败')
+      return data
+    },
+    async confirmInventoryImport(file, fileHash) {
+      const auth = useAdminAuthStore()
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('fileHash', fileHash)
+      const response = await fetch(`${API_BASE}/api/admin/inventory/import/confirm`, {
+        method: 'POST',
+        headers: authHeaders(auth.token),
+        body: formData,
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || '库存导入失败')
+      await this.loadInventory()
+      await this.loadDashboard()
+      return data
     },
     async loadCategories() {
       const auth = useAdminAuthStore()

@@ -85,3 +85,13 @@ a { color: inherit; text-decoration: none; }
   .summary-head, .order-items-head { align-items: flex-start; flex-direction: column; }
 }
 
+@media (max-width: 720px) {
+  .admin-shell { padding-top: 300px; }
+  .sidebar-nav {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    overflow: visible;
+  }
+  .sidebar-nav a { min-width: 0; padding-left: 6px; padding-right: 6px; text-align: center; }
+}
+

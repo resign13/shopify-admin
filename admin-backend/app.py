@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import re
+import hashlib
+import zipfile
 from copy import copy
 from concurrent.futures import ThreadPoolExecutor
 import secrets
@@ -23,6 +25,10 @@ if LOCAL_VENDOR_DIR.exists():
 
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
+try:
+    import boto3
+except ImportError:
+    boto3 = None
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -84,6 +90,7 @@ from db import (
     update_category,
     update_order_status,
     update_product,
+    apply_inventory_import,
     update_product_inventory,
     update_store_user,
 )
@@ -1138,6 +1145,293 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     return output
 
 
+INVENTORY_TEMPLATE_VERSION = "inventory-v1"
+INVENTORY_HEADERS = [
+    "模板版本",
+    "商品ID",
+    "商品标题",
+    "颜色 SKU",
+    "颜色",
+    "分类",
+    "尺码",
+    "当前库存",
+    "合同未送",
+    "原始库存",
+    "原始合同未送",
+    "导出指纹",
+]
+INVENTORY_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+INVENTORY_MAX_ROWS = 20_000
+INVENTORY_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+
+
+def inventory_item_title(item: dict[str, Any]) -> str:
+    names = item.get("name")
+    if isinstance(names, dict):
+        return str(names.get("zh") or names.get("en") or next(iter(names.values()), "") or "").strip()
+    return str(names or item.get("productCode") or item.get("sku") or "").strip()
+
+
+def filter_inventory_items(
+    items: list[dict[str, Any]], *, category: str = "", keyword: str = ""
+) -> list[dict[str, Any]]:
+    category_value = str(category or "").strip()
+    keyword_value = str(keyword or "").strip().lower()
+    filtered: list[dict[str, Any]] = []
+    for item in items:
+        if category_value and str(item.get("categoryKey") or "") != category_value:
+            continue
+        if keyword_value:
+            haystack = " ".join(
+                str(value or "")
+                for value in (
+                    inventory_item_title(item),
+                    (item.get("name") or {}).get("en") if isinstance(item.get("name"), dict) else "",
+                    item.get("sku"),
+                    item.get("productCode"),
+                    item.get("colorName"),
+                    item.get("categoryLabel"),
+                )
+            ).lower()
+            if keyword_value not in haystack:
+                continue
+        filtered.append(item)
+    return filtered
+
+
+def inventory_export_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in items:
+        for size in item.get("sizePrices") or []:
+            size_code = str(size.get("sizeCode") or "").strip()
+            if not size_code:
+                continue
+            product_id = int(item.get("id") or 0)
+            rows.append(
+                {
+                    "productId": product_id,
+                    "title": inventory_item_title(item),
+                    "sku": str(item.get("sku") or item.get("productCode") or "").strip(),
+                    "colorName": str(item.get("colorName") or "").strip(),
+                    "categoryKey": str(item.get("categoryKey") or "").strip(),
+                    "categoryLabel": str(item.get("categoryLabel") or "").strip(),
+                    "sizeCode": size_code,
+                    "stock": int(size.get("stock") or 0),
+                    "contractPending": int(size.get("contractPending") or 0),
+                }
+            )
+    return rows
+
+
+def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "库存数据"
+    worksheet.sheet_view.showGridLines = False
+    worksheet.freeze_panes = "B2"
+    worksheet.append(INVENTORY_HEADERS)
+    for cell in worksheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="6F4E37")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for row in inventory_export_rows(items):
+        worksheet.append(
+            [
+                INVENTORY_TEMPLATE_VERSION,
+                str(row["productId"]),
+                row["title"],
+                row["sku"],
+                row["colorName"],
+                row["categoryKey"],
+                row["sizeCode"],
+                row["stock"],
+                row["contractPending"],
+                row["stock"],
+                row["contractPending"],
+                f"{row['productId']}:{row['sizeCode']}",
+            ]
+        )
+
+    widths = {"A": 16, "B": 12, "C": 36, "D": 22, "E": 16, "F": 20, "G": 14, "H": 14, "I": 14, "J": 14, "K": 18, "L": 24}
+    for column, width in widths.items():
+        worksheet.column_dimensions[column].width = width
+    for column in ("A", "J", "K", "L"):
+        worksheet.column_dimensions[column].hidden = True
+    for row in worksheet.iter_rows():
+        for cell in row:
+            cell.alignment = Alignment(vertical="center", wrap_text=cell.column in (3, 4, 5, 6))
+    if worksheet.max_row > 1:
+        worksheet.auto_filter.ref = f"B1:I{worksheet.max_row}"
+
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return output
+
+
+def _excel_text(cell: Any) -> str:
+    value = cell.value
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _excel_quantity(cell: Any, label: str) -> int:
+    if cell.value is None or (isinstance(cell.value, str) and not cell.value.strip()):
+        raise ValueError(f"{label}不能为空")
+    if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("=")):
+        raise ValueError(f"{label}不能使用公式")
+    value = cell.value
+    if isinstance(value, bool):
+        raise ValueError(f"{label}必须是非负整数")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError(f"{label}必须是非负整数")
+    raw = str(value).strip()
+    if not re.fullmatch(r"\d+", raw):
+        raise ValueError(f"{label}必须是非负整数")
+    return int(raw)
+
+
+def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    if len(raw) > INVENTORY_MAX_UPLOAD_BYTES:
+        raise ValueError("导入文件不能超过 10 MB")
+    try:
+        with zipfile.ZipFile(BytesIO(raw)) as archive:
+            total_uncompressed = sum(max(0, int(info.file_size)) for info in archive.infolist())
+            if total_uncompressed > INVENTORY_MAX_UNCOMPRESSED_BYTES:
+                raise ValueError("导入文件解压后体积过大")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("请上传有效的 .xlsx 文件") from exc
+
+    try:
+        workbook = load_workbook(BytesIO(raw), read_only=True, data_only=False)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("请上传有效的 .xlsx 文件") from exc
+    try:
+        if not workbook.worksheets:
+            raise ValueError("工作簿中没有库存数据表")
+        worksheet = workbook.worksheets[0]
+        if worksheet.max_row > INVENTORY_MAX_ROWS + 1:
+            raise ValueError("数据行不能超过 20,000 行")
+        header = [_excel_text(cell) for cell in next(worksheet.iter_rows(min_row=1, max_row=1, max_col=len(INVENTORY_HEADERS)))]
+        if header != INVENTORY_HEADERS:
+            raise ValueError("库存模板版本或列名不匹配，请使用库存页面导出的文件")
+
+        lookup: dict[tuple[int, str], dict[str, Any]] = {}
+        for item in snapshot:
+            for size in item.get("sizePrices") or []:
+                size_code = str(size.get("sizeCode") or "").strip()
+                if size_code:
+                    lookup[(int(item["id"]), size_code)] = {"item": item, "size": size}
+
+        parsed: list[dict[str, Any]] = []
+        errors: list[dict[str, Any]] = []
+        seen: set[tuple[int, str]] = set()
+        for row_number, cells in enumerate(
+            worksheet.iter_rows(min_row=2, max_col=len(INVENTORY_HEADERS)), start=2
+        ):
+            if not any(cell.value not in (None, "") for cell in cells):
+                continue
+            try:
+                for cell in cells:
+                    if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("=")):
+                        raise ValueError("不支持公式，请填写固定值")
+                version = _excel_text(cells[0])
+                if version != INVENTORY_TEMPLATE_VERSION:
+                    raise ValueError("模板版本不匹配")
+                product_id_raw = _excel_text(cells[1])
+                if not re.fullmatch(r"\d+", product_id_raw) or int(product_id_raw) <= 0:
+                    raise ValueError("商品ID必须是正整数")
+                product_id = int(product_id_raw)
+                title = _excel_text(cells[2])
+                sku = _excel_text(cells[3])
+                color_name = _excel_text(cells[4])
+                category_key = _excel_text(cells[5])
+                size_code = _excel_text(cells[6])
+                if not all((title, sku, category_key, size_code)):
+                    raise ValueError("商品ID、标题、SKU、分类和尺码不能为空")
+                key = (product_id, size_code)
+                if key in seen:
+                    raise ValueError("商品与尺码重复")
+                seen.add(key)
+                fingerprint = _excel_text(cells[11])
+                if fingerprint != f"{product_id}:{size_code}":
+                    raise ValueError("商品ID与尺码指纹不匹配")
+                target = lookup.get(key)
+                if not target:
+                    raise ValueError("商品或尺码不存在")
+                item = target["item"]
+                actual_identity = {
+                    "标题": inventory_item_title(item),
+                    "SKU": str(item.get("sku") or item.get("productCode") or "").strip(),
+                    "颜色": str(item.get("colorName") or "").strip(),
+                    "分类": str(item.get("categoryKey") or "").strip(),
+                }
+                imported_identity = {"标题": title, "SKU": sku, "颜色": color_name, "分类": category_key}
+                mismatches = [label for label in actual_identity if actual_identity[label] != imported_identity[label]]
+                if mismatches:
+                    raise ValueError("身份字段不匹配：" + ", ".join(mismatches))
+                original_stock = _excel_quantity(cells[9], "原始库存")
+                original_pending = _excel_quantity(cells[10], "原始合同未送")
+                stock = _excel_quantity(cells[7], "当前库存")
+                contract_pending = _excel_quantity(cells[8], "合同未送")
+                parsed.append(
+                    {
+                        "productId": product_id,
+                        "title": title,
+                        "sku": sku,
+                        "colorName": color_name,
+                        "categoryKey": category_key,
+                        "sizeCode": size_code,
+                        "stock": stock,
+                        "contractPending": contract_pending,
+                        "originalStock": original_stock,
+                        "originalContractPending": original_pending,
+                    }
+                )
+            except ValueError as exc:
+                errors.append({"row": row_number, "message": str(exc)})
+        if not parsed and not errors:
+            raise ValueError("库存文件没有可处理的数据行")
+        return parsed, errors
+    finally:
+        workbook.close()
+
+
+def inventory_import_payload(raw: bytes) -> dict[str, Any]:
+    snapshot = list_products(include_contract_pending=True)
+    parsed, errors = parse_inventory_workbook(raw, snapshot)
+    changed_rows = [
+        row
+        for row in parsed
+        if row["stock"] != row["originalStock"]
+        or row["contractPending"] != row["originalContractPending"]
+    ]
+    return {
+        "fileHash": hashlib.sha256(raw).hexdigest(),
+        "rows": [
+            {
+                **row,
+                "stockChanged": row["stock"] != row["originalStock"],
+                "contractPendingChanged": row["contractPending"] != row["originalContractPending"],
+            }
+            for row in parsed
+        ],
+        "errors": errors,
+        "summary": {
+            "rowCount": len(parsed),
+            "changedRowCount": len(changed_rows),
+            "changedFieldCount": sum(
+                int(row["stock"] != row["originalStock"])
+                + int(row["contractPending"] != row["originalContractPending"])
+                for row in changed_rows
+            ),
+            "productCount": len({int(row["productId"]) for row in parsed}),
+        },
+    }
+
+
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
 ADMIN_USER_ROLES = {"admin", "sales", "warehouse", "customer"}
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
@@ -1583,7 +1877,46 @@ def admin_frontend_ready() -> bool:
 
 @app.get("/uploads/<path:filename>")
 def serve_upload(filename: str) -> Any:
-    return send_from_directory(UPLOAD_DIR, filename)
+    from werkzeug.exceptions import NotFound
+
+    try:
+        return send_from_directory(UPLOAD_DIR, filename)
+    except NotFound:
+        pass
+
+    account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
+    access_key = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
+    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
+    bucket = os.environ.get("R2_BUCKET", "").strip()
+    if not (boto3 and account_id and access_key and secret_key and bucket):
+        app.logger.error("Local image missing and R2 storage is not configured")
+        return jsonify({"message": "Image storage temporarily unavailable"}), 503
+
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name="auto",
+    )
+    try:
+        obj = client.get_object(Bucket=bucket, Key=filename)
+        body = obj["Body"]
+        try:
+            content = body.read()
+        finally:
+            body.close()
+    except client.exceptions.NoSuchKey:
+        return jsonify({"message": "Not found"}), 404
+    except Exception:
+        app.logger.exception("R2 image retrieval failed")
+        return jsonify({"message": "Image storage temporarily unavailable"}), 503
+
+    return send_file(
+        BytesIO(content),
+        mimetype=obj.get("ContentType") or mimetypes.guess_type(filename)[0] or "application/octet-stream",
+        download_name=Path(filename).name,
+    )
 
 
 @app.post("/api/admin/uploads")
@@ -1802,7 +2135,69 @@ def products() -> Any:
 @require_auth
 @require_roles("admin", "sales", "warehouse", "customer")
 def inventory_products() -> Any:
-    return jsonify({"items": list_products()})
+    include_contract_pending = str(g.current_user.get("role") or "").lower() != "customer"
+    return jsonify({"items": list_products(include_contract_pending=include_contract_pending)})
+
+
+@app.get("/api/admin/inventory/export")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def export_inventory() -> Any:
+    category = str(request.args.get("category", "")).strip()
+    keyword = str(request.args.get("keyword", "")).strip()
+    items = filter_inventory_items(list_products(include_contract_pending=True), category=category, keyword=keyword)
+    file_stream = build_inventory_export(items)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return send_file(
+        file_stream,
+        as_attachment=True,
+        download_name=f"inventory_export_{timestamp}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+def _inventory_upload_bytes() -> bytes:
+    uploaded = request.files.get("file")
+    if not uploaded or not uploaded.filename:
+        raise ValueError("请选择库存 .xlsx 文件")
+    raw = uploaded.read(INVENTORY_MAX_UPLOAD_BYTES + 1)
+    if len(raw) > INVENTORY_MAX_UPLOAD_BYTES:
+        raise ValueError("导入文件不能超过 10 MB")
+    return raw
+
+
+@app.post("/api/admin/inventory/import/preview")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def preview_inventory_import() -> Any:
+    try:
+        raw = _inventory_upload_bytes()
+        payload = inventory_import_payload(raw)
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+    return jsonify(payload)
+
+
+@app.post("/api/admin/inventory/import/confirm")
+@require_auth
+@require_roles("admin", "sales", "warehouse")
+def confirm_inventory_import() -> Any:
+    try:
+        raw = _inventory_upload_bytes()
+        expected_hash = str(request.form.get("fileHash", "")).strip().lower()
+        actual_hash = hashlib.sha256(raw).hexdigest()
+        if not expected_hash or expected_hash != actual_hash:
+            return jsonify({"message": "导入文件与预览文件不一致，请重新预览"}), 409
+        payload = inventory_import_payload(raw)
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 400
+    if payload["errors"]:
+        return jsonify({"message": "导入文件存在错误，请修正后重新预览", **payload}), 400
+    try:
+        result = apply_inventory_import(payload["rows"])
+    except ValueError as error:
+        return jsonify({"message": str(error)}), 409
+    return jsonify({"message": "库存导入完成", **result, "fileHash": actual_hash})
 
 
 @app.put("/api/admin/inventory/<int:product_id>")
@@ -1813,8 +2208,11 @@ def update_inventory_route(product_id: int) -> Any:
     size_stocks = payload.get("sizeStocks")
     if not isinstance(size_stocks, dict) or not size_stocks:
         return jsonify({"message": "Missing field: sizeStocks"}), 400
+    contract_pending_by_size = payload.get("contractPendingBySize")
+    if contract_pending_by_size is not None and not isinstance(contract_pending_by_size, dict):
+        return jsonify({"message": "contractPendingBySize must be an object"}), 400
     try:
-        product = update_product_inventory(product_id, size_stocks)
+        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     if not product:
