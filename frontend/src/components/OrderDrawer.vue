@@ -161,6 +161,11 @@
         >查看此订单操作日志 →</RouterLink
       ></template
     ><template #footer
+      ><ElButton
+        v-if="['admin', 'sales'].includes(auth.userRole)"
+        :disabled="saving || !order"
+        @click="editDetails"
+        >修改订单资料</ElButton
       ><ElButton :disabled="saving" @click="exportInvoice"
         >导出订单详情</ElButton
       ><ElButton :disabled="saving" @click="close()">关闭</ElButton
@@ -192,7 +197,7 @@ import {
   confirm,
 } from "../composables/workbench";
 const props = defineProps({ open: Boolean, id: [Number, String] }),
-  emit = defineEmits(["update:open", "saved"]),
+  emit = defineEmits(["update:open", "saved", "edit"]),
   auth = useAdminAuthStore();
 const order = ref(),
   loading = ref(false),
@@ -301,6 +306,13 @@ async function readLatest() {
 }
 async function useLatest() {
   if (await confirm("放弃当前草稿，使用线上最新订单？")) populate(latest.value);
+}
+async function editDetails() {
+  if (await canLeave()) {
+    markClean();
+    emit("update:open", false);
+    emit("edit", props.id);
+  }
 }
 async function exportInvoice() {
   try {

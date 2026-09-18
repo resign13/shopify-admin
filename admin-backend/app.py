@@ -104,9 +104,10 @@ SERVICE_TOKEN = os.environ.get("LUMIERE_SERVICE_TOKEN", "lumiere-service-token")
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
 SUPPORTED_LANGS = {"zh", "en"}
 DEFAULT_LANG = "zh"
-ORDER_STATUSES = {"pending_payment", "paid", "shipped", "completed", "cancelled"}
+ORDER_STATUSES = {"pending_payment", "allocated", "paid", "shipped", "completed", "cancelled"}
 ORDER_STATUS_LABELS = {
     "pending_payment": "待付款",
+    "allocated": "已配货",
     "paid": "已付款",
     "shipped": "已发货",
     "completed": "已完成",
@@ -2698,7 +2699,8 @@ def update_order_route(order_id: int) -> Any:
     status = str(payload.get("status", "")).strip()
     tracking_no = str(payload.get("trackingNo", "")).strip()
     payment_link = str(payload.get("paymentLink", "")).strip()
-    shipping_fee = payload.get("shippingFee", 0)
+    from order_management import amount
+    shipping_fee = amount(payload.get("shippingFee", 0), "运费")
     if not status:
         return jsonify({"message": "Missing status"}), 400
     if status not in ORDER_STATUSES:
@@ -2780,6 +2782,35 @@ def serve_admin_spa(path: str) -> Any:
             return send_from_directory(ADMIN_FRONTEND_DIST, path)
         return send_from_directory(ADMIN_FRONTEND_DIST, "index.html")
     return jsonify({"message": "Admin frontend build not found"}), 404
+
+
+@app.get('/api/admin/orders/customers')
+@require_auth
+@require_roles('admin', 'sales')
+def order_customer_options():
+    page, size = workbench.paging(request.args)
+    keyword = '%' + request.args.get('keyword', '').strip() + '%'
+    params = (keyword,)
+    where = "status='active' AND concat_ws(' ',name,company_name,email) ILIKE %s"
+    total = workbench.db._fetch_one('SELECT COUNT(*) AS total FROM store_users WHERE '+where, params)['total']
+    rows = workbench.db._fetch_all('SELECT id,name,email,company_name AS "companyName" FROM store_users WHERE '+where+' ORDER BY id DESC LIMIT %s OFFSET %s', (*params,size,(page-1)*size))
+    return jsonify({'items':rows,'total':total,'page':page,'pageSize':size})
+
+
+@app.post('/api/admin/orders')
+@require_auth
+@require_roles('admin', 'sales')
+def create_admin_order():
+    from order_management import save_order
+    return jsonify(save_order(request.get_json(silent=True) or {}))
+
+
+@app.put('/api/admin/orders/<int:order_id>/details')
+@require_auth
+@require_roles('admin', 'sales')
+def edit_admin_order(order_id):
+    from order_management import save_order
+    return jsonify(save_order(request.get_json(silent=True) or {}, order_id))
 
 
 @app.get('/api/admin/catalog-options')

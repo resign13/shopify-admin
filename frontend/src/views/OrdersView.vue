@@ -3,8 +3,10 @@
     title="订单管理"
     description="跟进订单状态、付款与物流，保持业务进度清晰可见。"
     eyebrow="ORDERS / 订单业务"
+    ><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
+      >＋ 新增订单</ElButton
     ><ElDropdown @command="exportOrders"
-      ><ElButton type="primary" :loading="exporting">导出订单 ▾</ElButton
+      ><ElButton :loading="exporting">导出订单 ▾</ElButton
       ><template #dropdown
         ><ElDropdownMenu
           ><ElDropdownItem command="export"
@@ -120,19 +122,30 @@
         ></template
       ><template #createdAt="{ row }"
         ><small>{{ dateTime(row.createdAt) }}</small></template
+      ><template #actions="{ row }"
+        ><ElButton link type="primary" @click="editOrder(row.id)"
+          >修改订单</ElButton
+        ></template
       ></DataTable
     >
   </section>
-  <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" />
+  <OrderDrawer
+    v-model:open="detailOpen"
+    :id="detailId"
+    @saved="list.load"
+    @edit="editOrder"
+  />
+  <OrderEditor v-model:open="editorOpen" :id="editorId" @saved="orderSaved" />
 </template>
 <script setup>
-import { onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { useRoute } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
+import OrderEditor from "../components/OrderEditor.vue";
 import {
   api,
   save,
@@ -154,6 +167,22 @@ const auth = useAdminAuthStore(),
   detailId = ref(),
   exporting = ref(false),
   deleting = ref(false);
+const canEditDetails = computed(() =>
+    ["admin", "sales"].includes(auth.userRole),
+  ),
+  editorOpen = ref(false),
+  editorId = ref(null);
+function orderSaved(id) {
+  list.load();
+  if (!editorId.value && id) {
+    detailId.value = id;
+    detailOpen.value = true;
+  }
+}
+function editOrder(id = null) {
+  editorId.value = id;
+  editorOpen.value = true;
+}
 const filters = reactive({
     keyword: list.query.keyword || "",
     category: list.query.category || "",
@@ -177,6 +206,9 @@ const columns = [
   },
   { prop: "status", label: "状态", width: 85 },
   { prop: "createdAt", label: "下单时间", width: 145, sortable: true },
+  ...(canEditDetails.value
+    ? [{ prop: "actions", label: "操作", width: 75 }]
+    : []),
 ];
 watch(
   () => list.filterKey,

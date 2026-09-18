@@ -8,6 +8,7 @@ import { useAdminAuthStore } from "../stores/auth";
 
 export const statusNames = {
   pending_payment: "待付款",
+  allocated: "已配货",
   paid: "已付款",
   shipped: "已发货",
   completed: "已完成",

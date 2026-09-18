@@ -14,6 +14,10 @@ SHANGHAI = timezone(timedelta(hours=8))
 
 def migrate(cur):
     cur.execute("""
+        CREATE TABLE IF NOT EXISTS admin_order_requests (
+          request_id UUID PRIMARY KEY, actor_id BIGINT NOT NULL, payload_hash TEXT NOT NULL,
+          order_id BIGINT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
         CREATE TABLE IF NOT EXISTS inventory_receipts (
           request_id UUID PRIMARY KEY, actor_id BIGINT NOT NULL, product_id BIGINT NOT NULL,
           request_hash TEXT NOT NULL, result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
