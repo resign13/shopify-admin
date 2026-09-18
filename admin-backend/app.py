@@ -91,6 +91,8 @@ from db import (
     update_store_user,
 )
 
+import workbench
+
 app = Flask(__name__)
 CORS(app)
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -1141,7 +1143,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     return output
 
 
-INVENTORY_TEMPLATE_VERSION = "inventory-v1"
+INVENTORY_TEMPLATE_VERSION = "inventory-v2"
 INVENTORY_HEADERS = [
     "模板版本",
     "商品ID",
@@ -1155,6 +1157,8 @@ INVENTORY_HEADERS = [
     "原始库存",
     "原始合同未送",
     "导出指纹",
+    "待入库",
+    "原始待入库",
 ]
 INVENTORY_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 INVENTORY_MAX_ROWS = 20_000
@@ -1214,6 +1218,7 @@ def inventory_export_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "sizeCode": size_code,
                     "stock": int(size.get("stock") or 0),
                     "contractPending": int(size.get("contractPending") or 0),
+                    "pendingInbound": int(size.get("pendingInbound") or 0),
                 }
             )
     return rows
@@ -1246,19 +1251,21 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
                 row["stock"],
                 row["contractPending"],
                 f"{row['productId']}:{row['sizeCode']}",
+                row["pendingInbound"],
+                row["pendingInbound"],
             ]
         )
 
     widths = {"A": 16, "B": 12, "C": 36, "D": 22, "E": 16, "F": 20, "G": 14, "H": 14, "I": 14, "J": 14, "K": 18, "L": 24}
     for column, width in widths.items():
         worksheet.column_dimensions[column].width = width
-    for column in ("A", "J", "K", "L"):
+    for column in ("A", "J", "K", "L", "N"):
         worksheet.column_dimensions[column].hidden = True
     for row in worksheet.iter_rows():
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=cell.column in (3, 4, 5, 6))
     if worksheet.max_row > 1:
-        worksheet.auto_filter.ref = f"B1:I{worksheet.max_row}"
+        worksheet.auto_filter.ref = f"B1:M{worksheet.max_row}"
 
     output = BytesIO()
     workbook.save(output)
@@ -1286,6 +1293,8 @@ def _excel_quantity(cell: Any, label: str) -> int:
     raw = str(value).strip()
     if not re.fullmatch(r"\d+", raw):
         raise ValueError(f"{label}必须是非负整数")
+    if int(raw) > 2147483647:
+        raise ValueError(f"{label}超出允许范围")
     return int(raw)
 
 
@@ -1311,7 +1320,7 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
         if worksheet.max_row > INVENTORY_MAX_ROWS + 1:
             raise ValueError("数据行不能超过 20,000 行")
         header = [_excel_text(cell) for cell in next(worksheet.iter_rows(min_row=1, max_row=1, max_col=len(INVENTORY_HEADERS)))]
-        if header != INVENTORY_HEADERS:
+        if header != INVENTORY_HEADERS and header != INVENTORY_HEADERS[:12] + ["", ""]:
             raise ValueError("库存模板版本或列名不匹配，请使用库存页面导出的文件")
 
         lookup: dict[tuple[int, str], dict[str, Any]] = {}
@@ -1334,7 +1343,7 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
                     if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("=")):
                         raise ValueError("不支持公式，请填写固定值")
                 version = _excel_text(cells[0])
-                if version != INVENTORY_TEMPLATE_VERSION:
+                if version not in {"inventory-v1", INVENTORY_TEMPLATE_VERSION}:
                     raise ValueError("模板版本不匹配")
                 product_id_raw = _excel_text(cells[1])
                 if not re.fullmatch(r"\d+", product_id_raw) or int(product_id_raw) <= 0:
@@ -1372,8 +1381,13 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
                 original_pending = _excel_quantity(cells[10], "原始合同未送")
                 stock = _excel_quantity(cells[7], "当前库存")
                 contract_pending = _excel_quantity(cells[8], "合同未送")
+                inbound_fields = {}
+                if version == INVENTORY_TEMPLATE_VERSION:
+                    inbound_fields = {"pendingInbound": _excel_quantity(cells[12], "待入库"), "originalPendingInbound": _excel_quantity(cells[13], "原始待入库")}
                 parsed.append(
                     {
+                        **inbound_fields,
+                        "rowNumber": row_number,
                         "productId": product_id,
                         "title": title,
                         "sku": sku,
@@ -1398,11 +1412,23 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
 def inventory_import_payload(raw: bytes) -> dict[str, Any]:
     snapshot = list_products(include_contract_pending=True)
     parsed, errors = parse_inventory_workbook(raw, snapshot)
+    current = {(int(item['id']), str(size['sizeCode'])): size for item in snapshot for size in item.get('sizePrices', [])}
+    for index, row in enumerate(parsed, start=2):
+        size = current[(row['productId'], row['sizeCode'])]
+        effective = dict(size)
+        for field, original in [('stock','originalStock'),('contractPending','originalContractPending'),('pendingInbound','originalPendingInbound')]:
+            if field in row and row[field] != row[original]:
+                if size[field] not in (row[original], row[field]):
+                    errors.append({'row':row.get('rowNumber',index),'message':f"{row['sku']} / {row['sizeCode']}：{field} 已在线上变更"})
+                effective[field] = row[field]
+        if effective.get('pendingInbound',0) > effective['contractPending']:
+            errors.append({'row':row.get('rowNumber',index),'message':'待入库不能超过合同未送数量'})
     changed_rows = [
         row
         for row in parsed
         if row["stock"] != row["originalStock"]
         or row["contractPending"] != row["originalContractPending"]
+        or row.get("pendingInbound") != row.get("originalPendingInbound")
     ]
     return {
         "fileHash": hashlib.sha256(raw).hexdigest(),
@@ -1411,6 +1437,7 @@ def inventory_import_payload(raw: bytes) -> dict[str, Any]:
                 **row,
                 "stockChanged": row["stock"] != row["originalStock"],
                 "contractPendingChanged": row["contractPending"] != row["originalContractPending"],
+                "pendingInboundChanged": row.get("pendingInbound") != row.get("originalPendingInbound"),
             }
             for row in parsed
         ],
@@ -1421,6 +1448,7 @@ def inventory_import_payload(raw: bytes) -> dict[str, Any]:
             "changedFieldCount": sum(
                 int(row["stock"] != row["originalStock"])
                 + int(row["contractPending"] != row["originalContractPending"])
+                + int(row.get("pendingInbound") != row.get("originalPendingInbound"))
                 for row in changed_rows
             ),
             "productCount": len({int(row["productId"]) for row in parsed}),
@@ -1549,6 +1577,10 @@ def require_roles(*roles: str) -> Callable[[F], F]:
             current_role = str(g.current_user.get("role", "admin")).strip().lower()
             if current_role not in allowed_roles:
                 return jsonify({"message": "Forbidden"}), 403
+            if request.path.startswith('/api/admin/') and request.method in {'POST', 'PUT', 'DELETE', 'PATCH'} and not request.path.endswith(('/uploads', '/preview')):
+                return workbench.atomic_admin_call(func, args, kwargs)
+            if request.method == "GET":
+                return workbench.snapshot_admin_call(func, args, kwargs)
             return func(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]
@@ -1684,7 +1716,7 @@ def validate_homepage_config_payload(payload: dict[str, Any]) -> str | None:
     if len(display_category_keys) > 5:
         return "Display categories cannot exceed 5"
 
-    valid_product_ids = {int(item["id"]) for item in list_products()}
+    valid_product_ids = {row["id"] for row in workbench.db._fetch_all("SELECT id FROM products WHERE is_active=TRUE")}
     valid_category_keys = {str(item["key"]) for item in list_categories()}
 
     for key in HOME_SECTION_KEYS:
@@ -1909,8 +1941,7 @@ def admin_login() -> Any:
     email = str(payload.get("email", "")).strip().lower()
     password = str(payload.get("password", "")).strip()
     user = get_admin_user_by_email(email, include_password_hash=True)
-    is_demo_login = email == "admin@lumiere.com" and password == "admin123"
-    password_ok = is_demo_login or (user is not None and check_password_hash(user["passwordHash"], password))
+    password_ok = user is not None and check_password_hash(user["passwordHash"], password)
     if not user or user["status"] != "active" or not password_ok:
         return jsonify({"message": "Invalid email or password"}), 401
     token = create_admin_session(user["id"])
@@ -1972,8 +2003,7 @@ def service_auth_store_user() -> Any:
     email = str(payload.get("email", "")).strip().lower()
     password = str(payload.get("password", "")).strip()
     user = get_store_user_by_email(email, include_password_hash=True)
-    is_demo_login = email == "buyer@lumiere.com" and password == "buyer123"
-    password_ok = is_demo_login or (user is not None and check_password_hash(user["passwordHash"], password))
+    password_ok = user is not None and check_password_hash(user["passwordHash"], password)
     if not user or user["status"] != "active" or not password_ok:
         return jsonify({"message": "Invalid email or password"}), 401
     return jsonify({"user": sanitize_store_user(user)})
@@ -1998,6 +2028,8 @@ def service_get_orders() -> Any:
         except ValueError:
             return jsonify({"message": "Invalid userId"}), 400
         return jsonify({"items": list_orders(user_id=target_user_id)})
+    if 'page' in request.args:
+        return jsonify(workbench.orders_page(request.args))
     return jsonify({"items": list_orders()})
 
 
@@ -2044,6 +2076,8 @@ def service_create_order() -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def dashboard() -> Any:
+    if request.args.get('view') == 'workbench':
+        return jsonify(workbench.dashboard(request.args))
     hero_count = len(
         [item for item in get_homepage_config().get("heroBanners", {}).values() if str(item or "").strip()]
     )
@@ -2086,6 +2120,8 @@ def dashboard() -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def products() -> Any:
+    if 'page' in request.args:
+        return jsonify(workbench.products_page(request.args))
     return jsonify({"items": list_products()})
 
 
@@ -2094,6 +2130,8 @@ def products() -> Any:
 @require_roles("admin", "sales", "warehouse", "customer")
 def inventory_products() -> Any:
     include_contract_pending = str(g.current_user.get("role") or "").lower() != "customer"
+    if 'page' in request.args:
+        return jsonify(workbench.products_page(request.args, pending=include_contract_pending))
     return jsonify({"items": list_products(include_contract_pending=include_contract_pending)})
 
 
@@ -2103,7 +2141,8 @@ def inventory_products() -> Any:
 def export_inventory() -> Any:
     category = str(request.args.get("category", "")).strip()
     keyword = str(request.args.get("keyword", "")).strip()
-    items = filter_inventory_items(list_products(include_contract_pending=True), category=category, keyword=keyword)
+    items = (workbench.products_for_export(request.args) if request.args.get('view') == 'workbench'
+             else filter_inventory_items(list_products(include_contract_pending=True), category=category, keyword=keyword))
     file_stream = build_inventory_export(items)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(
@@ -2146,6 +2185,10 @@ def confirm_inventory_import() -> Any:
         actual_hash = hashlib.sha256(raw).hexdigest()
         if not expected_hash or expected_hash != actual_hash:
             return jsonify({"message": "导入文件与预览文件不一致，请重新预览"}), 409
+        workbench.db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (actual_hash,))
+        processed = workbench.db._fetch_one('SELECT result FROM inventory_import_receipts WHERE file_hash=%s', (actual_hash,))
+        if processed:
+            return jsonify({'message':'此文件已经导入，不会重复修改','updatedProducts':0,'updatedRows':0,'updatedFields':0,'fileHash':actual_hash,'alreadyProcessed':True})
         payload = inventory_import_payload(raw)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
@@ -2153,6 +2196,7 @@ def confirm_inventory_import() -> Any:
         return jsonify({"message": "导入文件存在错误，请修正后重新预览", **payload}), 400
     try:
         result = apply_inventory_import(payload["rows"])
+        workbench.db._fetch_one('INSERT INTO inventory_import_receipts(file_hash,result) VALUES(%s,%s) RETURNING file_hash',(actual_hash,workbench.Jsonb(result)))
     except ValueError as error:
         return jsonify({"message": str(error)}), 409
     return jsonify({"message": "库存导入完成", **result, "fileHash": actual_hash})
@@ -2164,13 +2208,16 @@ def confirm_inventory_import() -> Any:
 def update_inventory_route(product_id: int) -> Any:
     payload = request.get_json(silent=True) or {}
     size_stocks = payload.get("sizeStocks")
-    if not isinstance(size_stocks, dict) or not size_stocks:
+    if not isinstance(size_stocks, dict) or (not size_stocks and not payload.get("contractPendingBySize") and not payload.get("pendingInboundBySize")):
         return jsonify({"message": "Missing field: sizeStocks"}), 400
     contract_pending_by_size = payload.get("contractPendingBySize")
     if contract_pending_by_size is not None and not isinstance(contract_pending_by_size, dict):
         return jsonify({"message": "contractPendingBySize must be an object"}), 400
     try:
-        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size)
+        inbound = payload.get('pendingInboundBySize')
+        if inbound is not None and not isinstance(inbound, dict):
+            raise ValueError('pendingInboundBySize must be an object')
+        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size, inbound)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     if not product:
@@ -2360,7 +2407,7 @@ def delete_banner_route(banner_id: int) -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def get_home_config_route() -> Any:
-    return jsonify({"config": get_homepage_config()})
+    return jsonify({"config": {**get_homepage_config(), "version": workbench.version("homepage_configs", 1)}})
 
 
 @app.put("/api/admin/home-config")
@@ -2372,13 +2419,15 @@ def update_home_config_route() -> Any:
     if error:
         return jsonify({"message": error}), 400
     config = save_homepage_config(payload)
-    return jsonify({"message": "Home config updated", "config": config})
+    return jsonify({"message": "Home config updated", "config": {**config, "version": workbench.version("homepage_configs", 1)}})
 
 
 @app.get("/api/admin/store-users")
 @require_auth
 @require_roles("admin")
 def store_users() -> Any:
+    if 'page' in request.args:
+        return jsonify(workbench.users_page(request.args))
     return jsonify({"items": [sanitize_store_user(item) for item in list_store_users(include_password_hash=False)]})
 
 
@@ -2450,6 +2499,8 @@ def delete_store_user_route(user_id: int) -> Any:
 @require_auth
 @require_roles("admin")
 def admin_users() -> Any:
+    if 'page' in request.args:
+        return jsonify(workbench.users_page(request.args, admin=True))
     return jsonify({"items": [sanitize_admin_user(item) for item in list_admin_users(include_password_hash=False)]})
 
 
@@ -2547,6 +2598,8 @@ def delete_admin_user_route(user_id: int) -> Any:
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def orders() -> Any:
+    if 'page' in request.args:
+        return jsonify(workbench.orders_page(request.args))
     return jsonify({"items": list_orders()})
 
 
@@ -2565,13 +2618,11 @@ def export_orders() -> Any:
         for item in order_ids_raw.split(",")
         if str(item).strip().isdigit()
     }
-    orders = filter_orders(
-        list_orders(),
-        time_range=time_range,
-        status=status,
-        category=category,
-        keyword=keyword,
-    )
+    if request.args.get('view') == 'workbench':
+        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args))
+    else:
+        orders = filter_orders(list_orders(), time_range=time_range, status=status,
+                               category=category, keyword=keyword)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     file_stream = build_orders_export(orders, include_images=include_images)
@@ -2599,13 +2650,11 @@ def export_orders_by_sheet() -> Any:
         for item in order_ids_raw.split(",")
         if str(item).strip().isdigit()
     }
-    orders = filter_orders(
-        list_orders(),
-        time_range=time_range,
-        status=status,
-        category=category,
-        keyword=keyword,
-    )
+    if request.args.get('view') == 'workbench':
+        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args))
+    else:
+        orders = filter_orders(list_orders(), time_range=time_range, status=status,
+                               category=category, keyword=keyword)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     file_stream = build_orders_sheet_export(orders, include_images=include_images)
@@ -2731,6 +2780,134 @@ def serve_admin_spa(path: str) -> Any:
             return send_from_directory(ADMIN_FRONTEND_DIST, path)
         return send_from_directory(ADMIN_FRONTEND_DIST, "index.html")
     return jsonify({"message": "Admin frontend build not found"}), 404
+
+
+@app.get('/api/admin/catalog-options')
+@require_auth
+@require_roles('admin','sales','warehouse','customer')
+def catalog_options_route():
+    return jsonify({'items': [{'key': c['key'], 'labels': c['labels']} for c in list_categories()]})
+
+
+@app.post('/api/admin/inventory/<int:product_id>/receive')
+@require_auth
+@require_roles('admin','sales','warehouse')
+def receive_inventory_route(product_id):
+    return jsonify(workbench.receive_inventory(product_id, request.get_json() or {}))
+
+
+@app.errorhandler(ValueError)
+def invalid_workbench_input(error):
+    return jsonify({"message": str(error)}), 400
+
+
+@app.get('/api/admin/products/<int:product_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def product_detail_route(product_id):
+    item = workbench.product_detail(product_id)
+    return (jsonify({'product': item}) if item else (jsonify({'message': '商品不存在'}), 404))
+
+
+@app.get('/api/admin/products/<int:product_id>/family')
+@require_auth
+@require_roles('admin', 'sales')
+def product_family_route(product_id):
+    item = workbench.product_detail(product_id)
+    if not item:
+        return jsonify({'message': '商品不存在'}), 404
+    ids = workbench.db._fetch_all("SELECT id FROM products WHERE is_active=TRUE AND (id=%s OR (color_group<>'' AND color_group=%s)) ORDER BY id", (product_id, item['colorGroup']))
+    return jsonify({'items': [workbench.product_detail(row['id']) for row in ids]})
+
+
+@app.post('/api/admin/products/save-group')
+@require_auth
+@require_roles('admin', 'sales')
+def save_product_group():
+    body = request.get_json() or {}
+    rows = body.get('products')
+    if not isinstance(rows, list) or not 1 <= len(rows) <= 100:
+        raise ValueError('请提交 1–100 个颜色商品')
+    versions = body.get('versions') or {}
+    existing_ids = [int(row['id']) for row in rows if row.get('id')]
+    if len(existing_ids) != len(set(existing_ids)):
+        raise ValueError('同一商品不能重复提交')
+    saved = []
+    for payload in rows:
+        error = validate_product_payload(payload)
+        if error:
+            raise ValueError(error)
+        product_id = payload.get('id')
+        if product_id and str(product_id) not in versions:
+            raise ValueError('缺少商品版本，请重新读取商品')
+        for field, check in [('slug', product_slug_exists), ('sku', product_sku_exists), ('productCode', product_code_exists)]:
+            if check(str(payload[field]).strip(), exclude_id=product_id):
+                raise ValueError(f"商品编码重复：{payload[field]}")
+        product = update_product(int(product_id), payload) if product_id else create_product(payload)
+        if not product:
+            raise ValueError('商品不存在')
+        saved.append(product)
+    return jsonify({'items': saved})
+
+
+@app.post('/api/admin/products/batch')
+@require_auth
+@require_roles('admin', 'sales')
+def batch_products_route():
+    body = request.get_json() or {}
+    ids = sorted(set(int(value) for value in body.get('ids', [])))
+    if not ids or len(ids) > 500:
+        raise ValueError('请选择 1–500 个商品')
+    if any(str(value) not in (body.get('versions') or {}) for value in ids):
+        raise ValueError('缺少商品版本，请重新选择商品')
+    rows = workbench.db._fetch_all('SELECT id FROM products WHERE is_active=TRUE AND id=ANY(%s) ORDER BY id FOR UPDATE', (ids,))
+    if len(rows) != len(ids):
+        raise ValueError('选择的商品包含已删除记录')
+    assignments, params = [], []
+    if body.get('categoryKey'):
+        category = workbench.db._fetch_one('SELECT id FROM product_categories WHERE category_key=%s AND is_active=TRUE', (body['categoryKey'],))
+        if not category: raise ValueError('分类不存在')
+        assignments.append('category_id=%s'); params.append(category['id'])
+    if 'featured' in body:
+        if not isinstance(body['featured'], bool): raise ValueError('推荐状态无效')
+        assignments.append('featured=%s'); params.append(body['featured'])
+    if not assignments: raise ValueError('请选择要修改的字段')
+    workbench.db._fetch_all('UPDATE products SET '+','.join(assignments)+',updated_at=NOW() WHERE id=ANY(%s) RETURNING id', tuple([*params, ids]))
+    return jsonify({'updatedCount': len(ids)})
+
+
+@app.get('/api/admin/inventory/<int:product_id>')
+@require_auth
+@require_roles('admin', 'sales', 'warehouse', 'customer')
+def inventory_detail_route(product_id):
+    item = workbench.product_detail(product_id, pending=g.current_user.get('role') != 'customer')
+    return jsonify({'product': item}) if item else (jsonify({'message': '商品不存在'}),404)
+
+
+@app.get('/api/admin/orders/<int:order_id>')
+@require_auth
+@require_roles('admin', 'sales', 'warehouse')
+def order_detail_route(order_id):
+    item = get_order_by_id(order_id)
+    if not item: return jsonify({'message':'订单不存在'}),404
+    item['version'] = workbench.version('orders', order_id)
+    item['goodsAmount'] = round(sum(float(row['totalPrice']) for row in item['items']),2)
+    return jsonify({'order': item})
+
+
+@app.get('/api/admin/audit-logs')
+@require_auth
+@require_roles('admin')
+def audit_logs_route():
+    return jsonify(workbench.audit_page(request.args))
+
+
+@app.get('/api/admin/audit-logs/<int:log_id>')
+@require_auth
+@require_roles('admin')
+def audit_detail_route(log_id):
+    row = workbench.db._fetch_one('SELECT * FROM admin_audit_logs WHERE id=%s',(log_id,))
+    return jsonify({'item':workbench.serialize_audit(row)}) if row else (jsonify({'message':'记录不存在'}),404)
 
 
 ensure_database_ready()
