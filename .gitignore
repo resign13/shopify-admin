@@ -13,3 +13,5 @@ admin-backend/.env
 admin-backend/_vendor/
 admin-backend/uploads/
 admin-backend/__pycache__/
+
+admin-backend/data/image-cache/

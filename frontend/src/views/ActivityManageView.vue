@@ -125,7 +125,7 @@
             </label>
 
             <div class="product-item-cover">
-              <img :src="item.image" :alt="item.name?.zh || item.productCode || item.sku" />
+              <ProductImage :src="item.image" :alt="item.name?.zh || item.productCode || item.sku" />
             </div>
 
             <div class="product-item-copy">
@@ -185,6 +185,7 @@
 </template>
 
 <script setup>
+import ProductImage from '../components/ProductImage.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 

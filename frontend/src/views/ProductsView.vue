@@ -47,7 +47,7 @@
           <article v-for="item in paginatedProducts" :key="item.id" class="product-item-card">
             <div class="product-item-main">
               <div class="product-item-cover">
-                <img :src="item.image" :alt="item.name?.zh || item.productCode" />
+                <ProductImage :src="item.image" :alt="item.name?.zh || item.productCode" />
               </div>
 
               <div class="product-item-copy">
@@ -100,6 +100,7 @@
 </template>
 
 <script setup>
+import ProductImage from '../components/ProductImage.vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 

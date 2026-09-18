@@ -91,7 +91,7 @@
                 <td class="product-cell">
                   <div class="product-info">
                     <div class="inventory-thumb" :class="{ empty: !item.image }">
-                      <img v-if="item.image" :src="item.image" :alt="displayName(item)" />
+                      <ProductImage v-if="item.image" :src="item.image" :alt="displayName(item)" />
                       <span v-else>暂无图片</span>
                     </div>
                     <div class="product-copy">
@@ -238,6 +238,7 @@
 </template>
 
 <script setup>
+import ProductImage from '../components/ProductImage.vue'
 import { computed, onMounted, ref } from 'vue'
 
 import AdminLayout from '../components/AdminLayout.vue'

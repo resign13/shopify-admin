@@ -211,7 +211,7 @@
             >
               <div class="order-item-main">
                 <div v-if="item.image" class="order-item-image">
-                  <img :src="item.image" :alt="item.productName" />
+                  <ProductImage :src="item.image" :alt="item.productName" />
                 </div>
 
                 <div class="order-item-copy">
@@ -286,6 +286,7 @@
 </template>
 
 <script setup>
+import ProductImage from '../components/ProductImage.vue'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 
 import AdminLayout from '../components/AdminLayout.vue'

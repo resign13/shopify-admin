@@ -25,10 +25,6 @@ if LOCAL_VENDOR_DIR.exists():
 
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
-try:
-    import boto3
-except ImportError:
-    boto3 = None
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -1877,46 +1873,8 @@ def admin_frontend_ready() -> bool:
 
 @app.get("/uploads/<path:filename>")
 def serve_upload(filename: str) -> Any:
-    from werkzeug.exceptions import NotFound
-
-    try:
-        return send_from_directory(UPLOAD_DIR, filename)
-    except NotFound:
-        pass
-
-    account_id = os.environ.get("R2_ACCOUNT_ID", "").strip()
-    access_key = os.environ.get("R2_ACCESS_KEY_ID", "").strip()
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY", "").strip()
-    bucket = os.environ.get("R2_BUCKET", "").strip()
-    if not (boto3 and account_id and access_key and secret_key and bucket):
-        app.logger.error("Local image missing and R2 storage is not configured")
-        return jsonify({"message": "Image storage temporarily unavailable"}), 503
-
-    client = boto3.client(
-        "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name="auto",
-    )
-    try:
-        obj = client.get_object(Bucket=bucket, Key=filename)
-        body = obj["Body"]
-        try:
-            content = body.read()
-        finally:
-            body.close()
-    except client.exceptions.NoSuchKey:
-        return jsonify({"message": "Not found"}), 404
-    except Exception:
-        app.logger.exception("R2 image retrieval failed")
-        return jsonify({"message": "Image storage temporarily unavailable"}), 503
-
-    return send_file(
-        BytesIO(content),
-        mimetype=obj.get("ContentType") or mimetypes.guess_type(filename)[0] or "application/octet-stream",
-        download_name=Path(filename).name,
-    )
+    from image_delivery import deliver_image
+    return deliver_image(UPLOAD_DIR, BASE_DIR / "data" / "image-cache", filename, app.logger)
 
 
 @app.post("/api/admin/uploads")
