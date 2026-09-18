@@ -312,7 +312,7 @@ async function applyBatch() {
 }
 onMounted(async () => {
   try {
-    categories.value = (await api("categories")).items;
+    categories.value = (await api("catalog-options")).items;
   } catch (e) {
     notifyError(e);
   }

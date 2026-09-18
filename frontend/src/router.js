@@ -1,3 +1,4 @@
+import { routeModule } from "./permissions";
 import { createRouter, createWebHistory } from "vue-router";
 import { pinia } from "./stores";
 import { useAdminAuthStore } from "./stores/auth";
@@ -41,10 +42,15 @@ const router = createRouter({
       meta: { requiresAuth: true },
       children: [
         { path: "", redirect: "/dashboard" },
+        {
+          path: "no-access",
+          component: () => import("./views/NoAccessView.vue"),
+          meta: { title: "模块权限" },
+        },
         ...definitions.map(([path, view, title, roles]) => ({
           path,
           component: views[`./views/${view}.vue`],
-          meta: { title, roles, requiresAuth: true },
+          meta: { title, roles, module: routeModule(path), requiresAuth: true },
         })),
         { path: "accounts", redirect: "/store-accounts" },
         { path: "activity-zone", redirect: "/activity-zone/apply" },
@@ -58,8 +64,7 @@ router.beforeEach(async (to) => {
   if (!auth.initialized) await auth.initialize();
   if (to.meta.requiresAuth && !auth.isAuthenticated) return "/login";
   if (to.path === "/login" && auth.isAuthenticated) return auth.defaultRoute;
-  if (to.meta.roles && !to.meta.roles.includes(auth.userRole))
-    return auth.defaultRoute;
+  if (to.meta.module && !auth.can(to.meta.module)) return auth.defaultRoute;
   document.title = `${to.meta.title || "登录"} · GINGTTO`;
 });
 export default router;

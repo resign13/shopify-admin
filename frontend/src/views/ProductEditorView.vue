@@ -314,7 +314,7 @@ async function load() {
   loading.value = true;
   loadError.value = "";
   try {
-    categories.value = (await api("categories")).items;
+    categories.value = (await api("catalog-options")).items;
     if (editing.value)
       populate((await api(`products/${route.params.id}/family`)).items);
     else {

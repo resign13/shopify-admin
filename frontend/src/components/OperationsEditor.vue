@@ -350,8 +350,8 @@ async function load() {
   loadError.value = "";
   try {
     const [config, cats] = await Promise.all([
-      api("home-config"),
-      api("categories"),
+      api(isHome.value ? "home-config" : "activity-config"),
+      api("catalog-options"),
     ]);
     categories.value = cats.items;
     populate(config.config);
@@ -460,7 +460,15 @@ async function submit() {
   }
   saving.value = true;
   try {
-    const result = await save("home-config", form);
+    const result = await save(
+      isHome.value ? "home-config" : "activity-config",
+      isHome.value
+        ? form
+        : {
+            collectionProductIds: form.collectionProductIds,
+            version: form.version,
+          },
+    );
     populate(result.config);
     ElMessage.success("配置已保存");
   } catch (e) {
@@ -472,7 +480,9 @@ async function submit() {
 }
 async function readLatest() {
   try {
-    latest.value = (await api("home-config")).config;
+    latest.value = (
+      await api(isHome.value ? "home-config" : "activity-config")
+    ).config;
   } catch (e) {
     notifyError(e);
   }

@@ -60,6 +60,7 @@
   </div>
 </template>
 <script setup>
+import { routeModule } from "../permissions";
 import { computed, onBeforeUnmount, ref } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
@@ -133,7 +134,7 @@ const groups = computed(() =>
     .map((group) => ({
       ...group,
       items: group.items
-        .filter((i) => i[3].split(",").includes(auth.userRole))
+        .filter((i) => auth.can(routeModule(i[0])))
         .map(([to, label, icon]) => ({ to, label, icon })),
     }))
     .filter((g) => g.items.length),

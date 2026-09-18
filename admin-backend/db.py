@@ -173,6 +173,7 @@ def _apply_schema_migrations(cur: Any) -> None:
     from workbench import migrate
     for column in ('product_code', 'color_group', 'color_name', 'color_hex'):
         cur.execute(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} VARCHAR(160) NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS permissions JSONB")
     # Workbench migration runs after the legacy schema below is ready.
     cur.execute("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(32) NOT NULL DEFAULT 'admin'")
     cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS size_chart_image_url TEXT")
@@ -1797,6 +1798,8 @@ def _build_user_dict(row: dict[str, Any], *, include_password_hash: bool, compan
     }
     if "role" in row:
         item["role"] = row["role"] or "admin"
+        from module_permissions import effective
+        item["permissions"] = effective({"role": item["role"], "permissions": row.get("permissions")})
     if include_password_hash:
         item["passwordHash"] = row["password_hash"]
     if company_name:
@@ -1806,14 +1809,14 @@ def _build_user_dict(row: dict[str, Any], *, include_password_hash: bool, compan
 
 def list_admin_users(*, include_password_hash: bool = True) -> list[dict[str, Any]]:
     rows = _fetch_all(
-        "SELECT id, name, email, password_hash, role, status, created_at FROM admin_users ORDER BY id"
+        "SELECT id, name, email, password_hash, role, permissions, status, created_at FROM admin_users ORDER BY id"
     )
     return [_build_user_dict(row, include_password_hash=include_password_hash, company_name=False) for row in rows]
 
 
 def get_admin_user_by_id(user_id: int, *, include_password_hash: bool = True) -> dict[str, Any] | None:
     row = _fetch_one(
-        "SELECT id, name, email, password_hash, role, status, created_at FROM admin_users WHERE id = %s",
+        "SELECT id, name, email, password_hash, role, permissions, status, created_at FROM admin_users WHERE id = %s",
         (user_id,),
     )
     return _build_user_dict(row, include_password_hash=include_password_hash, company_name=False) if row else None
@@ -1821,7 +1824,7 @@ def get_admin_user_by_id(user_id: int, *, include_password_hash: bool = True) ->
 
 def get_admin_user_by_email(email: str, *, include_password_hash: bool = True) -> dict[str, Any] | None:
     row = _fetch_one(
-        "SELECT id, name, email, password_hash, role, status, created_at FROM admin_users WHERE LOWER(email) = LOWER(%s)",
+        "SELECT id, name, email, password_hash, role, permissions, status, created_at FROM admin_users WHERE LOWER(email) = LOWER(%s)",
         (email,),
     )
     return _build_user_dict(row, include_password_hash=include_password_hash, company_name=False) if row else None
@@ -1846,8 +1849,8 @@ def count_active_admin_users(role: str | None = None) -> int:
 def create_admin_user(payload: dict[str, Any]) -> dict[str, Any]:
     row = _fetch_one(
         """
-        INSERT INTO admin_users (name, email, password_hash, role, status, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+        INSERT INTO admin_users (name, email, password_hash, role, status, permissions, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s::jsonb, NOW(), NOW())
         RETURNING id
         """,
         (
@@ -1856,6 +1859,7 @@ def create_admin_user(payload: dict[str, Any]) -> dict[str, Any]:
             payload["passwordHash"],
             payload.get("role", "admin"),
             payload.get("status", "active"),
+            json.dumps(payload["permissions"]) if "permissions" in payload else None,
         ),
     )
     return get_admin_user_by_id(int(row["id"]), include_password_hash=True)  # type: ignore[arg-type]
@@ -1872,6 +1876,9 @@ def update_admin_user(user_id: int, payload: dict[str, Any]) -> dict[str, Any] |
             if payload.get("passwordHash"):
                 fields.insert(4, "password_hash = %s")
                 params.append(payload["passwordHash"])
+            if "permissions" in payload:
+                fields.append("permissions = %s::jsonb")
+                params.append(json.dumps(payload["permissions"]))
             params.append(user_id)
             cur.execute(f"UPDATE admin_users SET {', '.join(fields)} WHERE id = %s", tuple(params))
         conn.commit()
@@ -1989,7 +1996,7 @@ def create_admin_session(user_id: int) -> str:
 def get_admin_user_by_session_token(token: str) -> dict[str, Any] | None:
     row = _fetch_one(
         """
-        SELECT au.id, au.name, au.email, au.password_hash, au.role, au.status, au.created_at
+        SELECT au.id, au.name, au.email, au.password_hash, au.role, au.permissions, au.status, au.created_at
         FROM admin_sessions s
         JOIN admin_users au ON au.id = s.admin_user_id
         WHERE s.token = %s AND au.status = 'active'

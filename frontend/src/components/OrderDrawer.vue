@@ -12,7 +12,7 @@
         </div>
         <div class="detail-grid">
           <div>
-            <span>客户 / 公司</span>
+            <span>业务员</span>
             <p>{{ order.userName }} / {{ order.companyName || "—" }}</p>
           </div>
           <div>
@@ -152,7 +152,7 @@
         <ElButton @click="useLatest">放弃草稿并使用最新数据</ElButton>
       </div>
       <RouterLink
-        v-if="auth.userRole === 'admin'"
+        v-if="auth.can('audit-logs')"
         :to="{
           path: '/audit-logs',
           query: { module: 'orders', objectId: order.id },

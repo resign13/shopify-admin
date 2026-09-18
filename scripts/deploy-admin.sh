@@ -29,7 +29,7 @@ rsync -a --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --e
 rsync -a "$stage/scripts/" "$root/scripts/"
 rsync -a "$stage/db/" "$root/db/"
 cd "$root/$backend"
-.venv/bin/python -m py_compile app.py db.py workbench.py image_delivery.py order_management.py
+.venv/bin/python -m py_compile app.py db.py workbench.py image_delivery.py order_management.py module_permissions.py
 .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt gunicorn
 # Existing initialization applies additive migrations; data is never re-seeded.
 .venv/bin/python -c 'import app'

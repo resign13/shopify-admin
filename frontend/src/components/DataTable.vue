@@ -2,10 +2,7 @@
   <div ref="container" class="data-toolbar">
     <span>{{ total }} 条记录</span>
     <div>
-      <slot name="toolbar" /><ElRadioGroup v-model="density" size="small"
-        ><ElRadioButton value="small">紧凑</ElRadioButton
-        ><ElRadioButton value="default">舒适</ElRadioButton></ElRadioGroup
-      ><ElPopover trigger="click" width="200"
+      <slot name="toolbar" /><ElPopover trigger="click" width="200"
         ><template #reference><ElButton>显示列</ElButton></template
         ><ElCheckboxGroup v-model="visible"
           ><ElCheckbox
@@ -26,7 +23,7 @@
     v-loading="loading"
     :data="rows"
     row-key="id"
-    :size="density"
+    size="small"
     empty-text="暂无符合条件的数据"
     @sort-change="$emit('sort-change', $event)"
     @selection-change="$emit('selection-change', $event)"
@@ -91,8 +88,7 @@ let settings = {};
 try {
   settings = JSON.parse(localStorage.getItem(key) || "{}");
 } catch {}
-const density = ref(settings.density || "small"),
-  visible = ref(settings.visible || props.columns.map((c) => c.prop)),
+const visible = ref(settings.visible || props.columns.map((c) => c.prop)),
   table = ref();
 const container = ref(),
   available = ref(1200);
@@ -117,13 +113,10 @@ const shown = computed(() =>
   props.columns.filter((c) => visible.value.includes(c.prop)),
 );
 watch(
-  [density, visible],
+  visible,
   () => {
     try {
-      localStorage.setItem(
-        key,
-        JSON.stringify({ density: density.value, visible: visible.value }),
-      );
+      localStorage.setItem(key, JSON.stringify({ visible: visible.value }));
     } catch {}
   },
   { deep: true },

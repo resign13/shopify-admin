@@ -76,7 +76,7 @@ def version(table, object_id):
 
 def check_versions(payload):
     path = request.path.split('/')
-    module = path[3]
+    module = 'home-config' if path[3] == 'activity-config' else path[3]
     if module not in {'products', 'inventory', 'orders', 'home-config'}:
         return
     table = {'products': 'products', 'inventory': 'products', 'orders': 'orders', 'home-config': 'homepage_configs'}[module]
@@ -297,7 +297,7 @@ def users_page(args, admin=False):
     total = db._fetch_one(f'SELECT COUNT(*) AS total FROM {table} WHERE {clause}', tuple(params))['total']
     sort = {'name':'name', 'createdAt':'created_at', 'id':'id'}.get(args.get('sort'), 'id')
     direction = 'ASC' if args.get('direction') == 'asc' else 'DESC'
-    fields = 'id,name,email,status,created_at,' + ('role' if admin else 'company_name')
+    fields = 'id,name,email,status,created_at,' + ('role,permissions' if admin else 'company_name')
     rows = db._fetch_all(f'SELECT {fields} FROM {table} WHERE {clause} ORDER BY {sort} {direction},id LIMIT %s OFFSET %s', tuple([*params,size,(page-1)*size]))
     items = [db._build_user_dict(row, include_password_hash=False, company_name=not admin) for row in rows]
     return {'items':items,'total':total,'page':page,'pageSize':size}

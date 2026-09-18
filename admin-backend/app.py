@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import module_permissions
+
 import os
 import re
 import hashlib
@@ -1533,6 +1535,7 @@ def sanitize_admin_user(user: dict[str, Any]) -> dict[str, Any]:
         "name": user["name"],
         "email": user["email"],
         "role": user.get("role", "admin"),
+        "permissions": module_permissions.effective(user),
         "status": user["status"],
         "createdAt": user["createdAt"],
     }
@@ -1576,7 +1579,7 @@ def require_roles(*roles: str) -> Callable[[F], F]:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             current_role = str(g.current_user.get("role", "admin")).strip().lower()
-            if current_role not in allowed_roles:
+            if current_role not in allowed_roles or not module_permissions.allows_request(g.current_user, request.path, request.method):
                 return jsonify({"message": "Forbidden"}), 403
             if request.path.startswith('/api/admin/') and request.method in {'POST', 'PUT', 'DELETE', 'PATCH'} and not request.path.endswith(('/uploads', '/preview')):
                 return workbench.atomic_admin_call(func, args, kwargs)
@@ -2404,6 +2407,7 @@ def delete_banner_route(banner_id: int) -> Any:
     return jsonify({"message": "Banner deleted"})
 
 
+@app.get("/api/admin/activity-config")
 @app.get("/api/admin/home-config")
 @require_auth
 @require_roles("admin", "sales")
@@ -2411,11 +2415,19 @@ def get_home_config_route() -> Any:
     return jsonify({"config": {**get_homepage_config(), "version": workbench.version("homepage_configs", 1)}})
 
 
+@app.put("/api/admin/activity-config")
 @app.put("/api/admin/home-config")
 @require_auth
 @require_roles("admin", "sales")
 def update_home_config_route() -> Any:
     payload = request.get_json(silent=True) or {}
+    if request.path.endswith("/activity-config"):
+        if set(payload) - {"collectionProductIds", "version"}:
+            return jsonify({"message": "活动接口仅支持修改活动商品"}), 400
+        payload = {**get_homepage_config(), **payload}
+    elif not set(module_permissions.effective(g.current_user)) & {'activity-zone/apply', 'activity-zone/manage'}:
+        if payload.get('collectionProductIds') != get_homepage_config()['collectionProductIds']:
+            return jsonify({'message': '未分配活动模块权限，不能修改活动商品'}), 403
     error = validate_homepage_config_payload(payload)
     if error:
         return jsonify({"message": error}), 400
@@ -2519,6 +2531,7 @@ def create_admin_user_route() -> Any:
         return jsonify({"message": "Admin account email already exists"}), 400
     try:
         role = normalize_admin_role(payload.get("role"), default="sales")
+        permissions = module_permissions.validate(payload.get("permissions", module_permissions.DEFAULTS[role]), role)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     user = create_admin_user(
@@ -2527,6 +2540,7 @@ def create_admin_user_route() -> Any:
             "email": email,
             "passwordHash": generate_password_hash(str(payload["password"]).strip(), method=PASSWORD_HASH_METHOD),
             "role": role,
+            "permissions": permissions,
             "status": str(payload.get("status", "active")).strip() or "active",
         }
     )
@@ -2548,6 +2562,7 @@ def update_admin_user_route(user_id: int) -> Any:
 
     try:
         next_role = normalize_admin_role(payload.get("role", user.get("role", "admin")))
+        permissions = module_permissions.validate(payload.get("permissions", [p for p in user["permissions"] if p in module_permissions.DEFAULTS[next_role]]), next_role)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     next_status = str(payload.get("status", user["status"])).strip() or user["status"]
@@ -2561,12 +2576,18 @@ def update_admin_user_route(user_id: int) -> Any:
     if user_id == g.current_user["id"] and next_status != "active":
         return jsonify({"message": "You cannot disable the current signed-in admin"}), 400
 
+    candidate = {**user, "role": next_role, "status": next_status, "permissions": permissions}
+    if module_permissions.can_administer(user) and not module_permissions.can_administer(candidate):
+        if not any(u["id"] != user_id and module_permissions.can_administer(u) for u in list_admin_users(include_password_hash=False)):
+            return jsonify({"message": "至少保留一名启用且拥有后台账号权限的管理员"}), 400
+
     updated = update_admin_user(
         user_id,
         {
             "name": str(payload.get("name", user["name"])).strip(),
             "email": email,
             "role": next_role,
+            "permissions": permissions,
             "status": next_status,
             "passwordHash": generate_password_hash(str(payload["password"]).strip(), method=PASSWORD_HASH_METHOD)
             if str(payload.get("password", "")).strip()
@@ -2589,6 +2610,8 @@ def delete_admin_user_route(user_id: int) -> Any:
         return jsonify({"message": "You cannot delete the current signed-in admin"}), 400
     if user["status"] == "active" and user.get("role", "admin") == "admin" and count_active_admin_users("admin") <= 1:
         return jsonify({"message": "At least one active administrator is required"}), 400
+    if module_permissions.can_administer(user) and not any(u["id"] != user_id and module_permissions.can_administer(u) for u in list_admin_users(include_password_hash=False)):
+        return jsonify({"message": "至少保留一名启用且拥有后台账号权限的管理员"}), 400
     delete_admin_sessions_for_user(user_id)
     if not delete_admin_user(user_id):
         return jsonify({"message": "Admin account not found"}), 404

@@ -83,7 +83,7 @@
         :rules="[{ required: true, message: '请填写登录账号' }]"
         ><ElInput v-model.trim="form.email" autocomplete="off" /></ElFormItem
       ><ElFormItem v-if="admin" label="岗位角色"
-        ><ElSelect v-model="form.role"
+        ><ElSelect v-model="form.role" @change="changeRole"
           ><ElOption
             v-for="(label, value) in roleNames"
             :key="value"
@@ -93,6 +93,38 @@
         <p class="small-note section-gap">
           {{ roleHelp[form.role] }}
         </p></ElFormItem
+      ><ElFormItem v-if="admin" label="模块权限">
+        <div class="module-permissions">
+          <p class="small-note">
+            勾选允许访问的模块；角色决定模块内的操作范围。未勾选的模块不显示，也不能调用对应接口。
+          </p>
+          <div>
+            <ElButton text @click="form.permissions = roleModules(form.role)"
+              >全选可用模块</ElButton
+            ><ElButton text @click="form.permissions = []">清空</ElButton>
+          </div>
+          <ElCheckboxGroup v-model="form.permissions">
+            <section v-for="group in moduleGroups" :key="group.label">
+              <strong>{{ group.label }}</strong>
+              <div>
+                <ElCheckbox
+                  v-for="[key, label] in group.items"
+                  :key="key"
+                  :value="key"
+                  :disabled="!roleModules(form.role).includes(key)"
+                  >{{ label }}</ElCheckbox
+                >
+              </div>
+            </section>
+          </ElCheckboxGroup>
+          <p class="small-note">
+            已选
+            {{
+              form.permissions?.length || 0
+            }}
+            个模块。灰色选项超出当前角色的操作范围。
+          </p>
+        </div> </ElFormItem
       ><ElFormItem label="账号状态"
         ><ElRadioGroup
           v-model="form.status"
@@ -126,6 +158,8 @@
   >
 </template>
 <script setup>
+import { moduleGroups, roleModules } from "../permissions";
+import { useRouter } from "vue-router";
 import { reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "./PageHeader.vue";
@@ -142,6 +176,7 @@ import {
 } from "../composables/workbench";
 const props = defineProps({ admin: Boolean }),
   auth = useAdminAuthStore(),
+  router = useRouter(),
   resource = props.admin ? "admin-users" : "store-users",
   list = useList(resource);
 const filters = reactive({
@@ -156,7 +191,7 @@ const filters = reactive({
   error = ref("");
 const { markClean, canLeave } = useDirty(() => form);
 const roleHelp = {
-  admin: "全部后台功能，包括账号管理和操作日志。",
+  admin: "可分配全部后台模块，实际访问范围以下方勾选为准。",
   sales: "经营分析、商品、库存、订单及商城运营；不含账号与日志管理。",
   warehouse: "订单与库存管理，可编辑库存、合同未送并导入导出。",
   customer: "仅查看库存；不显示合同未送，不允许编辑或导入导出。",
@@ -187,9 +222,16 @@ function edit(row) {
     ...row,
     password: "",
   });
+  if (props.admin)
+    form.permissions = [...(row?.permissions ?? roleModules(form.role))];
   error.value = "";
   open.value = true;
   markClean();
+}
+function changeRole() {
+  form.permissions = form.permissions.filter((key) =>
+    roleModules(form.role).includes(key),
+  );
 }
 function validatePassword(_r, value, cb) {
   cb(!form.id && !value ? new Error("请设置登录密码") : undefined);
@@ -216,6 +258,13 @@ async function submit() {
     markClean();
     open.value = false;
     ElMessage.success("账号已保存");
+    if (props.admin && form.id === auth.user.id) {
+      await auth.initialize();
+      if (!auth.can("admin-users")) {
+        await router.replace(auth.defaultRoute);
+        return;
+      }
+    }
     list.load();
   } catch (e) {
     error.value = e.message;
@@ -240,3 +289,22 @@ async function remove(row) {
   }
 }
 </script>
+
+<style scoped>
+.module-permissions {
+  width: 100%;
+}
+.module-permissions section {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.module-permissions strong {
+  display: block;
+  line-height: 20px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.module-permissions .el-checkbox {
+  margin-right: 18px;
+}
+</style>

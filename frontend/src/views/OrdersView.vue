@@ -192,7 +192,7 @@ const filters = reactive({
   );
 const columns = [
   { prop: "orderNo", label: "订单号", width: 165 },
-  { prop: "userName", label: "客户 / 公司", width: 150 },
+  { prop: "userName", label: "业务员", width: 150 },
   { prop: "country", label: "国家", width: 90 },
   { prop: "itemCount", label: "件数", numeric: true, width: 60 },
   { prop: "goodsAmount", label: "商品金额", numeric: true, width: 100 },
