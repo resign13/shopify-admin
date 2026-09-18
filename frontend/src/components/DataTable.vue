@@ -23,6 +23,8 @@
     v-loading="loading"
     :data="rows"
     row-key="id"
+    :expand-row-keys="expandedKeys"
+    @expand-change="(row, rows) => $emit('expand-change', row, rows)"
     size="small"
     empty-text="暂无符合条件的数据"
     @sort-change="$emit('sort-change', $event)"
@@ -80,9 +82,10 @@ const props = defineProps({
   error: String,
   selectable: Boolean,
   expandable: Boolean,
+  expandedKeys: Array,
   storageKey: String,
 });
-defineEmits(["retry", "sort-change", "selection-change", "page", "page-size"]);
+defineEmits(["expand-change", "retry", "sort-change", "selection-change", "page", "page-size"]);
 const key = `gingtto-table:${useAdminAuthStore().user?.id}:${props.storageKey}`;
 let settings = {};
 try {

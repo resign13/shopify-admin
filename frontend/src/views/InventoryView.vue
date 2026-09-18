@@ -56,6 +56,8 @@
     <DataTable
       ref="inventoryTable"
       expandable
+      :expanded-keys="expandedKeys"
+      @expand-change="(_, rows) => expandedKeys = rows.map(row => row.id)"
       storage-key="inventory-v2"
       :rows="list.rows"
       :columns="columns"
@@ -68,7 +70,7 @@
       @sort-change="list.sort"
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
-      ><template #name="{ row }"
+      ><template #toolbar><ElButton :disabled="list.loading || !list.rows.length" @click="toggleAllSizes">{{ allSizesExpanded ? "一键收起" : "一键展开" }}</ElButton></template><template #name="{ row }"
         ><div class="product-cell">
           <ProductImage :src="row.image" :alt="productName(row)" />
           <div>
@@ -96,7 +98,7 @@
               :key="size.sizeCode"
               class="stock-cell"
             >
-              <strong>{{ size.sizeCode }}</strong>
+              <strong :title="'原始尺码：' + size.sizeCode">{{ inventorySizeLabel(size.sizeCode) }}</strong>
               <div class="stock-line">
                 <span>现货</span
                 ><b :class="{ negative: size.stock === 0 }">{{ size.stock }}</b>
@@ -144,7 +146,7 @@
         type="info"
         :closable="false"
       /><ElTable :data="draft"
-        ><ElTableColumn prop="sizeCode" label="真实尺码" /><ElTableColumn
+        ><ElTableColumn prop="sizeCode" :formatter="row => inventorySizeLabel(row.sizeCode)" label="真实尺码" /><ElTableColumn
           label="当前库存"
           min-width="155"
           ><template #default="{ row }"
@@ -191,7 +193,7 @@
       <div v-if="latest" class="section-gap">
         <h3>线上最新数量</h3>
         <p v-for="s in latest.sizePrices" :key="s.sizeCode">
-          {{ s.sizeCode }}：库存 {{ s.stock }} / 合同未送
+          {{ inventorySizeLabel(s.sizeCode) }}：库存 {{ s.stock }} / 合同未送
           {{ s.contractPending }} / 待入库 {{ s.pendingInbound }}
         </p>
         <ElButton @click="adoptLatest">使用最新数据重新编辑</ElButton>
@@ -268,7 +270,7 @@
               }}<small style="display: block">{{ row.sku }}</small></template
             ></ElTableColumn
           ><ElTableColumn
-            prop="sizeCode"
+            prop="sizeCode" :formatter="row => inventorySizeLabel(row.sizeCode)"
             label="尺码"
             width="90"
           /><ElTableColumn label="库存"
@@ -333,7 +335,7 @@
         type="info"
         :closable="false" /><ElTable
         :data="receipt.sizePrices.filter((s) => s.pendingInbound > 0)"
-        ><ElTableColumn prop="sizeCode" label="尺码" /><ElTableColumn
+        ><ElTableColumn prop="sizeCode" :formatter="row => inventorySizeLabel(row.sizeCode)" label="尺码" /><ElTableColumn
           prop="pendingInbound"
           label="本次入库"
           align="right"
@@ -366,7 +368,8 @@
   >
 </template>
 <script setup>
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { inventorySizeLabel } from "../utils/inventorySizes";
 import { ElMessage } from "element-plus";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
@@ -392,6 +395,12 @@ const auth = useAdminAuthStore(),
     category: list.query.category || "",
   });
 const inventoryTable = ref();
+const expandedKeys = ref([]);
+const allSizesExpanded = computed(() => list.rows.length > 0 && list.rows.every(row => expandedKeys.value.includes(row.id)));
+function toggleAllSizes() {
+  expandedKeys.value = allSizesExpanded.value ? [] : list.rows.map(row => row.id);
+}
+watch(() => list.rows, () => { expandedKeys.value = []; });
 const total = (row, field) =>
   row.sizePrices.reduce((sum, size) => sum + Number(size[field] || 0), 0);
 const columns = computed(() => [
