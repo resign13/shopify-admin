@@ -510,7 +510,7 @@ def estimate_text_row_height(
 
 def is_image_attachment(url: str) -> bool:
     value = str(url or "").strip().lower()
-    return bool(re.search(r"\.(?:jpg|jpeg|png|webp)(?:$|[?#])", value))
+    return bool(re.search(r"\.(?:jpg|jpeg|png|webp|gif|avif|bmp)(?:$|[?#])", value))
 
 
 def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]]:
@@ -525,7 +525,7 @@ def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]
             image_urls.append(url)
         else:
             file_urls.append(url)
-    return image_urls[:5], file_urls[:5]
+    return image_urls[:9], file_urls[:5]
 
 
 def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
@@ -935,19 +935,20 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
             [part for part in [f"Note: {note_text}" if note_text else "", "Attachments: " + ", ".join(attachment_files) if attachment_files else ""] if part]
         )
         worksheet[f"A{append_row + 1}"].alignment = Alignment(wrap_text=True, vertical="top")
+        worksheet.merge_cells(start_row=append_row + 1, start_column=1, end_row=append_row + 1, end_column=10)
         worksheet.row_dimensions[append_row + 1].height = estimate_text_row_height(
             worksheet[f"A{append_row + 1}"].value,
             line_width=100,
             min_height=26,
             line_height=18,
-            max_height=80,
+            max_height=409,
         )
 
         attachment_anchor_columns = ["A", "C", "E"]
-        attachment_anchor_rows = [append_row + 3, append_row + 9]
+        attachment_anchor_rows = [append_row + 3, append_row + 9, append_row + 15]
         for anchor_row in attachment_anchor_rows:
             worksheet.row_dimensions[anchor_row].height = 102
-        for image_index, attachment_url in enumerate(attachment_images[:6]):
+        for image_index, attachment_url in enumerate(attachment_images[:9]):
             try:
                 attachment_bytes = fetch_image_bytes(attachment_url)
                 if not attachment_bytes:

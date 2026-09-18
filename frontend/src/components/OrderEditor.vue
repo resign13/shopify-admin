@@ -1,7 +1,8 @@
 <template>
-  <ElDrawer
+  <component
+    :is="embedded ? 'div' : ElDrawer"
     :model-value="open"
-    :title="id ? '修改订单' : '新增订单'"
+    :title="id ? '订单详情' : '新增订单'"
     size="900px"
     :before-close="close"
     :close-on-click-modal="false"
@@ -28,7 +29,7 @@
           label="单价" /></ElTable
       ><ElButton @click="adoptLatest">放弃草稿，使用最新资料</ElButton>
     </section>
-    <ElForm v-if="ready" ref="formRef" :model="form" label-position="top">
+    <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving" label-position="top">
       <h3>客户与收货信息</h3>
       <ElFormItem
         label="商城客户"
@@ -158,12 +159,34 @@
           </h3>
         </div>
       </div>
+      <div v-if="id" class="detail-grid">
+        <ElFormItem label="订单状态"
+          ><ElSelect v-model="form.status"
+            ><ElOption
+              v-for="(label, value) in statusNames"
+              :key="value"
+              :value="value"
+              :label="label" /></ElSelect
+        ></ElFormItem>
+        <ElFormItem label="物流单号"
+          ><ElInput v-model.trim="form.trackingNo" placeholder="发货时必填"
+        /></ElFormItem>
+        <ElFormItem label="付款链接"
+          ><ElInput v-model.trim="form.paymentLink"
+        /></ElFormItem>
+      </div>
       <ElFormItem label="备注"
         ><ElInput
           v-model="form.note"
           type="textarea"
           :rows="3"
           maxlength="5000"
+      /></ElFormItem>
+      <ElFormItem label="备注图片（最多 9 张）"
+        ><ImageUploader
+          v-model="form.labelImageUrls"
+          :max="9"
+          @busy="uploading = $event"
       /></ElFormItem>
       <ElAlert
         v-if="id && dirty"
@@ -172,17 +195,17 @@
         :closable="false"
       />
     </ElForm>
-    <template #footer
-      ><ElButton :disabled="saving" @click="close()">取消</ElButton
+    <template v-if="!embedded" #footer
+      ><ElButton :disabled="saving || uploading" @click="close()">取消</ElButton
       ><ElButton
         type="primary"
         :loading="saving"
-        :disabled="!ready || (!!id && !dirty)"
+        :disabled="!ready || uploading || (!!id && !dirty)"
         @click="submit"
         >{{ id ? "保存订单修改" : "创建待付款订单" }}</ElButton
       ></template
     >
-  </ElDrawer>
+  </component>
   <ProductPicker
     v-model:visible="picker"
     :model-value="[]"
@@ -193,7 +216,8 @@
 </template>
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElDrawer, ElMessage } from "element-plus";
+import ImageUploader from "./ImageUploader.vue";
 import ProductPicker from "./ProductPicker.vue";
 import {
   api,
@@ -204,7 +228,11 @@ import {
   money,
   statusNames,
 } from "../composables/workbench";
-const props = defineProps({ open: Boolean, id: [Number, String] }),
+const props = defineProps({
+    open: Boolean,
+    id: [Number, String],
+    embedded: Boolean,
+  }),
   emit = defineEmits(["update:open", "saved"]);
 const form = reactive({
   userId: null,
@@ -218,6 +246,10 @@ const form = reactive({
   state: "",
   zip: "",
   note: "",
+  labelImageUrls: [],
+  status: "pending_payment",
+  trackingNo: "",
+  paymentLink: "",
   shippingFee: 0,
   items: [],
 });
@@ -232,6 +264,9 @@ const fields = [
   { key: "state", label: "州 / 省" },
   { key: "zip", label: "邮编" },
 ];
+const uploading = ref(false);
+const isImage = (url) =>
+  /\.(jpg|jpeg|png|webp|gif|avif|bmp)(?:[?#]|$)/i.test(url);
 const ready = ref(false),
   loading = ref(false),
   saving = ref(false),
@@ -302,6 +337,7 @@ async function populate(item) {
     ),
     {
       address: item.address || item.shippingAddress || "",
+      labelImageUrls: (item.labelImageUrls || []).filter(isImage),
       items: item.items.map((row) => ({ ...row })),
     },
   );
@@ -329,6 +365,7 @@ watch(
     const current = ++serial;
     loading.value = true;
     ready.value = false;
+    uploading.value = false;
     error.value = "";
     conflict.value = false;
     latest.value = null;
@@ -351,6 +388,10 @@ watch(
           state: "",
           zip: "",
           note: "",
+          labelImageUrls: [],
+          status: "pending_payment",
+          trackingNo: "",
+          paymentLink: "",
           shippingFee: 0,
           items: [],
         });
@@ -417,8 +458,15 @@ function validateFee(_r, value, callback) {
       : new Error("请填写非负运费"),
   );
 }
+async function canClose() {
+  if (saving.value || uploading.value) return false;
+  if (!(await canLeave())) return false;
+  markClean();
+  return true;
+}
+defineExpose({ submit, canClose, saving, uploading, ready, dirty });
 async function close(done) {
-  if (saving.value) return;
+  if (saving.value || uploading.value) return;
   if (await canLeave()) {
     markClean();
     emit("update:open", false);
@@ -426,7 +474,11 @@ async function close(done) {
   }
 }
 async function submit() {
-  if (saving.value || !(await formRef.value.validate().catch(() => false)))
+  if (
+    saving.value ||
+    uploading.value ||
+    !(await formRef.value.validate().catch(() => false))
+  )
     return;
   if (
     !form.items.length ||

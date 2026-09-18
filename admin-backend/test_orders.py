@@ -7,6 +7,50 @@ from test_workbench import seed, application, db
 
 
 class AdminOrdersTest(unittest.TestCase):
+    def test_notes_nine_images_and_atomic_validation(self):
+        order = self.create()
+        body = copy.deepcopy(order)
+        body['note'] = 'Packing note: keep all nine photos'
+        body['labelImageUrls'] = [f'/uploads/photo-{i}.jpg' for i in range(9)]
+        body['status'] = 'allocated'
+        response = self.call(f"orders/{order['id']}/details", 'PUT', body)
+        self.assertEqual(response.status_code, 200, response.json)
+        updated = self.call(f"orders/{order['id']}").json['order']
+        self.assertEqual(updated['labelImageUrls'], body['labelImageUrls'])
+        self.assertEqual(updated['note'], body['note'])
+        self.assertEqual(updated['status'], 'allocated')
+        stock = self.stock()['stock']
+        invalid = copy.deepcopy(updated)
+        invalid['labelImageUrls'].append('/uploads/extra.jpg')
+        invalid['items'][0]['quantity'] += 1
+        invalid['note'] = 'must roll back'
+        self.assertEqual(self.call(f"orders/{order['id']}/details", 'PUT', invalid).status_code, 400)
+        self.assertEqual(self.stock()['stock'], stock)
+        self.assertEqual(self.call(f"orders/{order['id']}").json['order']['note'], body['note'])
+        for urls in [['javascript:photo.jpg'], ['/uploads/not-image.pdf'], ['//evil.test/photo.jpg'], ['/uploads/a.jpg'] * 2]:
+            invalid['labelImageUrls'] = urls
+            self.assertEqual(self.call(f"orders/{order['id']}/details", 'PUT', invalid).status_code, 400)
+        invalid = copy.deepcopy(updated); invalid['status'] = 'shipped'; invalid['trackingNo'] = ''
+        self.assertEqual(self.call(f"orders/{order['id']}/details", 'PUT', invalid).status_code, 400)
+        self.assertEqual(self.call(f"orders/{order['id']}/details", 'PUT', body).status_code, 409)
+
+    def test_image_removal_and_legacy_file_preservation(self):
+        order = self.create(); oid = order['id']
+        db._fetch_one('UPDATE orders SET label_pdf_url=%s,label_image_urls=%s WHERE id=%s RETURNING id',
+                      ('/uploads/legacy.pdf', '["/uploads/legacy.pdf","/uploads/old.jpg"]', oid))
+        body = self.call(f'orders/{oid}').json['order']; body['labelImageUrls'] = ['/uploads/new.jpg']
+        self.assertEqual(self.call(f'orders/{oid}/details', 'PUT', body).status_code, 200)
+        updated = self.call(f'orders/{oid}').json['order']
+        self.assertEqual(updated['labelImageUrls'], ['/uploads/new.jpg', '/uploads/legacy.pdf'])
+        updated['labelImageUrls'] = []
+        self.assertEqual(self.call(f'orders/{oid}/details', 'PUT', updated).status_code, 200)
+        self.assertEqual(self.call(f'orders/{oid}').json['order']['labelImageUrls'], ['/uploads/legacy.pdf'])
+        db._fetch_one('UPDATE orders SET label_pdf_url=%s,label_image_urls=%s WHERE id=%s RETURNING id',
+                      ('/uploads/old.jpg', '[]', oid))
+        body = self.call(f'orders/{oid}').json['order']; body['labelImageUrls'] = []
+        self.assertEqual(self.call(f'orders/{oid}/details', 'PUT', body).status_code, 200)
+        self.assertEqual(self.call(f'orders/{oid}').json['order']['labelImageUrls'], [])
+
     def test_matrix_exports_use_local_images_and_preserve_size_quantities(self):
         from tempfile import TemporaryDirectory
         from pathlib import Path

@@ -2,6 +2,7 @@
 import hashlib
 import json
 import uuid
+from urllib.parse import urlsplit
 from decimal import Decimal, InvalidOperation
 from flask import g
 import db
@@ -24,6 +25,30 @@ def positive(value, label):
     if not result:
         raise ValueError(f'{label}必须大于零')
     return result
+
+
+def order_images(payload, old):
+    """New images replace the image list; existing non-image attachments survive."""
+    if 'labelImageUrls' not in payload:
+        return None
+    urls = payload['labelImageUrls']
+    if not isinstance(urls, list) or len(urls) > 9:
+        raise ValueError('订单最多上传 9 张图片')
+    cleaned = []
+    for url in urls:
+        if not isinstance(url, str) or len(url) > 2048:
+            raise ValueError('订单图片地址无效')
+        parsed = urlsplit(url)
+        if not ((parsed.scheme in {'https', 'http'} and parsed.netloc) or (not parsed.netloc and not parsed.scheme and parsed.path.startswith('/uploads/'))):
+            raise ValueError('订单图片地址无效')
+        if not parsed.path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp')):
+            raise ValueError('订单附件请上传图片')
+        if url in cleaned:
+            raise ValueError('订单图片不能重复')
+        cleaned.append(url)
+    legacy = db._parse_label_image_urls(old) if old else []
+    files = [url for url in legacy if not urlsplit(url).path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp'))]
+    return cleaned + files
 
 
 def save_order(payload, order_id=None):
@@ -51,6 +76,18 @@ def save_order(payload, order_id=None):
             return {'order': existing, 'replayed': True}
 
     user_id = positive(payload.get('userId'), '客户编号')
+    image_urls = order_images(payload, old)
+    next_status = payload.get('status', old['status'] if old else 'pending_payment')
+    if not isinstance(next_status, str) or next_status not in {'pending_payment', 'allocated', 'paid', 'shipped', 'completed', 'cancelled'}:
+        raise ValueError('订单状态无效')
+    if not old and next_status != 'pending_payment':
+        raise ValueError('新增订单必须为待付款状态')
+    tracking = payload.get('trackingNo', (old or {}).get('tracking_no') or '')
+    payment = payload.get('paymentLink', (old or {}).get('payment_link') or '')
+    if not isinstance(tracking, str) or len(tracking) > 500 or not isinstance(payment, str) or len(payment) > 2048:
+        raise ValueError('物流单号或付款链接无效')
+    if next_status == 'shipped' and not tracking.strip():
+        raise ValueError('发货必须填写物流单号')
     user = db._fetch_one('SELECT id,status FROM store_users WHERE id=%s FOR SHARE', (user_id,))
     if not user or (user['status'] != 'active' and (not old or old['store_user_id'] != user_id)):
         raise ValueError('请选择有效商城客户')
@@ -140,4 +177,10 @@ def save_order(payload, order_id=None):
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''', (order_id, product_id, name, sku, size, row['quantity'], row['price'], row['quantity'] * row['price']))
     if not old:
         db._fetch_one('INSERT INTO admin_order_requests(request_id,actor_id,payload_hash,order_id) VALUES(%s,%s,%s,%s) RETURNING request_id', (request_id, g.current_user['id'], digest, order_id))
+    if image_urls is not None:
+        legacy_files = [url for url in image_urls if not urlsplit(url).path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp'))]
+        db._fetch_one('UPDATE orders SET label_image_urls=%s,label_pdf_url=%s WHERE id=%s RETURNING id',
+                      (json.dumps(image_urls, ensure_ascii=False), legacy_files[0] if legacy_files else '', order_id))
+    if old:
+        db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping)
     return {'order': db.get_order_by_id(order_id), 'replayed': False}

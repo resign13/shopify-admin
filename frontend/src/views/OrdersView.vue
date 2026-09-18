@@ -123,19 +123,20 @@
       ><template #createdAt="{ row }"
         ><small>{{ dateTime(row.createdAt) }}</small></template
       ><template #actions="{ row }"
-        ><ElButton link type="primary" @click="editOrder(row.id)"
-          >修改订单</ElButton
+        ><ElButton
+          link
+          type="primary"
+          @click="
+            detailId = row.id;
+            detailOpen = true;
+          "
+          >订单详情</ElButton
         ></template
       ></DataTable
     >
   </section>
-  <OrderDrawer
-    v-model:open="detailOpen"
-    :id="detailId"
-    @saved="list.load"
-    @edit="editOrder"
-  />
-  <OrderEditor v-model:open="editorOpen" :id="editorId" @saved="orderSaved" />
+  <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" />
+  <OrderEditor v-model:open="editorOpen" @saved="orderSaved" />
 </template>
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -170,17 +171,15 @@ const auth = useAdminAuthStore(),
 const canEditDetails = computed(() =>
     ["admin", "sales"].includes(auth.userRole),
   ),
-  editorOpen = ref(false),
-  editorId = ref(null);
+  editorOpen = ref(false);
 function orderSaved(id) {
   list.load();
-  if (!editorId.value && id) {
+  if (id) {
     detailId.value = id;
     detailOpen.value = true;
   }
 }
-function editOrder(id = null) {
-  editorId.value = id;
+function editOrder() {
   editorOpen.value = true;
 }
 const filters = reactive({
@@ -206,9 +205,7 @@ const columns = [
   },
   { prop: "status", label: "状态", width: 85 },
   { prop: "createdAt", label: "下单时间", width: 145, sortable: true },
-  ...(canEditDetails.value
-    ? [{ prop: "actions", label: "操作", width: 75 }]
-    : []),
+  { prop: "actions", label: "操作", width: 85 },
 ];
 watch(
   () => list.filterKey,

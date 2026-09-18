@@ -11,6 +11,20 @@ from test_workbench import application
 
 
 class InvoiceExportTest(unittest.TestCase):
+    def test_all_exports_include_note_and_all_nine_attachments(self):
+        photo = BytesIO(); Image.new('RGB', (40, 60), '#335577').save(photo, format='PNG')
+        order = {'orderNo': 'NINE-ATTACHMENTS', 'shippingFee': 10, 'note': 'Nine photo packing instructions',
+                 'labelImageUrls': [f'/uploads/attachment-{i}.png' for i in range(9)],
+                 'items': [{'productId': 1, 'sku': 'BLUE', 'sizeCode': 'M', 'quantity': 1, 'unitPrice': 20}]}
+        for builder in [application.build_orders_export, application.build_orders_sheet_export, application.build_order_invoice_export]:
+            with self.subTest(builder=builder.__name__), patch.object(application, 'fetch_image_bytes', side_effect=lambda url: photo.getvalue() if url else None):
+                stream = builder(order if builder == application.build_order_invoice_export else [order])
+                book = load_workbook(stream)
+                baseline_order = {**order, 'labelImageUrls': []}
+                baseline = load_workbook(builder(baseline_order if builder == application.build_order_invoice_export else [baseline_order]))
+                self.assertEqual(sum(len(ws._images) for ws in book) - sum(len(ws._images) for ws in baseline), 9)
+                self.assertTrue(any(order['note'] in str(c.value) for ws in book for row in ws for c in row))
+
     def test_both_exports_embed_small_images_and_reuse_downloads(self):
         with TemporaryDirectory() as directory:
             Image.new('RGB', (2400, 3200), '#335577').save(Path(directory) / 'fixture.jpg')

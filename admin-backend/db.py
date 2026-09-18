@@ -286,7 +286,7 @@ def _serialize_label_image_urls(value: Any, fallback: str = "") -> str:
 
 
 def _parse_label_image_urls(row: dict[str, Any]) -> list[str]:
-    urls = _json_list(row.get("label_image_urls"))[:5]
+    urls = _json_list(row.get("label_image_urls"))[:14]
     if not urls and str(row.get("label_pdf_url") or "").strip():
         urls = [str(row.get("label_pdf_url") or "").strip()]
     return urls
