@@ -51,7 +51,7 @@ npm run dev
 生产目录为 `/opt/smawell/shopify-admin`，采用 Nginx、systemd 和 PostgreSQL。
 
 仓库 Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_PASSWORD`、
-`DEPLOY_FINGERPRINT`（SSH SHA256 主机指纹）。当前部署主机为 `47.82.147.236`。
+`DEPLOY_KNOWN_HOSTS`（已核验的 SSH 主机公钥）。当前部署主机为 `47.82.147.236`。
 
 部署包排除 `.env`、虚拟环境、上传目录和运行数据。服务器需预先具备
 Python 虚拟环境、rsync、生产配置和对应 systemd 服务。
