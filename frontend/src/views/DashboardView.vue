@@ -1,794 +1,341 @@
 <template>
-  <AdminLayout>
-    <div class="admin-page dashboard-page">
-      <section class="dashboard-toolbar admin-card">
-        <div class="field-label autocomplete-field">
-          <span>款式</span>
-          <input
-            v-model="styleSearch"
-            class="admin-field autocomplete-input"
-            type="text"
-            placeholder="输入款式，例如 ZM"
-            autocomplete="off"
-            @focus="openAutocomplete('style')"
-            @input="handleAutocompleteInput('style')"
-            @keydown.enter.prevent="confirmAutocomplete('style')"
-            @keydown.esc="autocompleteOpen = ''"
-            @blur="closeAutocompleteSoon"
-          />
-          <div v-if="autocompleteOpen === 'style'" class="autocomplete-menu">
-            <button
-              v-for="item in filteredStyleOptions"
-              :key="item.value"
-              type="button"
-              :class="['autocomplete-option', { active: item.value === filters.style }]"
-              @mousedown.prevent="selectAutocomplete('style', item)"
-            >
-              {{ item.label }}
-            </button>
-            <div v-if="!filteredStyleOptions.length" class="autocomplete-empty">没有匹配款式</div>
-          </div>
-        </div>
-
-        <div class="field-label autocomplete-field">
-          <span>国家</span>
-          <input
-            v-model="countrySearch"
-            class="admin-field autocomplete-input"
-            type="text"
-            placeholder="输入国家，例如 China"
-            autocomplete="off"
-            @focus="openAutocomplete('country')"
-            @input="handleAutocompleteInput('country')"
-            @keydown.enter.prevent="confirmAutocomplete('country')"
-            @keydown.esc="autocompleteOpen = ''"
-            @blur="closeAutocompleteSoon"
-          />
-          <div v-if="autocompleteOpen === 'country'" class="autocomplete-menu">
-            <button
-              v-for="item in filteredCountryOptions"
-              :key="item.value"
-              type="button"
-              :class="['autocomplete-option', { active: item.value === filters.country }]"
-              @mousedown.prevent="selectAutocomplete('country', item)"
-            >
-              {{ item.label }}
-            </button>
-            <div v-if="!filteredCountryOptions.length" class="autocomplete-empty">没有匹配国家</div>
-          </div>
-        </div>
-
-        <div class="field-label date-range-field">
-          <span>时间</span>
-          <button class="admin-field date-range-trigger" type="button" @click="datePanelOpen = !datePanelOpen">
-            <span>{{ dateRangeText }}</span>
-            <span class="date-range-caret">▾</span>
-          </button>
-
-          <div v-if="datePanelOpen" class="date-range-panel">
-            <div class="quick-ranges">
-              <button
-                v-for="preset in datePresets"
-                :key="preset.key"
-                type="button"
-                :class="['quick-range-btn', { active: activePreset === preset.key }]"
-                @click="applyPreset(preset.key)"
-              >
-                {{ preset.label }}
-              </button>
-            </div>
-
-            <div class="date-range-main">
-              <div class="date-range-editors">
-                <label>
-                  <span>开始日期</span>
-                  <input v-model="draftDates.from" class="admin-field" type="date" @change="activePreset = 'custom'" />
-                </label>
-                <label>
-                  <span>结束日期</span>
-                  <input v-model="draftDates.to" class="admin-field" type="date" @change="activePreset = 'custom'" />
-                </label>
-              </div>
-
-              <div class="calendar-preview">
-                <div v-for="month in calendarMonths" :key="month.title" class="calendar-month">
-                  <strong>{{ month.title }}</strong>
-                  <div class="calendar-weekdays">
-                    <span v-for="day in weekDays" :key="day">{{ day }}</span>
-                  </div>
-                  <div class="calendar-days">
-                    <span v-for="blank in month.leading" :key="`b-${month.title}-${blank}`"></span>
-                    <button
-                      v-for="day in month.days"
-                      :key="day.value"
-                      type="button"
-                      :class="['calendar-day', { inRange: isInDraftRange(day.value), edge: isDraftEdge(day.value) }]"
-                      @click="pickCalendarDate(day.value)"
-                    >
-                      {{ day.label }}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div class="date-panel-actions">
-              <button class="admin-button ghost" type="button" @click="datePanelOpen = false">取消</button>
-              <button class="admin-button" type="button" @click="confirmDateRange">确定</button>
-            </div>
-          </div>
-        </div>
-
-        <button class="admin-button" type="button" :disabled="loading" @click="applyFilters">
-          {{ loading ? '加载中...' : '查询' }}
-        </button>
-        <button class="admin-button ghost" type="button" :disabled="loading" @click="resetFilters">重置</button>
-      </section>
-
-      <section class="metric-grid">
-        <article class="metric-card">
-          <span>订单数</span>
-          <strong>{{ trendSummary.orderCount }}</strong>
-        </article>
-        <article class="metric-card">
-          <span>商品件数</span>
-          <strong>{{ trendSummary.itemCount }}</strong>
-        </article>
-        <article class="metric-card">
-          <span>订单金额</span>
-          <strong>${{ formatAmount(trendSummary.totalAmount) }}</strong>
-        </article>
-        <article class="metric-card">
-          <span>款式数</span>
-          <strong>{{ styleSummary.length }}</strong>
-        </article>
-      </section>
-
-      <section class="admin-card chart-card">
-        <div class="chart-head">
+  <PageHeader
+    title="经营工作台"
+    description="从经营表现到日常业务，一站掌握全局。"
+    eyebrow="OVERVIEW / 经营概览"
+    ><span class="muted">更新于 {{ dateTime(data?.updatedAt) }}</span
+    ><ElButton :loading="loading" @click="load">刷新数据</ElButton></PageHeader
+  >
+  <section class="panel">
+    <div class="filters" style="padding: 0; border: 0">
+      <ElRadioGroup v-model="preset" @change="setPreset"
+        ><ElRadioButton value="1">今天</ElRadioButton
+        ><ElRadioButton value="7">近 7 天</ElRadioButton
+        ><ElRadioButton value="30">近 30 天</ElRadioButton
+        ><ElRadioButton value="custom">自定义</ElRadioButton></ElRadioGroup
+      ><ElDatePicker
+        v-model="dates"
+        type="daterange"
+        value-format="YYYY-MM-DD"
+        range-separator="至"
+        @change="preset = 'custom'"
+      /><ElSelect v-model="country" clearable filterable placeholder="全部国家"
+        ><ElOption
+          v-for="item in data?.filters.countries"
+          :key="item"
+          :label="item"
+          :value="item" /></ElSelect
+      ><ElSelect v-model="style" clearable filterable placeholder="全部款式"
+        ><ElOption
+          v-for="item in data?.filters.styles"
+          :key="item"
+          :label="item"
+          :value="item" /></ElSelect
+      ><ElButton type="primary" @click="load">查询</ElButton>
+    </div>
+  </section>
+  <ElAlert v-if="error" :title="error" type="error" :closable="false" />
+  <ElSkeleton v-if="!data && loading" :rows="12" animated class="section-gap" />
+  <template v-if="data">
+    <div class="metric-grid">
+      <article v-for="metric in metrics" :key="metric.key" class="metric">
+        <span>{{ metric.label }}</span
+        ><strong>{{
+          metric.amount
+            ? money(data.metrics[metric.key])
+            : data.metrics[metric.key].toLocaleString()
+        }}</strong
+        ><small :class="change(metric.key) >= 0 ? 'positive' : 'negative'">{{
+          data.previous[metric.key]
+            ? `${change(metric.key) > 0 ? "+" : ""}${change(metric.key)}%`
+            : "—"
+        }}</small
+        ><small class="muted"> 对比上一等长周期</small>
+      </article>
+    </div>
+    <div class="dashboard-grid">
+      <section class="panel">
+        <div class="panel-title">
           <div>
-            <h3>每日订单趋势</h3>
-            <p class="summary-subtext">{{ dateRangeText }} · 按订单下单日期统计</p>
+            <h2>经营趋势</h2>
+            <small>有效订单 · 按北京时间统计 · 不含运费</small>
           </div>
-          <div class="chart-legend"><span></span>订单数</div>
+          <ElRadioGroup v-model="trendMetric"
+            ><ElRadioButton value="orders">订单数</ElRadioButton
+            ><ElRadioButton value="amount"
+              >商品金额</ElRadioButton
+            ></ElRadioGroup
+          >
         </div>
-
-        <div v-if="trendPoints.length" class="echarts-wrap">
-          <div ref="trendChartEl" class="trend-echart" aria-label="每日订单趋势交互图表"></div>
-          <p class="chart-tip">支持鼠标悬浮查看明细，拖动底部滑块缩放时间范围。</p>
-        </div>
-        <div v-else class="empty-state">当前筛选条件下暂无订单数据。</div>
+        <TrendChart :points="data.trend" :metric="trendMetric" />
       </section>
-
-      <section class="dashboard-chart-grid">
-        <article class="admin-card chart-card sales-chart-card">
-          <div class="chart-head">
+      <section class="panel">
+        <div class="panel-title">
+          <h2>订单状态</h2>
+          <small>当前筛选</small>
+        </div>
+        <div
+          v-for="(label, status) in statusNames"
+          :key="status"
+          class="ranking-row"
+        >
+          <span class="rank-number"
+            ><span
+              class="status-dot"
+              style="display: block; background: #93b4f8"
+            ></span
+          ></span>
+          <div class="ranking-body">
             <div>
-              <h3>商品销量分布</h3>
-              <p class="summary-subtext">按具体变体编码统计，左侧看销量排行，右侧看销量占比。</p>
+              <RouterLink
+                :to="{
+                  path: '/orders',
+                  query: {
+                    status,
+                    dateFrom: dates?.[0],
+                    dateTo: dates?.[1],
+                    country,
+                    style,
+                  },
+                }"
+                >{{ label }}</RouterLink
+              ><strong>{{ data.statusCounts[status] || 0 }}</strong>
+            </div>
+            <div class="rank-track">
+              <span
+                :style="{
+                  width: `${
+                    ((data.statusCounts[status] || 0) /
+                      Math.max(
+                        1,
+                        Object.values(data.statusCounts).reduce(
+                          (a, b) => a + b,
+                          0,
+                        ),
+                      )) *
+                    100
+                  }%`,
+                }"
+              ></span>
             </div>
           </div>
-
-          <div v-if="topStyleSummary.length" class="echarts-wrap">
-            <div ref="salesChartEl" class="sales-echart" aria-label="商品销量分布图表"></div>
-          </div>
-          <div v-else class="empty-state">当前筛选条件下暂无商品销量。</div>
-        </article>
-      </section>
-
-      <section class="admin-card">
-        <h3>最近订单</h3>
-        <div v-if="recentOrders.length">
-          <div v-for="order in recentOrders" :key="order.id" class="list-row stack-row">
-            <div>
-              <strong>{{ order.orderNo }}</strong>
-              <p>{{ order.items?.map((item) => `${item.sku || item.productName} × ${item.quantity || 0}`).join(' / ') || '--' }}</p>
-            </div>
-            <span>{{ order.status }}</span>
-          </div>
         </div>
-        <div v-else class="empty-state">当前筛选条件下暂无最近订单。</div>
+        <p class="small-note">点击状态查看订单明细</p>
       </section>
     </div>
-  </AdminLayout>
+    <div class="dashboard-grid">
+      <section class="panel">
+        <div class="panel-title">
+          <h2>商品表现 TOP 10</h2>
+          <ElRadioGroup v-model="rankMetric"
+            ><ElRadioButton value="units">件数</ElRadioButton
+            ><ElRadioButton value="amount">金额</ElRadioButton></ElRadioGroup
+          >
+        </div>
+        <ElEmpty
+          v-if="!data.topProducts.length"
+          description="此时间段暂无商品数据"
+          :image-size="70"
+        />
+        <div
+          v-for="(item, index) in ranked"
+          :key="item.sku"
+          class="ranking-row"
+        >
+          <span class="rank-number">{{
+            String(index + 1).padStart(2, "0")
+          }}</span>
+          <div class="ranking-body">
+            <div>
+              <RouterLink
+                class="rank-label"
+                :title="item.name"
+                :to="{ path: '/products', query: { keyword: item.sku } }"
+                >{{ item.sku }} · {{ item.name }}</RouterLink
+              ><strong>{{
+                rankMetric === "amount"
+                  ? money(item.amount)
+                  : item.units + " 件"
+              }}</strong>
+            </div>
+            <div class="rank-track">
+              <span
+                :style="{
+                  width: `${(item[rankMetric] / Math.max(1, ...ranked.map((r) => r[rankMetric]))) * 100}%`,
+                }"
+              ></span>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">
+          <h2>国家分布</h2>
+          <small>订单数 / 商品金额</small>
+        </div>
+        <ElEmpty
+          v-if="!data.countries.length"
+          description="暂无国家数据"
+          :image-size="70"
+        />
+        <div
+          v-for="item in data.countries"
+          :key="item.country"
+          class="ranking-row"
+        >
+          <div class="ranking-body">
+            <div>
+              <span>{{ item.country }}</span
+              ><strong>{{ item.orders }} 单</strong>
+            </div>
+            <small>{{ money(item.amount) }}</small>
+          </div>
+        </div>
+      </section>
+    </div>
+    <section class="panel">
+      <div class="panel-title">
+        <h2>当前业务快照</h2>
+        <ElTag type="info">当前全库 · 不受日期筛选影响</ElTag>
+      </div>
+      <div class="snapshot-grid">
+        <div>
+          <span>待付款订单</span
+          ><strong>{{ data.snapshot.statuses.pending_payment || 0 }}</strong>
+        </div>
+        <div>
+          <span>待发货订单</span
+          ><strong>{{ data.snapshot.statuses.paid || 0 }}</strong>
+        </div>
+        <div>
+          <span>当前库存</span
+          ><strong>{{ data.snapshot.stock.toLocaleString() }}</strong>
+        </div>
+        <div>
+          <span>合同未送</span
+          ><strong>{{ data.snapshot.pending.toLocaleString() }}</strong>
+        </div>
+        <div>
+          <span>零库存尺码</span><strong>{{ data.snapshot.empty }}</strong>
+        </div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-title">
+        <h2>最近订单</h2>
+        <RouterLink class="small-note" to="/orders">查看全部订单 →</RouterLink>
+      </div>
+      <ElTable :data="data.recentOrders"
+        ><ElTableColumn label="订单号"
+          ><template #default="{ row }"
+            ><RouterLink
+              :to="{ path: '/orders', query: { orderId: row.id } }"
+              style="color: var(--accent)"
+              >{{ row.orderNo }}</RouterLink
+            ></template
+          ></ElTableColumn
+        ><ElTableColumn prop="userName" label="客户" /><ElTableColumn
+          prop="country"
+          label="国家"
+        /><ElTableColumn label="商品金额" align="right"
+          ><template #default="{ row }">{{
+            money(row.goodsAmount)
+          }}</template></ElTableColumn
+        ><ElTableColumn label="状态"
+          ><template #default="{ row }"
+            ><ElTag type="info">{{ statusNames[row.status] }}</ElTag></template
+          ></ElTableColumn
+        ><ElTableColumn label="下单时间"
+          ><template #default="{ row }">{{
+            dateTime(row.createdAt)
+          }}</template></ElTableColumn
+        ></ElTable
+      >
+    </section>
+  </template>
 </template>
-
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import * as echarts from 'echarts/core'
-import { BarChart, LineChart, PieChart } from 'echarts/charts'
-import { DataZoomComponent, GridComponent, LegendComponent, MarkPointComponent, TooltipComponent } from 'echarts/components'
-import { CanvasRenderer } from 'echarts/renderers'
-
-echarts.use([LineChart, BarChart, PieChart, GridComponent, TooltipComponent, LegendComponent, DataZoomComponent, MarkPointComponent, CanvasRenderer])
-
-import AdminLayout from '../components/AdminLayout.vue'
-import { useAdminStore } from '../stores/admin'
-
-const admin = useAdminStore()
-const loading = ref(false)
-const trendChartEl = ref(null)
-const salesChartEl = ref(null)
-let trendChart = null
-let salesChart = null
-const datePanelOpen = ref(false)
-const autocompleteOpen = ref('')
-const styleSearch = ref('')
-const countrySearch = ref('')
-const activePreset = ref('last30')
-const selectingStart = ref(true)
-const weekDays = ['日', '一', '二', '三', '四', '五', '六']
-
-function pad(value) {
-  return String(value).padStart(2, '0')
+import { computed, defineAsyncComponent, onMounted, ref } from "vue";
+import { RouterLink, useRoute, useRouter } from "vue-router";
+import PageHeader from "../components/PageHeader.vue";
+import { api, money, dateTime, statusNames } from "../composables/workbench";
+const TrendChart = defineAsyncComponent(
+  () => import("../components/TrendChart.vue"),
+);
+const route = useRoute(),
+  router = useRouter(),
+  data = ref(),
+  loading = ref(false),
+  error = ref(""),
+  preset = ref("30"),
+  dates = ref([]),
+  country = ref(route.query.country || ""),
+  style = ref(route.query.style || ""),
+  trendMetric = ref("orders"),
+  rankMetric = ref("units");
+const metrics = [
+  { key: "orders", label: "有效订单数" },
+  { key: "amount", label: "商品订单金额", amount: true },
+  { key: "units", label: "下单商品件数" },
+  { key: "average", label: "平均每单商品金额", amount: true },
+  { key: "customers", label: "下单客户数" },
+];
+const ranked = computed(() =>
+  [
+    ...((rankMetric.value === "amount"
+      ? data.value?.topProductsByAmount
+      : data.value?.topProducts) || []),
+  ].sort((a, b) => b[rankMetric.value] - a[rankMetric.value]),
+);
+function setPreset(value) {
+  if (value === "custom") return;
+  const end = new Date(
+    new Date().toLocaleString("en-US", { timeZone: "Asia/Shanghai" }),
+  );
+  const start = new Date(end);
+  start.setDate(start.getDate() - Number(value) + 1);
+  const f = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  dates.value = [f(start), f(end)];
 }
-
-function formatDateInput(date) {
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+function change(key) {
+  return Number(
+    (
+      ((data.value.metrics[key] - data.value.previous[key]) /
+        data.value.previous[key]) *
+      100
+    ).toFixed(1),
+  );
 }
-
-function parseDate(value) {
-  if (!value) return null
-  const [year, month, day] = String(value).split('-').map(Number)
-  if (!year || !month || !day) return null
-  return new Date(year, month - 1, day)
-}
-
-function addDays(date, days) {
-  const next = new Date(date)
-  next.setDate(next.getDate() + days)
-  return next
-}
-
-function startOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth(), 1)
-}
-
-function endOfMonth(date) {
-  return new Date(date.getFullYear(), date.getMonth() + 1, 0)
-}
-
-function createPresetRange(key) {
-  const today = new Date()
-  if (key === 'today') return { from: formatDateInput(today), to: formatDateInput(today) }
-  if (key === 'yesterday') {
-    const yesterday = addDays(today, -1)
-    return { from: formatDateInput(yesterday), to: formatDateInput(yesterday) }
-  }
-  if (key === 'last7') return { from: formatDateInput(addDays(today, -6)), to: formatDateInput(today) }
-  if (key === 'thisMonth') return { from: formatDateInput(startOfMonth(today)), to: formatDateInput(today) }
-  if (key === 'lastMonth') {
-    const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1)
-    return { from: formatDateInput(startOfMonth(lastMonth)), to: formatDateInput(endOfMonth(lastMonth)) }
-  }
-  if (key === 'yearToDate') return { from: `${today.getFullYear()}-01-01`, to: formatDateInput(today) }
-  return { from: formatDateInput(addDays(today, -29)), to: formatDateInput(today) }
-}
-
-function createDefaultFilters() {
-  const range = createPresetRange('last30')
-  return {
-    style: 'all',
-    country: 'all',
-    dateFrom: range.from,
-    dateTo: range.to,
-  }
-}
-
-const datePresets = [
-  { key: 'today', label: '今天' },
-  { key: 'yesterday', label: '昨天' },
-  { key: 'last7', label: '近 7 天' },
-  { key: 'last30', label: '近 30 天' },
-  { key: 'thisMonth', label: '本月' },
-  { key: 'lastMonth', label: '上月' },
-  { key: 'yearToDate', label: '本年至今' },
-]
-
-const filters = reactive(createDefaultFilters())
-const draftDates = reactive({ from: filters.dateFrom, to: filters.dateTo })
-
-const styleOptions = computed(() => admin.dashboard?.filters?.styles || [])
-const countryOptions = computed(() => admin.dashboard?.filters?.countries || [])
-const allStyleOptions = computed(() => styleOptions.value)
-const allCountryOptions = computed(() => countryOptions.value)
-const filteredStyleOptions = computed(() => filterAutocompleteOptions(allStyleOptions.value, styleSearch.value))
-const filteredCountryOptions = computed(() => filterAutocompleteOptions(allCountryOptions.value, countrySearch.value))
-const trendPoints = computed(() => admin.dashboard?.trend?.points || [])
-const recentOrders = computed(() => admin.dashboard?.recentOrders || [])
-const styleSummary = computed(() => admin.dashboard?.styleSummary || [])
-const topStyleSummary = computed(() => styleSummary.value.slice(0, 12))
-const trendSummary = computed(() => admin.dashboard?.trend?.summary || { orderCount: 0, itemCount: 0, totalAmount: 0, dateFrom: '', dateTo: '', maxOrderCount: 0 })
-const trendMax = computed(() => Math.max(1, Number(trendSummary.value.maxOrderCount || 0)))
-const styleMax = computed(() => Math.max(1, ...styleSummary.value.map((item) => Number(item.quantity || 0))))
-const dateRangeText = computed(() => `${filters.dateFrom || '开始'} 至 ${filters.dateTo || '结束'}`)
-
-function disposeTrendChart() {
-  if (trendChart) {
-    trendChart.dispose()
-    trendChart = null
-  }
-}
-
-function disposeSalesChart() {
-  if (salesChart) {
-    salesChart.dispose()
-    salesChart = null
-  }
-}
-
-async function renderTrendChart() {
-  await nextTick()
-  if (!trendPoints.value.length || !trendChartEl.value) {
-    disposeTrendChart()
-    return
-  }
-
-  if (!trendChart) {
-    trendChart = echarts.init(trendChartEl.value)
-  }
-
-  const points = trendPoints.value.map((point) => ({
-    date: point.date,
-    value: Number(point.orderCount || 0),
-    orderCount: Number(point.orderCount || 0),
-    itemCount: Number(point.itemCount || 0),
-    totalAmount: Number(point.totalAmount || 0),
-  }))
-  const pointCount = points.length
-
-  trendChart.setOption({
-    color: ['#b36e48'],
-    backgroundColor: 'transparent',
-    animationDuration: 650,
-    animationEasing: 'cubicOut',
-    tooltip: {
-      trigger: 'axis',
-      backgroundColor: 'rgba(255, 255, 255, 0.96)',
-      borderColor: 'rgba(110, 85, 61, 0.16)',
-      borderWidth: 1,
-      padding: [12, 14],
-      textStyle: { color: '#2e2118' },
-      extraCssText: 'box-shadow: 0 14px 34px rgba(90,68,51,0.16); border-radius: 12px;',
-      axisPointer: {
-        type: 'line',
-        lineStyle: { color: '#b36e48', width: 1, type: 'dashed' },
-      },
-      formatter(params) {
-        const data = params?.[0]?.data || {}
-        return [
-          `<strong>${data.date || ''}</strong>`,
-          `订单数：${data.orderCount || 0}`,
-          `商品件数：${data.itemCount || 0}`,
-          `订单金额：$${Number(data.totalAmount || 0).toFixed(2)}`,
-        ].join('<br/>')
-      },
-    },
-    legend: {
-      top: 0,
-      right: 8,
-      icon: 'roundRect',
-      itemWidth: 24,
-      itemHeight: 4,
-      textStyle: { color: '#6d5648' },
-      data: ['订单数'],
-    },
-    grid: { left: 42, right: 30, top: 54, bottom: 76, containLabel: true },
-    xAxis: {
-      type: 'category',
-      boundaryGap: false,
-      data: points.map((point) => point.date),
-      axisLine: { lineStyle: { color: 'rgba(110, 85, 61, 0.18)' } },
-      axisTick: { show: false },
-      axisLabel: { color: '#7a6659', hideOverlap: true },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      minInterval: 1,
-      axisLabel: { color: '#7a6659' },
-      splitLine: { lineStyle: { color: 'rgba(110, 85, 61, 0.12)', type: 'dashed' } },
-    },
-    dataZoom: [
-      { type: 'inside', throttle: 50 },
-      {
-        type: 'slider',
-        height: 26,
-        bottom: 24,
-        borderColor: 'rgba(110, 85, 61, 0.12)',
-        fillerColor: 'rgba(179, 110, 72, 0.16)',
-        handleStyle: { color: '#b36e48' },
-        moveHandleStyle: { color: '#b36e48' },
-        textStyle: { color: '#7a6659' },
-      },
-    ],
-    series: [
-      {
-        name: '订单数',
-        type: 'line',
-        smooth: true,
-        symbol: 'circle',
-        symbolSize: pointCount <= 120 ? 8 : 5,
-        showSymbol: pointCount <= 90,
-        sampling: pointCount > 240 ? 'lttb' : undefined,
-        large: pointCount > 500,
-        lineStyle: { width: pointCount > 240 ? 3 : 4, color: '#b36e48', shadowBlur: 8, shadowColor: 'rgba(179, 110, 72, 0.24)' },
-        itemStyle: { color: '#b36e48', borderColor: '#ffffff', borderWidth: 2 },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(179, 110, 72, 0.28)' },
-            { offset: 1, color: 'rgba(179, 110, 72, 0.03)' },
-          ]),
-        },
-        markPoint: pointCount <= 240 ? {
-          symbolSize: 54,
-          label: { color: '#fff', fontWeight: 700 },
-          itemStyle: { color: '#b36e48' },
-          data: [
-            { type: 'max', name: '峰值' },
-            { type: 'min', name: '低点' },
-          ],
-        } : undefined,
-        emphasis: { focus: 'series' },
-        data: points,
-      },
-    ],
-  }, true)
-}
-
-async function renderSalesChart() {
-  await nextTick()
-  if (!topStyleSummary.value.length || !salesChartEl.value) {
-    disposeSalesChart()
-    return
-  }
-
-  if (!salesChart) {
-    salesChart = echarts.init(salesChartEl.value)
-  }
-
-  const chartItems = topStyleSummary.value.slice(0, 10).map((item) => ({
-    name: item.label || item.style || '--',
-    value: Number(item.quantity || 0),
-    amount: Number(item.amount || 0),
-  })).filter((item) => item.value > 0)
-  const totalQuantity = styleSummary.value.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
-  const shownQuantity = chartItems.reduce((sum, item) => sum + item.value, 0)
-  if (totalQuantity > shownQuantity) {
-    chartItems.push({ name: '其他', value: totalQuantity - shownQuantity, amount: 0 })
-  }
-
-  salesChart.setOption({
-    color: ['#b36e48', '#d39a71', '#8f5f3f', '#e7b98e', '#7f8f6d', '#c48a6a', '#6f5141', '#f0d4bb', '#9b735d', '#c7a48d', '#e8ded5'],
-    backgroundColor: 'transparent',
-    animationDuration: 650,
-    animationEasing: 'cubicOut',
-    tooltip: {
-      trigger: 'item',
-      backgroundColor: 'rgba(255, 255, 255, 0.96)',
-      borderColor: 'rgba(110, 85, 61, 0.16)',
-      borderWidth: 1,
-      padding: [10, 12],
-      textStyle: { color: '#2e2118' },
-      extraCssText: 'box-shadow: 0 14px 34px rgba(90,68,51,0.16); border-radius: 12px;',
-      formatter(params) {
-        const data = params.data || {}
-        const percent = totalQuantity ? ((Number(data.value || 0) / totalQuantity) * 100).toFixed(1) : '0.0'
-        return [`<strong>${data.name || ''}</strong>`, `销量：${data.value || 0} 件`, `占比：${percent}%`].join('<br/>')
-      },
-    },
-    legend: {
-      type: 'scroll',
-      orient: 'vertical',
-      right: 6,
-      top: 28,
-      bottom: 16,
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: { color: '#6d5648', fontSize: 11 },
-    },
-    grid: { left: 18, right: '48%', top: 22, bottom: 18, containLabel: true },
-    xAxis: {
-      type: 'value',
-      minInterval: 1,
-      axisLabel: { color: '#7a6659' },
-      splitLine: { lineStyle: { color: 'rgba(110, 85, 61, 0.12)', type: 'dashed' } },
-    },
-    yAxis: {
-      type: 'category',
-      inverse: true,
-      data: chartItems.map((item) => item.name),
-      axisTick: { show: false },
-      axisLine: { show: false },
-      axisLabel: { color: '#4d392c', width: 96, overflow: 'truncate' },
-    },
-    series: [
-      {
-        name: '销量排行',
-        type: 'bar',
-        barWidth: 14,
-        data: chartItems.map((item) => ({ ...item })),
-        itemStyle: { borderRadius: [0, 9, 9, 0] },
-        label: { show: true, position: 'right', color: '#6d5648', formatter: '{c}' },
-        emphasis: { focus: 'series' },
-      },
-      {
-        name: '销量占比',
-        type: 'pie',
-        radius: ['42%', '68%'],
-        center: ['75%', '52%'],
-        avoidLabelOverlap: true,
-        label: { formatter: '{b}\n{d}%', color: '#4d392c', fontSize: 11 },
-        labelLine: { length: 10, length2: 8 },
-        data: chartItems,
-        emphasis: { scaleSize: 8 },
-      },
-    ],
-  }, true)
-}
-
-function resizeCharts() {
-  trendChart?.resize()
-  salesChart?.resize()
-}
-
-function normalizeAutocompleteText(value) {
-  return String(value || '').trim().toLowerCase()
-}
-
-function filterAutocompleteOptions(options, keyword) {
-  const query = normalizeAutocompleteText(keyword)
-  if (!query) {
-    return options.slice(0, 30)
-  }
-  return options
-    .filter((item) => {
-      const label = normalizeAutocompleteText(item.label)
-      const value = normalizeAutocompleteText(item.value)
-      return label.includes(query) || value.includes(query)
-    })
-    .slice(0, 30)
-}
-
-function optionLabel(options, value) {
-  if (value === 'all') return ''
-  return options.find((item) => item.value === value)?.label || ''
-}
-
-function syncAutocompleteLabels() {
-  styleSearch.value = optionLabel(allStyleOptions.value, filters.style)
-  countrySearch.value = optionLabel(allCountryOptions.value, filters.country)
-}
-
-function openAutocomplete(type) {
-  autocompleteOpen.value = type
-}
-
-function closeAutocompleteSoon() {
-  window.setTimeout(() => {
-    autocompleteOpen.value = ''
-  }, 120)
-}
-
-function handleAutocompleteInput(type) {
-  autocompleteOpen.value = type
-}
-
-async function selectAutocomplete(type, item) {
-  if (type === 'style') {
-    filters.style = item.value
-    styleSearch.value = item.label
-  } else {
-    filters.country = item.value
-    countrySearch.value = item.label
-  }
-  autocompleteOpen.value = ''
-  await applyFilters()
-}
-
-function resolveAutocompleteTarget(type) {
-  const options = type === 'style' ? filteredStyleOptions.value : filteredCountryOptions.value
-  const keyword = type === 'style' ? styleSearch.value : countrySearch.value
-  const normalized = normalizeAutocompleteText(keyword)
-  const exact = options.find((item) => normalizeAutocompleteText(item.label) === normalized || normalizeAutocompleteText(item.value) === normalized)
-  return exact || options[0] || null
-}
-
-function applyAutocompleteInputToFilters() {
-  if (!normalizeAutocompleteText(styleSearch.value)) {
-    filters.style = 'all'
-  } else {
-    const styleTarget = resolveAutocompleteTarget('style')
-    if (styleTarget) {
-      filters.style = styleTarget.value
-      styleSearch.value = styleTarget.label
-    }
-  }
-
-  if (!normalizeAutocompleteText(countrySearch.value)) {
-    filters.country = 'all'
-  } else {
-    const countryTarget = resolveAutocompleteTarget('country')
-    if (countryTarget) {
-      filters.country = countryTarget.value
-      countrySearch.value = countryTarget.label
-    }
-  }
-}
-
-async function confirmAutocomplete(type) {
-  const target = resolveAutocompleteTarget(type)
-  if (target) {
-    await selectAutocomplete(type, target)
-  }
-}
-
-const calendarMonths = computed(() => {
-  const end = parseDate(draftDates.to) || new Date()
-  const currentMonth = new Date(end.getFullYear(), end.getMonth(), 1)
-  const previousMonth = new Date(end.getFullYear(), end.getMonth() - 1, 1)
-  return [previousMonth, currentMonth].map((monthDate) => {
-    const year = monthDate.getFullYear()
-    const month = monthDate.getMonth()
-    const lastDay = new Date(year, month + 1, 0).getDate()
-    return {
-      title: `${year}-${pad(month + 1)}`,
-      leading: new Date(year, month, 1).getDay(),
-      days: Array.from({ length: lastDay }, (_, index) => {
-        const date = new Date(year, month, index + 1)
-        return { label: index + 1, value: formatDateInput(date) }
-      }),
-    }
-  })
-})
-
-function formatAmount(value) {
-  return Number(value || 0).toFixed(2)
-}
-
-function styleBarPercent(value) {
-  return Math.max(4, Math.round((Number(value || 0) / styleMax.value) * 100))
-}
-
-function applyPreset(key) {
-  activePreset.value = key
-  const range = createPresetRange(key)
-  draftDates.from = range.from
-  draftDates.to = range.to
-}
-
-function isInDraftRange(value) {
-  const date = parseDate(value)
-  const from = parseDate(draftDates.from)
-  const to = parseDate(draftDates.to)
-  if (!date || !from || !to) return false
-  return date >= from && date <= to
-}
-
-function isDraftEdge(value) {
-  return value === draftDates.from || value === draftDates.to
-}
-
-function pickCalendarDate(value) {
-  activePreset.value = 'custom'
-  if (selectingStart.value) {
-    draftDates.from = value
-    if (parseDate(draftDates.to) && parseDate(value) > parseDate(draftDates.to)) {
-      draftDates.to = value
-    }
-  } else {
-    draftDates.to = value
-    if (parseDate(draftDates.from) && parseDate(value) < parseDate(draftDates.from)) {
-      draftDates.from = value
-    }
-  }
-  selectingStart.value = !selectingStart.value
-}
-
-async function confirmDateRange() {
-  filters.dateFrom = draftDates.from
-  filters.dateTo = draftDates.to
-  datePanelOpen.value = false
-  await applyFilters()
-}
-
-async function applyFilters() {
-  applyAutocompleteInputToFilters()
-  loading.value = true
+let seq = 0;
+async function load() {
+  const id = ++seq;
+  loading.value = true;
+  error.value = "";
   try {
-    await admin.loadDashboard({ ...filters })
+    const query = {
+      dateFrom: dates.value?.[0] || "",
+      dateTo: dates.value?.[1] || "",
+      country: country.value,
+      style: style.value,
+    };
+    const result = await api(
+      "dashboard?" + new URLSearchParams({ view: "workbench", ...query }),
+    );
+    if (id === seq) data.value = result;
+    router.replace({ query });
+  } catch (e) {
+    if (id === seq) error.value = e.message;
   } finally {
-    loading.value = false
+    if (id === seq) loading.value = false;
   }
 }
-
-async function resetFilters() {
-  Object.assign(filters, createDefaultFilters())
-  draftDates.from = filters.dateFrom
-  draftDates.to = filters.dateTo
-  activePreset.value = 'last30'
-  styleSearch.value = ''
-  countrySearch.value = ''
-  await applyFilters()
-}
-
-watch(
-  () => trendPoints.value,
-  () => {
-    renderTrendChart()
-  }
-)
-
-watch(
-  () => styleSummary.value,
-  () => {
-    renderSalesChart()
-  }
-)
-
 onMounted(() => {
-  window.addEventListener('resize', resizeCharts)
-  applyFilters()
-})
-
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', resizeCharts)
-  disposeTrendChart()
-  disposeSalesChart()
-})
+  setPreset("30");
+  if (route.query.dateFrom && route.query.dateTo) {
+    dates.value = [route.query.dateFrom, route.query.dateTo];
+    preset.value = "custom";
+  }
+  load();
+});
 </script>
-
-<style scoped>
-.dashboard-page { gap: 18px; }
-.dashboard-toolbar { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(170px, 0.8fr) minmax(260px, 1.2fr) auto auto; gap: 14px; align-items: end; overflow: visible; }
-.autocomplete-field { position: relative; }
-.autocomplete-input { width: 100%; }
-.autocomplete-menu { position: absolute; left: 0; right: 0; top: calc(100% + 8px); z-index: 45; max-height: 280px; overflow: auto; padding: 6px; border: 1px solid rgba(110, 85, 61, 0.14); border-radius: 16px; background: #fff; box-shadow: 0 18px 42px rgba(90, 68, 51, 0.18); }
-.autocomplete-option { width: 100%; min-height: 34px; padding: 8px 12px; border: 0; border-radius: 11px; background: transparent; color: var(--text); text-align: left; cursor: pointer; font-weight: 600; }
-.autocomplete-option:hover, .autocomplete-option.active { background: #b36e48; color: #fff; }
-.autocomplete-empty { padding: 12px; color: var(--muted); font-size: 0.9rem; }
-.date-range-field { position: relative; }
-.date-range-trigger { display: flex; align-items: center; justify-content: space-between; gap: 12px; text-align: left; color: var(--text); cursor: pointer; }
-.date-range-caret { color: var(--muted); }
-.date-range-panel { position: absolute; top: calc(100% + 8px); right: 0; z-index: 50; width: min(760px, calc(100vw - 48px)); padding: 16px; display: grid; grid-template-columns: 118px 1fr; gap: 16px; background: #fff; border: 1px solid var(--line); border-radius: 20px; box-shadow: 0 22px 48px rgba(90, 68, 51, 0.18); }
-.date-range-main { display: grid; gap: 14px; }
-.quick-ranges { display: grid; align-content: start; gap: 8px; }
-.quick-range-btn { min-height: 34px; border: 0; border-radius: 12px; background: #f7f1eb; color: var(--text); cursor: pointer; }
-.quick-range-btn.active, .quick-range-btn:hover { background: #b36e48; color: #fff; }
-.date-range-editors { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.date-range-editors label { display: grid; gap: 6px; color: var(--muted); font-size: 0.9rem; }
-.calendar-preview { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-.calendar-month { display: grid; gap: 10px; }
-.calendar-month strong { text-align: center; }
-.calendar-weekdays, .calendar-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; text-align: center; }
-.calendar-weekdays { color: var(--muted); font-size: 0.78rem; }
-.calendar-day { min-height: 30px; border: 0; border-radius: 10px; background: transparent; cursor: pointer; }
-.calendar-day.inRange { background: #f4dfcf; }
-.calendar-day.edge { background: #b36e48; color: #fff; }
-.date-panel-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: 10px; }
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
-.metric-card { display: grid; gap: 8px; padding: 18px 20px; border-radius: 20px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.88); box-shadow: 0 12px 28px rgba(90, 68, 51, 0.08); }
-.metric-card span { color: var(--muted); }
-.metric-card strong { font-size: 2rem; color: var(--accent); }
-.chart-card { display: grid; gap: 16px; }
-.chart-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-.chart-head h3 { margin: 0; }
-.chart-legend { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.9rem; }
-.chart-legend span { width: 28px; height: 4px; border-radius: 999px; background: #b36e48; }
-.echarts-wrap { display: grid; gap: 8px; }
-.trend-echart { width: 100%; height: 380px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
-.dashboard-chart-grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: stretch; }
-.sales-chart-card { min-width: 0; }
-.sales-echart { width: 100%; height: 390px; background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(250,245,239,0.66)); border: 1px solid rgba(110, 85, 61, 0.08); border-radius: 18px; }
-.chart-tip { margin: 0; color: var(--muted); font-size: 0.86rem; }
-.style-bars { display: grid; gap: 12px; }
-.style-bars.compact { gap: 10px; }
-.style-bar-row { display: grid; grid-template-columns: minmax(120px, 190px) 1fr 72px; gap: 12px; align-items: center; }
-.style-bar-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.style-bar-track { height: 18px; overflow: hidden; border-radius: 999px; background: #f1e5dc; }
-.style-bar-fill { height: 100%; border-radius: inherit; background: linear-gradient(90deg, #d39a71, #b36e48); }
-.style-bar-value { color: var(--muted); text-align: right; font-weight: 700; }
-@media (max-width: 1180px) { .dashboard-chart-grid { grid-template-columns: 1fr; } }
-@media (max-width: 1080px) { .dashboard-toolbar, .metric-grid, .date-range-editors, .calendar-preview { grid-template-columns: 1fr; } .date-range-panel { left: 0; right: auto; grid-template-columns: 1fr; } .style-bar-row { grid-template-columns: 1fr; } .style-bar-value { text-align: left; } }
-</style>
-

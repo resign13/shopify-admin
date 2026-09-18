@@ -1,83 +1,65 @@
-import { createRouter, createWebHistory } from 'vue-router'
-
-import AdminUsersView from './views/AdminUsersView.vue'
-import AccountsView from './views/AccountsView.vue'
-import ActivityApplyView from './views/ActivityApplyView.vue'
-import ActivityManageView from './views/ActivityManageView.vue'
-import CategoriesView from './views/CategoriesView.vue'
-import DashboardView from './views/DashboardView.vue'
-import HomeConfigView from './views/HomeConfigView.vue'
-import InventoryView from './views/InventoryView.vue'
-import LoginView from './views/LoginView.vue'
-import OrdersView from './views/OrdersView.vue'
-import ProductEditorView from './views/ProductEditorView.vue'
-import ProductsView from './views/ProductsView.vue'
-import { pinia } from './stores'
-import { useAdminAuthStore } from './stores/auth'
-import { startRouteLoading, stopRouteLoading } from './loading'
-
-function withAuth(component, roles) {
-  return {
-    component,
-    meta: {
-      requiresAuth: true,
-      roles,
-    },
-  }
-}
-
+import { createRouter, createWebHistory } from "vue-router";
+import { pinia } from "./stores";
+import { useAdminAuthStore } from "./stores/auth";
+const definitions = [
+  ["dashboard", "DashboardView", "经营工作台", ["admin", "sales"]],
+  ["products", "ProductsView", "商品管理", ["admin", "sales"]],
+  ["products/new", "ProductEditorView", "新建商品", ["admin", "sales"]],
+  ["products/:id/edit", "ProductEditorView", "编辑商品", ["admin", "sales"]],
+  [
+    "inventory",
+    "InventoryView",
+    "库存管理",
+    ["admin", "sales", "warehouse", "customer"],
+  ],
+  ["orders", "OrdersView", "订单管理", ["admin", "sales", "warehouse"]],
+  ["categories", "CategoriesView", "商品分类", ["admin", "sales"]],
+  ["home-config", "HomeConfigView", "首页配置", ["admin", "sales"]],
+  ["activity-zone/apply", "ActivityApplyView", "活动报名", ["admin", "sales"]],
+  [
+    "activity-zone/manage",
+    "ActivityManageView",
+    "活动管理",
+    ["admin", "sales"],
+  ],
+  ["store-accounts", "AccountsView", "商城账号", ["admin"]],
+  ["admin-users", "AdminUsersView", "后台账号", ["admin"]],
+  ["audit-logs", "AuditLogsView", "操作日志", ["admin"]],
+];
+const views = import.meta.glob([
+  "./views/*.vue",
+  "!./views/BannersView.vue",
+  "!./views/ActivityZoneView.vue",
+]);
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/login', component: LoginView },
-    { path: '/', redirect: '/dashboard' },
-    { path: '/dashboard', ...withAuth(DashboardView, ['admin', 'sales']) },
-    { path: '/home-config', ...withAuth(HomeConfigView, ['admin', 'sales']) },
-    { path: '/activity-zone', redirect: '/activity-zone/apply' },
-    { path: '/activity-zone/apply', ...withAuth(ActivityApplyView, ['admin', 'sales']) },
-    { path: '/activity-zone/manage', ...withAuth(ActivityManageView, ['admin', 'sales']) },
-    { path: '/categories', ...withAuth(CategoriesView, ['admin', 'sales']) },
-    { path: '/products', ...withAuth(ProductsView, ['admin', 'sales']) },
-    { path: '/inventory', ...withAuth(InventoryView, ['admin', 'sales', 'warehouse', 'customer']) },
-    { path: '/products/new', ...withAuth(ProductEditorView, ['admin', 'sales']) },
-    { path: '/products/:id/edit', ...withAuth(ProductEditorView, ['admin', 'sales']) },
-    { path: '/accounts', redirect: '/store-accounts' },
-    { path: '/store-accounts', ...withAuth(AccountsView, ['admin']) },
-    { path: '/admin-users', ...withAuth(AdminUsersView, ['admin']) },
-    { path: '/orders', ...withAuth(OrdersView, ['admin', 'sales', 'warehouse']) },
+    { path: "/login", component: () => import("./views/LoginView.vue") },
+    {
+      path: "/",
+      component: () => import("./components/AdminLayout.vue"),
+      meta: { requiresAuth: true },
+      children: [
+        { path: "", redirect: "/dashboard" },
+        ...definitions.map(([path, view, title, roles]) => ({
+          path,
+          component: views[`./views/${view}.vue`],
+          meta: { title, roles, requiresAuth: true },
+        })),
+        { path: "accounts", redirect: "/store-accounts" },
+        { path: "activity-zone", redirect: "/activity-zone/apply" },
+      ],
+    },
+    { path: "/:pathMatch(.*)*", redirect: "/" },
   ],
-})
-
+});
 router.beforeEach(async (to) => {
-  startRouteLoading()
-  const auth = useAdminAuthStore(pinia)
-  if (!auth.initialized) {
-    await auth.initialize()
-  }
-  if (to.meta.requiresAuth && !auth.isAuthenticated) {
-    return '/login'
-  }
-  if (to.path === '/login' && auth.isAuthenticated) {
-    return auth.defaultRoute
-  }
-  if (to.meta.requiresAuth) {
-    const allowedRoles = Array.isArray(to.meta.roles) ? to.meta.roles : []
-    if (allowedRoles.length && !allowedRoles.includes(auth.userRole)) {
-      return auth.defaultRoute
-    }
-  }
-  return true
-})
-
-export default router
-
-
-router.afterEach(() => {
-  window.setTimeout(() => {
-    stopRouteLoading()
-  }, 120)
-})
-
-router.onError(() => {
-  stopRouteLoading()
-})
+  const auth = useAdminAuthStore(pinia);
+  if (!auth.initialized) await auth.initialize();
+  if (to.meta.requiresAuth && !auth.isAuthenticated) return "/login";
+  if (to.path === "/login" && auth.isAuthenticated) return auth.defaultRoute;
+  if (to.meta.roles && !to.meta.roles.includes(auth.userRole))
+    return auth.defaultRoute;
+  document.title = `${to.meta.title || "登录"} · GINGTTO`;
+});
+export default router;

@@ -1,41 +1,35 @@
-function resolveApiBase() {
-  const envBase = (import.meta.env.VITE_API_BASE_URL || '').trim()
-  if (envBase) return envBase
-
-  if (typeof window !== 'undefined') {
-    const host = window.location.hostname
-    if (host === 'localhost' || host === '127.0.0.1') {
-      return 'http://127.0.0.1:5202'
-    }
-    return window.location.origin
-  }
-
-  return 'http://127.0.0.1:5202'
-}
-
-export const API_BASE = resolveApiBase()
-
-import { beginRequestLoading, endRequestLoading } from './loading'
-
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").trim();
 export async function request(path, options = {}) {
-  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData
-  const skipGlobalLoading = Boolean(options.skipGlobalLoading)
-  const { skipGlobalLoading: _skipGlobalLoading, ...fetchOptions } = options
-  if (!skipGlobalLoading) beginRequestLoading()
+  const { skipGlobalLoading, ...fetchOptions } = options;
+  let response;
   try {
-    const response = await fetch(`${API_BASE}${path}`, {
+    response = await fetch(`${API_BASE}${path}`, {
       ...fetchOptions,
       headers: {
-        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-        ...(options.headers || {}),
+        ...(options.body instanceof FormData
+          ? {}
+          : { "Content-Type": "application/json" }),
+        ...options.headers,
       },
-    })
-    const data = await response.json()
-    if (!response.ok) {
-      throw new Error(data.message || 'Request failed')
-    }
-    return data
-  } finally {
-    if (!skipGlobalLoading) endRequestLoading()
+    });
+  } catch (error) {
+    if (error.name === "AbortError") throw error;
+    throw new Error("连接失败，请检查网络后重试。当前输入已保留。");
   }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    if (response.status === 401 && !path.includes("/login") && !path.includes("/logout"))
+      window.dispatchEvent(new Event("admin-session-expired"));
+    const error = new Error(
+      data.message ||
+        { 403: "没有执行此操作的权限", 409: "数据已更新，请核对最新版本" }[
+          response.status
+        ] ||
+        "请求失败，请重试",
+    );
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  return data;
 }

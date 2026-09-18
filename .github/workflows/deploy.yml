@@ -9,7 +9,36 @@ concurrency:
   group: production-admin
   cancel-in-progress: false
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: gingtto_workbench_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture-only-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r admin-backend/requirements.txt
+      - name: Isolated inventory, permissions, transactions and image tests
+        working-directory: admin-backend
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_workbench_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: python -m unittest -v test_workbench test_image_delivery
   deploy:
+    needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

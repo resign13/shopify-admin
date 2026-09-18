@@ -1,366 +1,320 @@
 <template>
-  <AdminLayout>
-    <div class="admin-page">
-      <section class="admin-card">
-        <div class="product-page-head">
+  <PageHeader
+    title="商品管理"
+    description="统一维护商品资料、颜色 SKU 与展示信息。"
+    eyebrow="CATALOG / 商品与库存"
+    ><ElButton type="primary" @click="router.push('/products/new')"
+      >＋ 新建商品</ElButton
+    ></PageHeader
+  >
+  <section class="panel">
+    <form class="filters" @submit.prevent="apply">
+      <ElInput
+        v-model="filters.keyword"
+        clearable
+        placeholder="搜索标题、款式、SKU 或颜色"
+      /><ElSelect v-model="filters.category" clearable placeholder="全部分类"
+        ><ElOption
+          v-for="c in categories"
+          :key="c.key"
+          :value="c.key"
+          :label="c.labels?.zh || c.key" /></ElSelect
+      ><ElSelect v-model="filters.stock" clearable placeholder="库存状态"
+        ><ElOption value="available" label="有库存" /><ElOption
+          value="empty"
+          label="无库存" /></ElSelect
+      ><ElSelect v-model="filters.featured" clearable placeholder="首页推荐"
+        ><ElOption value="true" label="已推荐" /><ElOption
+          value="false"
+          label="未推荐" /></ElSelect
+      ><ElButton native-type="submit" type="primary">查询</ElButton
+      ><ElButton @click="reset">重置</ElButton>
+    </form>
+    <div v-if="selected.length" class="batch-bar">
+      <strong>已选 {{ selected.length }} 个商品</strong
+      ><ElButton @click="batchOpen = true">批量调整分类 / 推荐</ElButton
+      ><ElButton text @click="clearSelection">清空选择</ElButton>
+    </div>
+    <DataTable
+      ref="table"
+      :key="list.filterKey"
+      storage-key="products"
+      :rows="list.rows"
+      :columns="columns"
+      :total="list.total"
+      :page="list.query.page"
+      :page-size="list.query.pageSize"
+      :loading="list.loading"
+      :error="list.error"
+      selectable
+      @retry="list.load"
+      @sort-change="list.sort"
+      @page="list.query.page = $event"
+      @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
+      @selection-change="selected = $event"
+    >
+      <template #name="{ row }"
+        ><div class="product-cell">
+          <ProductImage :src="row.image" :alt="productName(row)" />
           <div>
-            <h1>商品管理</h1>
-            <p class="small-note">支持按商品分类筛选，并按商品标题、商品编码或 SKU 搜索。</p>
+            <a
+              href="#"
+              class="product-name"
+              :title="productName(row)"
+              @click.prevent="preview(row)"
+              >{{ shortName(row) }}</a
+            ><small
+              >{{ row.colorName || "未设置颜色" }} ·
+              {{ row.colorGroup || "—" }}</small
+            >
           </div>
-          <button class="admin-button" type="button" @click="goCreate">新建商品</button>
-        </div>
-
-        <form class="filter-row" @submit.prevent="applyFilters">
-          <label class="field-label">
-            <span>商品分类</span>
-            <select v-model="selectedCategoryDraft" class="admin-field">
-              <option value="">全部分类</option>
-              <option
-                v-for="category in admin.categories"
-                :key="category.key"
-                :value="category.key"
-              >
-                {{ category.labels?.zh || category.label || category.key }}
-              </option>
-            </select>
-          </label>
-
-          <label class="field-label search-field">
-            <span>搜索</span>
-            <input
-              v-model.trim="keywordDraft"
-              class="admin-field"
-              placeholder="请输入商品标题、商品编码或 SKU"
-            />
-          </label>
-
-          <div class="filter-actions">
-            <button class="admin-button ghost" type="submit">查询</button>
-          </div>
-        </form>
-
-        <div class="small-note result-note">共找到 {{ filteredProducts.length }} 个商品</div>
-
-        <div v-if="!filteredProducts.length" class="empty-state">暂无符合条件的商品。</div>
-
-        <div v-else class="product-list-grid">
-          <article v-for="item in paginatedProducts" :key="item.id" class="product-item-card">
-            <div class="product-item-main">
-              <div class="product-item-cover">
-                <ProductImage :src="item.image" :alt="item.name?.zh || item.productCode" />
-              </div>
-
-              <div class="product-item-copy">
-                <strong>{{ item.name?.zh || item.productCode || item.sku }}</strong>
-                <p>{{ item.productCode || '--' }} / {{ item.colorName || '未设置颜色' }}</p>
-                <p>{{ item.categoryLabel || item.categoryKey }}</p>
-                <p>库存 {{ item.stock }} / ${{ item.price }}</p>
-              </div>
-            </div>
-
-            <div class="product-item-actions">
-              <button class="admin-button ghost" type="button" @click="goEdit(item.id)">编辑</button>
-              <button class="admin-button ghost" type="button" @click="openDeleteDialog(item)">
-                删除
-              </button>
-            </div>
-          </article>
-        </div>
-
-        <PaginationBar
-          v-if="filteredProducts.length"
-          :page="currentPage"
-          :page-size="pageSize"
-          :total-items="filteredProducts.length"
-          item-label="个商品"
-          @update:page="currentPage = $event"
-          @update:page-size="pageSize = $event"
+        </div></template
+      >
+      <template #sku="{ row }"
+        ><span class="sku" :title="row.sku">{{ row.sku }}</span
+        ><ElButton text size="small" @click="copy(row.sku)"
+          >复制</ElButton
+        ></template
+      >
+      <template #price="{ row }">{{ priceRange(row) }}</template
+      ><template #featured="{ row }"
+        ><ElTag :type="row.featured ? 'primary' : 'info'">{{
+          row.featured ? "已推荐" : "未推荐"
+        }}</ElTag></template
+      ><template #updatedAt="{ row }"
+        ><small>{{ dateTime(row.updatedAt) }}</small></template
+      >
+      <template #actions="{ row }"
+        ><ElButton
+          link
+          type="primary"
+          @click="router.push(`/products/${row.id}/edit`)"
+          >编辑</ElButton
+        ><ElDropdown
+          @command="
+            (command) => (command === 'preview' ? preview(row) : remove(row))
+          "
+          ><ElButton link>更多</ElButton
+          ><template #dropdown
+            ><ElDropdownMenu
+              ><ElDropdownItem command="preview">查看资料</ElDropdownItem
+              ><ElDropdownItem command="delete" divided
+                >删除商品</ElDropdownItem
+              ></ElDropdownMenu
+            ></template
+          ></ElDropdown
+        ></template
+      ></DataTable
+    >
+  </section>
+  <ElDrawer v-model="previewOpen" title="商品资料" size="580px"
+    ><template v-if="item"
+      ><h2>{{ productName(item) }}</h2>
+      <p class="muted">{{ item.sku }} · {{ item.colorName }}</p>
+      <div class="image-grid">
+        <ElImage
+          v-for="(url, i) in item.gallery"
+          :key="url"
+          :src="imageUrl(url, 320)"
+          :preview-src-list="item.gallery"
+          :initial-index="i"
+          style="width: 100px; height: 130px"
+          fit="contain"
         />
-      </section>
-    </div>
-    <div v-if="deleteTarget" class="confirm-mask" @click.self="closeDeleteDialog">
-      <div class="confirm-dialog">
-        <h3>删除商品</h3>
-        <p>
-          确认删除商品“{{ deleteTarget.name?.zh || deleteTarget.productCode || deleteTarget.sku }}”吗？
-          删除后会直接从数据库移除，无法恢复。
-        </p>
-        <p class="small-note">如果商品已经产生订单，系统会阻止删除以保护订单历史数据。</p>
-        <div class="confirm-actions">
-          <button class="admin-button ghost" type="button" :disabled="deleting" @click="closeDeleteDialog">
-            取消
-          </button>
-          <button class="admin-button danger" type="button" :disabled="deleting" @click="confirmDelete">
-            {{ deleting ? '删除中...' : '确认删除' }}
-          </button>
-        </div>
       </div>
-    </div>
-  </AdminLayout>
+      <ElDescriptions :column="2" border class="section-gap"
+        ><ElDescriptionsItem label="分类">{{
+          item.categoryLabel
+        }}</ElDescriptionsItem
+        ><ElDescriptionsItem label="当前库存">{{
+          item.stock
+        }}</ElDescriptionsItem></ElDescriptions
+      ><ElTable :data="item.sizePrices" class="section-gap"
+        ><ElTableColumn prop="sizeCode" label="真实尺码" /><ElTableColumn
+          label="价格"
+          align="right"
+          ><template #default="{ row }">{{
+            money(row.price)
+          }}</template></ElTableColumn
+        ><ElTableColumn
+          prop="stock"
+          label="库存"
+          align="right" /></ElTable></template
+  ></ElDrawer>
+  <ElDialog
+    v-model="batchOpen"
+    title="批量调整商品"
+    width="480px"
+    :close-on-click-modal="false"
+    ><p>
+      将修改明确选中的 {{ selected.length }} 个商品，未设置的字段保持不变。
+    </p>
+    <ElForm label-position="top"
+      ><ElFormItem label="调整分类"
+        ><ElSelect
+          v-model="batch.categoryKey"
+          clearable
+          placeholder="保持原分类"
+          ><ElOption
+            v-for="c in categories"
+            :key="c.key"
+            :value="c.key"
+            :label="c.labels?.zh || c.key" /></ElSelect></ElFormItem
+      ><ElFormItem label="首页推荐"
+        ><ElSelect v-model="batch.featured"
+          ><ElOption value="keep" label="保持原值" /><ElOption
+            value="true"
+            label="设置推荐" /><ElOption
+            value="false"
+            label="取消推荐" /></ElSelect></ElFormItem></ElForm
+    ><template #footer
+      ><ElButton @click="batchOpen = false">取消</ElButton
+      ><ElButton type="primary" :loading="saving" @click="applyBatch"
+        >确认修改 {{ selected.length }} 项</ElButton
+      ></template
+    ></ElDialog
+  >
 </template>
-
 <script setup>
-import ProductImage from '../components/ProductImage.vue'
-import { computed, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
-
-import AdminLayout from '../components/AdminLayout.vue'
-import PaginationBar from '../components/PaginationBar.vue'
-import { useAdminStore } from '../stores/admin'
-
-const admin = useAdminStore()
-const router = useRouter()
-const selectedCategoryDraft = ref('')
-const selectedCategory = ref('')
-const keywordDraft = ref('')
-const keyword = ref('')
-const currentPage = ref(1)
-const pageSize = ref(10)
-const deleteTarget = ref(null)
-const deleting = ref(false)
-
-const filteredProducts = computed(() => {
-  const normalizedKeyword = keyword.value.trim().toLowerCase()
-
-  return admin.products.filter((item) => {
-    const categoryMatch = !selectedCategory.value || item.categoryKey === selectedCategory.value
-    if (!categoryMatch) return false
-    if (!normalizedKeyword) return true
-
-    const haystack = [
-      item.name?.zh,
-      item.name?.en,
-      item.productCode,
-      item.sku,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase()
-
-    return haystack.includes(normalizedKeyword)
-  })
-})
-
-const paginatedProducts = computed(() => {
-  const start = (currentPage.value - 1) * pageSize.value
-  return filteredProducts.value.slice(start, start + pageSize.value)
-})
-
-watch(pageSize, () => {
-  currentPage.value = 1
-})
-
+import { onMounted, reactive, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
+import PageHeader from "../components/PageHeader.vue";
+import DataTable from "../components/DataTable.vue";
+import ProductImage from "../components/ProductImage.vue";
+import { imageUrl } from "../utils/imageUrl";
+import {
+  api,
+  save,
+  useList,
+  confirm,
+  notifyError,
+  money,
+  productName,
+  shortName,
+  copy,
+  dateTime,
+} from "../composables/workbench";
+const router = useRouter(),
+  list = useList("products"),
+  categories = ref([]),
+  selected = ref([]),
+  table = ref(),
+  previewOpen = ref(false),
+  item = ref(),
+  batchOpen = ref(false),
+  saving = ref(false),
+  batch = reactive({ categoryKey: "", featured: "keep" });
+const filters = reactive({
+  keyword: list.query.keyword || "",
+  category: list.query.category || "",
+  stock: list.query.stock || "",
+  featured: list.query.featured || "",
+});
+const columns = [
+  { prop: "name", label: "商品信息", width: 260 },
+  { prop: "sku", label: "颜色 SKU", width: 135, sortable: true },
+  { prop: "categoryLabel", label: "分类", width: 90 },
+  { prop: "price", label: "价格", numeric: true, sortable: true, width: 115 },
+  { prop: "stock", label: "库存", numeric: true, sortable: true, width: 80 },
+  { prop: "featured", label: "推荐", width: 80 },
+  { prop: "updatedAt", label: "更新时间", width: 140, sortable: true },
+  { prop: "actions", label: "操作", width: 100 },
+];
 watch(
-  () => filteredProducts.value.length,
-  (count) => {
-    const totalPages = Math.max(1, Math.ceil(count / pageSize.value))
-    if (currentPage.value > totalPages) {
-      currentPage.value = totalPages
-    }
+  () => list.filterKey,
+  () => {
+    if (selected.value.length) ElMessage.info("筛选已改变，已清空选择");
+    clearSelection();
   },
-  { immediate: true }
-)
-
-function applyFilters() {
-  selectedCategory.value = selectedCategoryDraft.value
-  keyword.value = keywordDraft.value.trim()
-  currentPage.value = 1
+);
+function clearSelection() {
+  selected.value = [];
+  table.value?.clearSelection();
 }
-
-function goCreate() {
-  router.push('/products/new')
+function apply() {
+  if (selected.value.length) ElMessage.info("筛选已改变，已清空选择");
+  clearSelection();
+  list.apply(filters);
 }
-
-function goEdit(id) {
-  router.push(`/products/${id}/edit`)
+function reset() {
+  Object.assign(filters, {
+    keyword: "",
+    category: "",
+    stock: "",
+    featured: "",
+  });
+  apply();
 }
-
-function openDeleteDialog(item) {
-  deleteTarget.value = item
+function priceRange(row) {
+  const values = (row.sizePrices || []).map((s) => Number(s.price));
+  if (!values.length) return money(row.price);
+  const a = Math.min(...values),
+    b = Math.max(...values);
+  return a === b ? money(a) : `${money(a)}–${money(b)}`;
 }
-
-function closeDeleteDialog() {
-  if (deleting.value) return
-  deleteTarget.value = null
-}
-
-async function confirmDelete() {
-  if (!deleteTarget.value || deleting.value) return
-  deleting.value = true
+async function preview(row) {
   try {
-    await admin.deleteProduct(deleteTarget.value.id)
-    deleteTarget.value = null
-  } catch (error) {
-    window.alert(error.message || '删除商品失败')
+    item.value = (await api(`products/${row.id}`)).product;
+    previewOpen.value = true;
+  } catch (e) {
+    notifyError(e);
+  }
+}
+async function remove(row) {
+  if (
+    !(await confirm(
+      `删除“${productName(row)}”？此操作会影响商品展示。`,
+      "删除商品",
+    ))
+  )
+    return;
+  try {
+    await save(`products/${row.id}`, { version: row.version }, "DELETE");
+    ElMessage.success("商品已删除");
+    clearSelection();
+    list.load();
+  } catch (e) {
+    notifyError(e);
+  }
+}
+async function applyBatch() {
+  if (saving.value) return;
+  if (!batch.categoryKey && batch.featured === "keep") {
+    ElMessage.info("请选择要修改的字段");
+    return;
+  }
+  saving.value = true;
+  try {
+    await save(
+      "products/batch",
+      {
+        ids: selected.value.map((p) => p.id),
+        versions: Object.fromEntries(
+          selected.value.map((p) => [p.id, p.version]),
+        ),
+        ...(batch.categoryKey ? { categoryKey: batch.categoryKey } : {}),
+        ...(batch.featured !== "keep"
+          ? { featured: batch.featured === "true" }
+          : {}),
+      },
+      "POST",
+    );
+    ElMessage.success("批量调整完成");
+    batchOpen.value = false;
+    clearSelection();
+    list.load();
+  } catch (e) {
+    notifyError(e);
   } finally {
-    deleting.value = false
+    saving.value = false;
   }
 }
-
 onMounted(async () => {
-  await Promise.all([admin.loadProducts(), admin.loadCategories()])
-})
+  try {
+    categories.value = (await api("categories")).items;
+  } catch (e) {
+    notifyError(e);
+  }
+});
 </script>
-
-<style scoped>
-.product-page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 18px;
-}
-
-.product-page-head h1 {
-  margin: 0 0 6px;
-}
-
-.filter-row {
-  display: grid;
-  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr) auto;
-  gap: 14px;
-  margin-bottom: 10px;
-  align-items: end;
-}
-
-.field-label {
-  display: grid;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 0.92rem;
-}
-
-.search-field {
-  min-width: 0;
-}
-
-.filter-actions {
-  display: flex;
-  align-items: end;
-}
-
-.result-note {
-  margin-bottom: 14px;
-}
-
-.product-list-grid {
-  display: grid;
-  gap: 14px;
-}
-
-.product-item-card {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 18px;
-  border: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.82);
-}
-
-.product-item-main {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.product-item-cover {
-  width: 88px;
-  height: 110px;
-  overflow: hidden;
-  border: 1px solid rgba(110, 85, 61, 0.16);
-  background: #f6f2ec;
-  flex-shrink: 0;
-}
-
-.product-item-cover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.product-item-copy {
-  display: grid;
-  gap: 6px;
-}
-
-.product-item-copy strong,
-.product-item-copy p {
-  margin: 0;
-}
-
-.product-item-actions {
-  display: flex;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.empty-state {
-  padding: 18px;
-  color: var(--muted);
-  border: 1px dashed var(--line);
-  background: rgba(255, 255, 255, 0.62);
-}
-
-.confirm-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: grid;
-  place-items: center;
-  padding: 20px;
-  background: rgba(33, 24, 18, 0.32);
-}
-
-.confirm-dialog {
-  width: min(460px, 100%);
-  padding: 24px;
-  border-radius: 24px;
-  border: 1px solid var(--line);
-  background: #fff;
-  box-shadow: 0 24px 60px rgba(33, 24, 18, 0.16);
-}
-
-.confirm-dialog h3,
-.confirm-dialog p {
-  margin: 0;
-}
-
-.confirm-dialog h3 {
-  margin-bottom: 12px;
-}
-
-.confirm-dialog p + p {
-  margin-top: 10px;
-}
-
-.confirm-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 20px;
-}
-
-.admin-button.danger {
-  color: #fff;
-  border-color: #1f1712;
-  background: #1f1712;
-}
-
-@media (max-width: 900px) {
-  .filter-row {
-    grid-template-columns: 1fr;
-  }
-
-  .product-page-head,
-  .product-item-card {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .product-item-actions {
-    width: 100%;
-  }
-}
-</style>

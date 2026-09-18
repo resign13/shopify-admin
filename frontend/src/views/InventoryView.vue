@@ -1,676 +1,701 @@
 <template>
-  <AdminLayout>
-    <div class="admin-page">
-      <section class="admin-card inventory-card">
-        <header class="inventory-page-head">
-          <div>
-            <p class="inventory-kicker">INVENTORY CONTROL</p>
-            <h1>库存管理</h1>
-            <p class="small-note">按颜色 SKU 管理各真实尺码库存，合同未送独立登记。</p>
-          </div>
-          <div v-if="canManageInventory" class="inventory-head-actions">
-            <button class="admin-button ghost" type="button" :disabled="exporting" @click="exportInventory">
-              {{ exporting ? '导出中...' : '导出库存' }}
-            </button>
-            <button class="admin-button" type="button" :disabled="previewLoading" @click="openImportPicker">
-              {{ previewLoading ? '读取中...' : '导入库存' }}
-            </button>
-            <input
-              ref="importInput"
-              class="visually-hidden"
-              type="file"
-              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-              @change="handleImportFile"
-            />
-          </div>
-        </header>
-
-        <form class="filter-row" @submit.prevent="applyFilters">
-          <label class="field-label">
-            <span>商品分类</span>
-            <select v-model="selectedCategoryDraft" class="admin-field">
-              <option value="">全部分类</option>
-              <option v-for="category in filterCategories" :key="category.key" :value="category.key">
-                {{ category.labels?.zh || category.label || category.key }}
-              </option>
-            </select>
-          </label>
-          <label class="field-label search-field">
-            <span>搜索</span>
-            <input v-model.trim="keywordDraft" class="admin-field" placeholder="输入商品名、SKU、商品编码或颜色" />
-          </label>
-          <div class="filter-actions">
-            <button class="admin-button ghost" type="submit">查询</button>
-          </div>
-        </form>
-
-        <div class="inventory-summary-grid">
-          <div class="inventory-summary-card">
-            <span>颜色 SKU 数</span>
-            <strong>{{ inventoryRows.length }}</strong>
-          </div>
-          <div class="inventory-summary-card">
-            <span>当前总库存</span>
-            <strong>{{ totalStock }}</strong>
-          </div>
-          <div v-if="showContractPending" class="inventory-summary-card">
-            <span>合同未送合计</span>
-            <strong>{{ totalContractPending }}</strong>
-          </div>
-          <div class="inventory-summary-card compact-summary">
-            <span>尺码种类</span>
-            <strong>{{ visibleSizeCount }}</strong>
-          </div>
-        </div>
-
-        <p v-if="error" class="admin-error inventory-message">{{ error }}</p>
-        <p v-else-if="saveMessage" class="inventory-success inventory-message">{{ saveMessage }}</p>
-        <div v-if="loading" class="small-note inventory-loading">库存数据加载中...</div>
-        <div v-else-if="!inventoryRows.length" class="empty-state">暂无符合条件的库存数据。</div>
-
-        <div v-else class="inventory-table-wrap">
-          <table class="inventory-table">
-            <colgroup>
-              <col class="product-column" />
-              <col class="size-column" />
-              <col class="total-column" />
-              <col v-if="showContractPending" class="pending-column" />
-              <col v-if="canEditInventory" class="action-column" />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>商品信息</th>
-                <th>尺码 / 库存 / 合同未送</th>
-                <th>当前库存</th>
-                <th v-if="showContractPending">合同未送</th>
-                <th v-if="canEditInventory">操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="item in inventoryRows" :key="item.id">
-                <td class="product-cell">
-                  <div class="product-info">
-                    <div class="inventory-thumb" :class="{ empty: !item.image }">
-                      <ProductImage v-if="item.image" :src="item.image" :alt="displayName(item)" />
-                      <span v-else>暂无图片</span>
-                    </div>
-                    <div class="product-copy">
-                      <strong class="product-title" :title="displayName(item)">{{ truncatedTitle(item) }}</strong>
-                      <span class="product-sku">{{ item.sku || item.productCode || '--' }}</span>
-                      <span class="product-meta">{{ item.colorName || '未设置颜色' }} · {{ categoryLabel(item) }}</span>
-                    </div>
-                  </div>
-                </td>
-                <td class="size-cell">
-                  <div class="size-grid">
-                    <div v-for="size in item.sizeRows" :key="`${item.id}-${size}`" class="size-card">
-                      <strong class="size-label">{{ size }}</strong>
-                      <div class="size-metric">
-                        <span>库存</span>
-                        <b :class="{ muted: readSizeStock(item, size) === 0 }">{{ readSizeStock(item, size) }}</b>
-                      </div>
-                      <div v-if="showContractPending" class="size-metric pending-metric">
-                        <span>未送</span>
-                        <b :class="{ muted: readContractPending(item, size) === 0 }">
-                          {{ readContractPending(item, size) }}
-                        </b>
-                      </div>
-                    </div>
-                  </div>
-                </td>
-                <td class="total-stock-cell">
-                  <span>库存合计</span>
-                  <strong>{{ displayTotalStock(item) }}</strong>
-                </td>
-                <td v-if="showContractPending" class="total-stock-cell pending-total-cell">
-                  <span>未送合计</span>
-                  <strong>{{ displayContractPending(item) }}</strong>
-                </td>
-                <td v-if="canEditInventory" class="actions-cell">
-                  <div v-if="isEditing(item.id)" class="editing-state">正在编辑</div>
-                  <button
-                    v-else
-                    class="admin-button ghost compact-button"
-                    type="button"
-                    :disabled="Boolean(editingItem)"
-                    @click="startEdit(item)"
-                  >
-                    修改库存
-                  </button>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
+  <PageHeader
+    title="库存管理"
+    description="从合同未送、待入库到现货，清晰掌握每个尺码的到货进度。"
+    eyebrow="INVENTORY / 商品与库存"
+    ><template v-if="canEdit"
+      ><ElButton :loading="exporting" @click="exportFile">导出库存</ElButton
+      ><ElButton type="primary" :loading="importing" @click="input.click()"
+        >导入库存</ElButton
+      ><input
+        ref="input"
+        type="file"
+        accept=".xlsx"
+        hidden
+        @change="previewFile" /></template
+  ></PageHeader>
+  <div
+    class="metric-grid"
+    :style="{ gridTemplateColumns: `repeat(${canEdit ? 5 : 3},minmax(0,1fr))` }"
+  >
+    <div class="metric">
+      <span>颜色 SKU 数</span><strong>{{ list.total }}</strong>
     </div>
-
-    <div v-if="editingItem" class="inventory-drawer-backdrop" @click.self="cancelEdit">
-      <aside class="inventory-drawer" role="dialog" aria-modal="true" aria-labelledby="inventory-drawer-title">
-        <div class="drawer-head">
-          <div>
-            <p class="inventory-kicker">EDIT STOCK</p>
-            <h2 id="inventory-drawer-title">修改库存</h2>
-            <p class="small-note">{{ truncatedTitle(editingItem, 48) }} · {{ editingItem.sku || editingItem.productCode }}</p>
-          </div>
-          <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="cancelEdit">×</button>
-        </div>
-        <div class="drawer-size-list">
-          <div v-for="size in editingItem.sizeRows" :key="`edit-${editingItem.id}-${size}`" class="drawer-size-row">
-            <strong>{{ size }}</strong>
-            <label>
-              <span>当前库存</span>
-              <input v-model="draftStocks[String(editingItem.id)].stocks[size]" class="admin-field" type="number" min="0" step="1" />
-            </label>
-            <label v-if="showContractPending">
-              <span>合同未送</span>
-              <input v-model="draftStocks[String(editingItem.id)].pending[size]" class="admin-field" type="number" min="0" step="1" />
-            </label>
-          </div>
-        </div>
-        <div class="drawer-total-row">
-          <span>库存合计</span><strong>{{ displayTotalStock(editingItem) }}</strong>
-          <template v-if="showContractPending">
-            <span>未送合计</span><strong>{{ displayContractPending(editingItem) }}</strong>
-          </template>
-        </div>
-        <div class="drawer-actions">
-          <button class="admin-button ghost" type="button" :disabled="savingId === editingItem.id" @click="cancelEdit">取消</button>
-          <button class="admin-button" type="button" :disabled="savingId === editingItem.id" @click="saveRow(editingItem)">
-            {{ savingId === editingItem.id ? '保存中...' : '保存修改' }}
-          </button>
-        </div>
-      </aside>
+    <div class="metric">
+      <span>当前库存合计</span><strong>{{ list.summary.stock || 0 }}</strong>
     </div>
-
-    <div v-if="previewOpen" class="inventory-drawer-backdrop" @click.self="closePreview">
-      <section class="inventory-import-modal" role="dialog" aria-modal="true" aria-labelledby="inventory-import-title">
-        <div class="drawer-head">
-          <div>
-            <p class="inventory-kicker">IMPORT PREVIEW</p>
-            <h2 id="inventory-import-title">导入库存预览</h2>
-            <p class="small-note">{{ importFile?.name || '库存文件' }}</p>
-          </div>
-          <button class="icon-button" type="button" aria-label="关闭" title="关闭" @click="closePreview">×</button>
-        </div>
-        <p v-if="previewError" class="admin-error inventory-message">{{ previewError }}</p>
-        <template v-if="previewData">
-          <div class="import-summary-grid">
-            <span>数据行 <b>{{ previewData.summary.rowCount }}</b></span>
-            <span>商品数 <b>{{ previewData.summary.productCount }}</b></span>
-            <span>待修改行 <b>{{ previewData.summary.changedRowCount }}</b></span>
-            <span>待修改字段 <b>{{ previewData.summary.changedFieldCount }}</b></span>
-          </div>
-          <div v-if="previewData.errors?.length" class="import-errors">
-            <strong>请先修正以下行：</strong>
-            <p v-for="item in previewData.errors.slice(0, 12)" :key="`${item.row}-${item.message}`">第 {{ item.row }} 行：{{ item.message }}</p>
-            <p v-if="previewData.errors.length > 12">另有 {{ previewData.errors.length - 12 }} 行错误未展开。</p>
-          </div>
-          <div v-else class="import-preview-table-wrap">
-            <table class="import-preview-table">
-              <thead><tr><th>商品 / SKU</th><th>尺码</th><th>库存</th><th>合同未送</th></tr></thead>
-              <tbody>
-                <tr v-for="row in previewData.rows.slice(0, 80)" :key="`${row.productId}-${row.sizeCode}`">
-                  <td>{{ row.title }}<small>{{ row.sku }}</small></td>
-                  <td>{{ row.sizeCode }}</td>
-                  <td :class="{ changed: row.stockChanged }">{{ row.originalStock }} → {{ row.stock }}</td>
-                  <td :class="{ changed: row.contractPendingChanged }">{{ row.originalContractPending }} → {{ row.contractPending }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-if="previewData.rows.length > 80" class="small-note">仅展示前 80 行，确认后将处理全部 {{ previewData.rows.length }} 行。</p>
-          </div>
-        </template>
-        <div class="drawer-actions">
-          <button class="admin-button ghost" type="button" :disabled="importing" @click="closePreview">取消</button>
-          <button
-            class="admin-button"
-            type="button"
-            :disabled="importing || !previewData || previewData.errors?.length"
-            @click="confirmImport"
-          >
-            {{ importing ? '导入中...' : '确认导入' }}
-          </button>
-        </div>
-      </section>
+    <div v-if="canEdit" class="metric">
+      <span>合同未送合计</span
+      ><strong>{{ list.summary.contractPending || 0 }}</strong>
     </div>
-  </AdminLayout>
+    <div v-if="canEdit" class="metric">
+      <span>待入库合计</span
+      ><strong>{{ list.summary.pendingInbound || 0 }}</strong>
+    </div>
+    <div class="metric">
+      <span>零库存尺码数</span
+      ><strong>{{ list.summary.zeroSizes || 0 }}</strong>
+    </div>
+  </div>
+  <section class="panel">
+    <form class="filters" @submit.prevent="apply">
+      <ElInput
+        v-model="filters.keyword"
+        clearable
+        placeholder="商品名、款式、SKU、颜色"
+      /><ElSelect v-model="filters.category" clearable placeholder="全部分类"
+        ><ElOption
+          v-for="c in categories"
+          :key="c.key"
+          :value="c.key"
+          :label="c.labels?.zh || c.key" /></ElSelect
+      ><ElButton native-type="submit" type="primary">查询</ElButton
+      ><ElButton @click="reset">重置</ElButton
+      ><span class="small-note">汇总和导出覆盖全部筛选结果</span>
+    </form>
+    <DataTable
+      ref="inventoryTable"
+      expandable
+      storage-key="inventory-v2"
+      :rows="list.rows"
+      :columns="columns"
+      :total="list.total"
+      :page="list.query.page"
+      :page-size="list.query.pageSize"
+      :loading="list.loading"
+      :error="list.error"
+      @retry="list.load"
+      @sort-change="list.sort"
+      @page="list.query.page = $event"
+      @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
+      ><template #name="{ row }"
+        ><div class="product-cell">
+          <ProductImage :src="row.image" :alt="productName(row)" />
+          <div>
+            <span class="product-name" :title="productName(row)">{{
+              shortName(row)
+            }}</span
+            ><small class="sku" :title="row.sku">{{ row.sku }}</small
+            ><small
+              >{{ row.colorName }} · {{ row.categoryLabel }} ·
+              <a href="#" @click.prevent="inventoryTable.toggleExpansion(row)"
+                >{{ row.sizePrices.length }} 个尺码，查看明细</a
+              ></small
+            >
+          </div>
+        </div></template
+      ><template #expanded="{ row }"
+        ><div class="inventory-expanded">
+          <div class="panel-title">
+            <strong>真实尺码明细</strong
+            ><span class="small-note">现货可销售；待入库包含在合同未送中</span>
+          </div>
+          <div class="stock-grid">
+            <div
+              v-for="size in row.sizePrices"
+              :key="size.sizeCode"
+              class="stock-cell"
+            >
+              <strong>{{ size.sizeCode }}</strong>
+              <div class="stock-line">
+                <span>现货</span
+                ><b :class="{ negative: size.stock === 0 }">{{ size.stock }}</b>
+              </div>
+              <template v-if="canEdit"
+                ><div class="stock-line">
+                  <span>合同未送</span><b>{{ size.contractPending }}</b>
+                </div>
+                <div class="stock-line inbound">
+                  <span>待入库</span><b>{{ size.pendingInbound }}</b>
+                </div></template
+              >
+            </div>
+          </div>
+        </div></template
+      ><template #pending="{ row }">{{
+        total(row, "contractPending")
+      }}</template
+      ><template #inbound="{ row }"
+        ><ElTag :type="total(row, 'pendingInbound') ? 'warning' : 'info'">{{
+          total(row, "pendingInbound")
+        }}</ElTag></template
+      ><template #actions="{ row }"
+        ><ElButton link type="primary" @click="edit(row)">登记数量</ElButton
+        ><ElButton
+          link
+          type="primary"
+          :disabled="!total(row, 'pendingInbound')"
+          @click="prepareReceipt(row)"
+          >一键入库</ElButton
+        ></template
+      ></DataTable
+    >
+  </section>
+  <ElDrawer
+    v-model="editing"
+    title="登记库存与待入库"
+    size="680px"
+    :before-close="close"
+    ><template v-if="product"
+      ><h3>{{ productName(product) }}</h3>
+      <p class="small-note">{{ product.sku }} · {{ product.colorName }}</p>
+      <ElAlert
+        title="待入库包含在合同未送中。登记不会增加现货；一键入库后才增加现货并减少合同未送。"
+        type="info"
+        :closable="false"
+      /><ElTable :data="draft"
+        ><ElTableColumn prop="sizeCode" label="真实尺码" /><ElTableColumn
+          label="当前库存"
+          min-width="155"
+          ><template #default="{ row }"
+            ><ElInputNumber
+              v-model="row.stock"
+              :min="0"
+              :precision="0"
+              controls-position="right"
+            /><small style="display: block"
+              >原值 {{ row.originalStock }} · 变化
+              {{ delta(row.stock, row.originalStock) }}</small
+            ></template
+          ></ElTableColumn
+        ><ElTableColumn label="合同未送" min-width="155"
+          ><template #default="{ row }"
+            ><ElInputNumber
+              v-model="row.contractPending"
+              :min="0"
+              :precision="0"
+              controls-position="right"
+            /><small style="display: block"
+              >原值 {{ row.originalPending }} · 变化
+              {{ delta(row.contractPending, row.originalPending) }}</small
+            ></template
+          ></ElTableColumn
+        ><ElTableColumn label="待入库" min-width="155"
+          ><template #default="{ row }"
+            ><ElInputNumber
+              v-model="row.pendingInbound"
+              :min="0"
+              :precision="0"
+              controls-position="right"
+            /><small style="display: block"
+              >原值 {{ row.originalInbound }} · 变化
+              {{ delta(row.pendingInbound, row.originalInbound) }}</small
+            ></template
+          ></ElTableColumn
+        ></ElTable
+      ><ElAlert v-if="error" :title="error" type="error" :closable="false"
+        ><ElButton v-if="conflict" text @click="readLatest"
+          >读取最新数据（保留草稿）</ElButton
+        ></ElAlert
+      >
+      <div v-if="latest" class="section-gap">
+        <h3>线上最新数量</h3>
+        <p v-for="s in latest.sizePrices" :key="s.sizeCode">
+          {{ s.sizeCode }}：库存 {{ s.stock }} / 合同未送
+          {{ s.contractPending }} / 待入库 {{ s.pendingInbound }}
+        </p>
+        <ElButton @click="adoptLatest">使用最新数据重新编辑</ElButton>
+      </div></template
+    ><template #footer
+      ><ElButton :disabled="saving" @click="close()">取消</ElButton
+      ><ElButton
+        type="primary"
+        :disabled="!dirty"
+        :loading="saving"
+        @click="submit"
+        >保存修改</ElButton
+      ></template
+    ></ElDrawer
+  >
+  <ElDrawer
+    v-model="previewOpen"
+    title="库存导入"
+    size="860px"
+    :close-on-click-modal="false"
+    :before-close="closeImport"
+    ><ElSteps
+      :active="importResult ? 3 : preview ? 1 : 0"
+      finish-status="success"
+      simple
+      ><ElStep title="上传文件" /><ElStep title="校验预览" /><ElStep
+        title="确认更新" /><ElStep title="结果"
+    /></ElSteps>
+    <p class="small-note section-gap">
+      {{ importFile?.name }} · 上传不会直接修改库存
+    </p>
+    <ElAlert
+      v-if="importError"
+      :title="importError"
+      type="error"
+      :closable="false"
+    /><ElResult
+      v-if="importResult"
+      icon="success"
+      title="库存导入完成"
+      :sub-title="`实际更新 ${importResult.updatedProducts} 个商品、${importResult.updatedRows} 个尺码、${importResult.updatedFields} 个字段`"
+    />
+    <template v-else-if="preview"
+      ><div class="batch-bar">
+        商品 {{ preview.summary.productCount }} · 尺码行
+        {{ preview.summary.rowCount }} · 待改行
+        {{ preview.summary.changedRowCount }} · 错误 {{ preview.errors.length }}
+      </div>
+      <ElRadioGroup
+        v-model="previewFilter"
+        class="section-gap"
+        @change="previewPage = 1"
+        ><ElRadioButton value="all">全部</ElRadioButton
+        ><ElRadioButton value="stock">库存变化</ElRadioButton
+        ><ElRadioButton value="pending">合同未送变化</ElRadioButton
+        ><ElRadioButton value="inbound">待入库变化</ElRadioButton
+        ><ElRadioButton value="errors">错误</ElRadioButton></ElRadioGroup
+      ><ElTable
+        :data="previewRows.slice((previewPage - 1) * 25, previewPage * 25)"
+        class="section-gap"
+        ><ElTableColumn
+          v-if="previewFilter === 'errors'"
+          prop="row"
+          label="行号"
+          width="70"
+        /><ElTableColumn
+          v-if="previewFilter === 'errors'"
+          prop="message"
+          label="错误原因"
+        /><template v-else
+          ><ElTableColumn label="商品 / SKU" min-width="220"
+            ><template #default="{ row }"
+              >{{ row.title
+              }}<small style="display: block">{{ row.sku }}</small></template
+            ></ElTableColumn
+          ><ElTableColumn
+            prop="sizeCode"
+            label="尺码"
+            width="90"
+          /><ElTableColumn label="库存"
+            ><template #default="{ row }"
+              ><span :class="{ positive: row.stockChanged }"
+                >{{ row.originalStock }} → {{ row.stock }}</span
+              ></template
+            ></ElTableColumn
+          ><ElTableColumn label="合同未送"
+            ><template #default="{ row }"
+              ><span :class="{ positive: row.contractPendingChanged }"
+                >{{ row.originalContractPending }} →
+                {{ row.contractPending }}</span
+              ></template
+            ></ElTableColumn
+          ><ElTableColumn label="待入库"
+            ><template #default="{ row }"
+              ><span :class="{ positive: row.pendingInboundChanged }"
+                >{{ row.originalPendingInbound ?? "保持" }} →
+                {{ row.pendingInbound ?? "保持" }}</span
+              ></template
+            ></ElTableColumn
+          ></template
+        ></ElTable
+      ><ElPagination
+        v-model:current-page="previewPage"
+        :page-size="25"
+        :total="previewRows.length"
+        layout="total,prev,pager,next"
+        class="section-gap" /><ElAlert
+        v-if="preview.errors.length"
+        title="请修正全部错误后重新上传；本次不会写入任何库存。"
+        type="error"
+        :closable="false" /></template
+    ><template #footer
+      ><ElButton :disabled="importing" @click="closeImport()">{{
+        importResult ? "完成" : "取消"
+      }}</ElButton
+      ><ElButton
+        v-if="!importResult"
+        type="primary"
+        :loading="importing"
+        :disabled="!preview || !!preview.errors.length"
+        @click="confirmImport"
+        >确认更新全部有效行</ElButton
+      ></template
+    ></ElDrawer
+  >
+  <ElDialog
+    v-model="receiptOpen"
+    title="确认一键入库"
+    width="680px"
+    :close-on-click-modal="false"
+    :before-close="closeReceipt"
+    ><template v-if="receipt"
+      ><p>
+        本次将为 <strong>{{ productName(receipt) }}</strong> 入库
+        <strong>{{ total(receipt, "pendingInbound") }}</strong> 件。
+      </p>
+      <ElAlert
+        title="现货增加、合同未送等量减少、待入库清零；各尺码整笔提交。"
+        type="info"
+        :closable="false" /><ElTable
+        :data="receipt.sizePrices.filter((s) => s.pendingInbound > 0)"
+        ><ElTableColumn prop="sizeCode" label="尺码" /><ElTableColumn
+          prop="pendingInbound"
+          label="本次入库"
+          align="right"
+        /><ElTableColumn label="现货"
+          ><template #default="{ row }"
+            >{{ row.stock }} → {{ row.stock + row.pendingInbound }}</template
+          ></ElTableColumn
+        ><ElTableColumn label="合同未送"
+          ><template #default="{ row }"
+            >{{ row.contractPending }} →
+            {{ row.contractPending - row.pendingInbound }}</template
+          ></ElTableColumn
+        ></ElTable
+      ><ElAlert
+        v-if="receiptError"
+        :title="receiptError"
+        type="error"
+        :closable="false" /></template
+    ><template #footer
+      ><ElButton :disabled="receiving" @click="receiptOpen = false"
+        >取消</ElButton
+      ><ElButton
+        type="primary"
+        :loading="receiving"
+        :disabled="!receipt || !total(receipt, 'pendingInbound')"
+        @click="receive"
+        >确认入库</ElButton
+      ></template
+    ></ElDialog
+  >
 </template>
-
 <script setup>
-import ProductImage from '../components/ProductImage.vue'
-import { computed, onMounted, ref } from 'vue'
-
-import AdminLayout from '../components/AdminLayout.vue'
-import { useAdminAuthStore } from '../stores/auth'
-import { useAdminStore } from '../stores/admin'
-
-const admin = useAdminStore()
-const auth = useAdminAuthStore()
-const selectedCategoryDraft = ref('')
-const selectedCategory = ref('')
-const keywordDraft = ref('')
-const keyword = ref('')
-const loading = ref(false)
-const error = ref('')
-const saveMessage = ref('')
-const editingId = ref(0)
-const savingId = ref(0)
-const draftStocks = ref({})
-const exporting = ref(false)
-const importInput = ref(null)
-const importFile = ref(null)
-const previewOpen = ref(false)
-const previewLoading = ref(false)
-const previewData = ref(null)
-const previewError = ref('')
-const importing = ref(false)
-
-const canEditInventory = computed(() => ['admin', 'sales', 'warehouse'].includes(auth.userRole))
-const canManageInventory = computed(() => canEditInventory.value)
-const showContractPending = computed(() => auth.userRole !== 'customer')
-const editingItem = computed(() => inventoryRows.value.find((item) => Number(item.id) === Number(editingId.value)) || null)
-
-const SIZE_ORDER = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', '28', '30', '32', '34', '36', '38']
-
-function normalizeSizeCode(value) {
-  return String(value || '').trim()
+import { computed, onMounted, reactive, ref } from "vue";
+import { ElMessage } from "element-plus";
+import { useAdminAuthStore } from "../stores/auth";
+import PageHeader from "../components/PageHeader.vue";
+import DataTable from "../components/DataTable.vue";
+import ProductImage from "../components/ProductImage.vue";
+import {
+  api,
+  save,
+  useList,
+  useDirty,
+  download,
+  notifyError,
+  confirm,
+  productName,
+  shortName,
+} from "../composables/workbench";
+const auth = useAdminAuthStore(),
+  canEdit = computed(() => auth.userRole !== "customer"),
+  list = useList("inventory"),
+  categories = ref([]),
+  filters = reactive({
+    keyword: list.query.keyword || "",
+    category: list.query.category || "",
+  });
+const inventoryTable = ref();
+const total = (row, field) =>
+  row.sizePrices.reduce((sum, size) => sum + Number(size[field] || 0), 0);
+const columns = computed(() => [
+  { prop: "name", label: "商品 / 颜色 SKU", width: 300 },
+  {
+    prop: "stock",
+    label: "现货库存",
+    width: 100,
+    numeric: true,
+    sortable: true,
+  },
+  ...(canEdit.value
+    ? [
+        { prop: "pending", label: "合同未送", width: 100, numeric: true },
+        { prop: "inbound", label: "待入库", width: 100, numeric: true },
+        { prop: "actions", label: "操作", width: 160 },
+      ]
+    : []),
+]);
+const editing = ref(false),
+  product = ref(),
+  draft = ref([]),
+  error = ref(""),
+  saving = ref(false),
+  latest = ref(),
+  conflict = ref(false),
+  input = ref(),
+  exporting = ref(false);
+const { dirty, markClean, canLeave } = useDirty(() => draft.value);
+function delta(a, b) {
+  const n = Number(a) - b;
+  return n > 0 ? "+" + n : String(n);
 }
-
-function sizeRank(value) {
-  const normalized = normalizeSizeCode(value).toUpperCase()
-  const base = normalized.split('/')[0]
-  const index = SIZE_ORDER.indexOf(normalized)
-  const baseIndex = SIZE_ORDER.indexOf(base)
-  if (index >= 0) return index
-  if (baseIndex >= 0) return baseIndex
-  return 1000
+function populate(item) {
+  product.value = item;
+  draft.value = item.sizePrices.map((s) => ({
+    ...s,
+    originalStock: s.stock,
+    originalPending: s.contractPending,
+    originalInbound: s.pendingInbound,
+  }));
+  markClean();
+  error.value = "";
+  conflict.value = false;
+  latest.value = null;
 }
-
-function sortSizes(values) {
-  return [...values].sort((left, right) => {
-    const rankDiff = sizeRank(left) - sizeRank(right)
-    if (rankDiff) return rankDiff
-    return String(left).localeCompare(String(right), 'en', { numeric: true })
-  })
-}
-
-const inventoryRows = computed(() => {
-  const normalizedKeyword = keyword.value.trim().toLowerCase()
-  return (admin.inventoryItems || [])
-    .filter((item) => {
-      if (selectedCategory.value && item.categoryKey !== selectedCategory.value) return false
-      if (!normalizedKeyword) return true
-      const names = item.name && typeof item.name === 'object' ? Object.values(item.name) : [item.name]
-      const haystack = [displayName(item), ...names, item.sku, item.productCode, item.colorName, categoryLabel(item)]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase()
-      return haystack.includes(normalizedKeyword)
-    })
-    .map((item) => {
-      const stocks = {}
-      const pending = {}
-      for (const row of item.sizePrices || []) {
-        const size = normalizeSizeCode(row?.sizeCode)
-        if (!size) continue
-        stocks[size] = Number(row.stock || 0)
-        pending[size] = Number(row.contractPending || 0)
-      }
-      const sizeRows = sortSizes(
-        Array.from(new Set([...(item.sizes || []), ...Object.keys(stocks)].map(normalizeSizeCode).filter(Boolean)))
-      )
-      const summedStock = Object.values(stocks).reduce((total, value) => total + Number(value || 0), 0)
-      const summedPending = Object.values(pending).reduce((total, value) => total + Number(value || 0), 0)
-      return {
-        ...item,
-        sizeRows,
-        sizeStockMap: stocks,
-        contractPendingMap: pending,
-        totalStock: Number(item.stock ?? summedStock),
-        totalContractPending: summedPending,
-      }
-    })
-    .sort((left, right) => String(left.sku || left.productCode || '').localeCompare(String(right.sku || right.productCode || ''), 'zh-Hans-CN', { numeric: true }))
-})
-
-const visibleSizeCount = computed(() => new Set(inventoryRows.value.flatMap((item) => item.sizeRows || [])).size)
-const filterCategories = computed(() => {
-  if (Array.isArray(admin.categories) && admin.categories.length) return admin.categories
-  const mapped = new Map()
-  for (const item of admin.inventoryItems || []) {
-    if (item.categoryKey && !mapped.has(item.categoryKey)) {
-      mapped.set(item.categoryKey, { key: item.categoryKey, label: item.categoryLabel || item.categoryKey })
-    }
-  }
-  return Array.from(mapped.values())
-})
-const totalStock = computed(() => inventoryRows.value.reduce((total, item) => total + Number(displayTotalStock(item) || 0), 0))
-const totalContractPending = computed(() => inventoryRows.value.reduce((total, item) => total + Number(displayContractPending(item) || 0), 0))
-
-function displayName(item) {
-  if (item?.name && typeof item.name === 'object') return item.name.zh || item.name.en || Object.values(item.name).find(Boolean) || item.productCode || item.sku || '未命名商品'
-  return item?.name || item?.productCode || item?.sku || '未命名商品'
-}
-
-function truncatedTitle(item, limit = 32) {
-  const value = typeof item === 'string' ? item : displayName(item)
-  const chars = Array.from(String(value || ''))
-  return chars.length > limit ? `${chars.slice(0, limit).join('')}...` : chars.join('')
-}
-
-function categoryLabel(item) {
-  const matched = admin.categories.find((category) => category.key === item.categoryKey)
-  return item.categoryLabel || matched?.labels?.zh || matched?.label || item.categoryKey || '--'
-}
-
-function readSizeStock(item, size) {
-  if (isEditing(item.id)) return Number(draftStocks.value[String(item.id)]?.stocks?.[size] || 0)
-  return Number(item.sizeStockMap?.[size] || 0)
-}
-
-function readContractPending(item, size) {
-  if (isEditing(item.id)) return Number(draftStocks.value[String(item.id)]?.pending?.[size] || 0)
-  return Number(item.contractPendingMap?.[size] || 0)
-}
-
-function displayTotalStock(item) {
-  return (item.sizeRows || []).reduce((total, size) => total + readSizeStock(item, size), 0)
-}
-
-function displayContractPending(item) {
-  return showContractPending.value
-    ? (item.sizeRows || []).reduce((total, size) => total + readContractPending(item, size), 0)
-    : 0
-}
-
-function isEditing(productId) {
-  return Number(editingId.value) === Number(productId)
-}
-
-function hasUnsavedChanges() {
-  const item = editingItem.value
-  if (!item) return false
-  const draft = draftStocks.value[String(item.id)] || { stocks: {}, pending: {} }
-  return item.sizeRows.some((size) =>
-    String(draft.stocks[size] ?? '') !== String(item.sizeStockMap?.[size] ?? 0)
-    || (showContractPending.value && String(draft.pending[size] ?? '') !== String(item.contractPendingMap?.[size] ?? 0))
-  )
-}
-
-function startEdit(item) {
-  if (!canEditInventory.value) return
-  if (editingItem.value && !isEditing(item.id) && hasUnsavedChanges() && !window.confirm('当前修改尚未保存，确定切换吗？')) return
-  error.value = ''
-  saveMessage.value = ''
-  editingId.value = Number(item.id)
-  draftStocks.value[String(item.id)] = {
-    stocks: Object.fromEntries(item.sizeRows.map((size) => [size, String(item.sizeStockMap?.[size] ?? 0)])),
-    pending: Object.fromEntries(item.sizeRows.map((size) => [size, String(item.contractPendingMap?.[size] ?? 0)])),
-  }
-}
-
-function cancelEdit() {
-  if (savingId.value) return
-  if (hasUnsavedChanges() && !window.confirm('当前修改尚未保存，确定取消吗？')) return
-  if (editingId.value) delete draftStocks.value[String(editingId.value)]
-  editingId.value = 0
-}
-
-function toSafeInteger(value, label) {
-  const raw = String(value ?? '').trim()
-  if (!/^\d+$/.test(raw)) throw new Error(`${label}必须是大于等于 0 的整数`)
-  return Number(raw)
-}
-
-async function saveRow(item) {
-  if (!canEditInventory.value) return
-  const draft = draftStocks.value[String(item.id)] || { stocks: {}, pending: {} }
-  const stocks = {}
-  const pending = {}
+async function edit(row) {
   try {
-    for (const size of item.sizeRows) {
-      stocks[size] = toSafeInteger(draft.stocks[size], `${item.sku || item.productCode} / ${size} 库存`)
-      if (showContractPending.value) pending[size] = toSafeInteger(draft.pending[size], `${item.sku || item.productCode} / ${size} 合同未送`)
-    }
-  } catch (validationError) {
-    error.value = validationError.message
-    return
+    populate((await api(`inventory/${row.id}`)).product);
+    editing.value = true;
+  } catch (e) {
+    notifyError(e);
   }
-  savingId.value = Number(item.id)
-  error.value = ''
-  saveMessage.value = ''
+}
+async function close(done) {
+  if (saving.value) return;
+  if (await canLeave()) {
+    markClean();
+    editing.value = false;
+    if (typeof done === "function") done();
+  }
+}
+async function apply() {
+  if (await canLeave()) list.apply(filters);
+}
+async function reset() {
+  if (await canLeave()) {
+    Object.assign(filters, { keyword: "", category: "" });
+    list.apply(filters);
+  }
+}
+async function submit() {
+  if (saving.value) return;
+  if (
+    draft.value.some(
+      (s) =>
+        !Number.isInteger(s.stock) ||
+        s.stock < 0 ||
+        !Number.isInteger(s.contractPending) ||
+        s.contractPending < 0 ||
+        !Number.isInteger(s.pendingInbound) ||
+        s.pendingInbound < 0 ||
+        s.pendingInbound > s.contractPending,
+    )
+  ) {
+    error.value = "数量必须为非负整数，待入库不能超过合同未送";
+    return;
+  }
+  saving.value = true;
+  error.value = "";
   try {
-    await admin.saveInventory(item.id, stocks, pending)
-    saveMessage.value = `${item.sku || item.productCode} 库存已更新`
-    if (editingId.value) delete draftStocks.value[String(editingId.value)]
-    editingId.value = 0
-  } catch (saveError) {
-    error.value = saveError.message || '库存保存失败'
+    await save(`inventory/${product.value.id}`, {
+      version: product.value.version,
+      sizeStocks: Object.fromEntries(
+        draft.value
+          .filter((s) => s.stock !== s.originalStock)
+          .map((s) => [s.sizeCode, s.stock]),
+      ),
+      contractPendingBySize: Object.fromEntries(
+        draft.value
+          .filter((s) => s.contractPending !== s.originalPending)
+          .map((s) => [s.sizeCode, s.contractPending]),
+      ),
+      pendingInboundBySize: Object.fromEntries(
+        draft.value
+          .filter((s) => s.pendingInbound !== s.originalInbound)
+          .map((s) => [s.sizeCode, s.pendingInbound]),
+      ),
+    });
+    markClean();
+    editing.value = false;
+    ElMessage.success("库存已更新");
+    list.load();
+  } catch (e) {
+    error.value = e.message;
+    conflict.value = e.status === 409;
   } finally {
-    savingId.value = 0
+    saving.value = false;
   }
 }
-
-function applyFilters() {
-  if (hasUnsavedChanges() && !window.confirm('当前修改尚未保存，确定应用筛选吗？')) return
-  selectedCategory.value = selectedCategoryDraft.value
-  keyword.value = keywordDraft.value.trim()
-}
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob)
-  const link = document.createElement('a')
-  link.href = url
-  link.download = filename
-  document.body.appendChild(link)
-  link.click()
-  link.remove()
-  URL.revokeObjectURL(url)
-}
-
-async function exportInventory() {
-  exporting.value = true
-  error.value = ''
+async function readLatest() {
   try {
-    const blob = await admin.exportInventory({ category: selectedCategory.value, keyword: keyword.value })
-    const timestamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')
-    downloadBlob(blob, `inventory_export_${timestamp}.xlsx`)
-    saveMessage.value = '库存文件已导出'
-  } catch (exportError) {
-    error.value = exportError.message || '库存导出失败'
-  } finally {
-    exporting.value = false
+    latest.value = (await api(`inventory/${product.value.id}`)).product;
+  } catch (e) {
+    notifyError(e);
   }
 }
-
-function openImportPicker() {
-  importInput.value?.click()
+async function adoptLatest() {
+  if (await confirm("放弃当前草稿，使用最新数量？")) populate(latest.value);
 }
-
-async function handleImportFile(event) {
-  const file = event.target.files?.[0]
-  event.target.value = ''
-  if (!file) return
-  importFile.value = file
-  previewOpen.value = true
-  previewLoading.value = true
-  previewData.value = null
-  previewError.value = ''
+async function exportFile() {
+  if (exporting.value) return;
+  exporting.value = true;
   try {
-    previewData.value = await admin.previewInventoryImport(file)
-  } catch (previewRequestError) {
-    previewError.value = previewRequestError.message || '库存导入预览失败'
+    await download(
+      "inventory/export?" +
+        new URLSearchParams({ ...list.query, view: "workbench" }),
+      "当前库存.xlsx",
+    );
+  } catch (e) {
+    notifyError(e);
   } finally {
-    previewLoading.value = false
+    exporting.value = false;
   }
 }
-
-function closePreview() {
-  if (importing.value) return
-  previewOpen.value = false
-  importFile.value = null
-  previewData.value = null
-  previewError.value = ''
+const previewOpen = ref(false),
+  preview = ref(),
+  importFile = ref(),
+  importing = ref(false),
+  importError = ref(""),
+  importResult = ref(),
+  previewFilter = ref("all"),
+  previewPage = ref(1);
+const previewRows = computed(() =>
+  !preview.value
+    ? []
+    : previewFilter.value === "errors"
+      ? preview.value.errors
+      : preview.value.rows.filter(
+          (r) =>
+            previewFilter.value === "all" ||
+            (previewFilter.value === "stock"
+              ? r.stockChanged
+              : previewFilter.value === "inbound"
+                ? r.pendingInboundChanged
+                : r.contractPendingChanged),
+        ),
+);
+async function previewFile(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.error("文件不能超过 10 MB");
+    return;
+  }
+  importFile.value = file;
+  preview.value = null;
+  importResult.value = null;
+  importError.value = "";
+  previewOpen.value = true;
+  importing.value = true;
+  previewFilter.value = "all";
+  previewPage.value = 1;
+  try {
+    const body = new FormData();
+    body.append("file", file);
+    preview.value = await api("inventory/import/preview", {
+      method: "POST",
+      body,
+    });
+    if (preview.value.errors.length) previewFilter.value = "errors";
+  } catch (e) {
+    importError.value = e.message;
+  } finally {
+    importing.value = false;
+  }
 }
-
 async function confirmImport() {
-  if (!importFile.value || !previewData.value || previewData.value.errors?.length) return
-  importing.value = true
-  previewError.value = ''
+  if (
+    importing.value ||
+    !(await confirm(
+      `将处理 ${preview.value.summary.rowCount} 个尺码行，只修改相对导出原值发生变化的字段。`,
+      "确认导入",
+    ))
+  )
+    return;
+  importing.value = true;
   try {
-    const result = await admin.confirmInventoryImport(importFile.value, previewData.value.fileHash)
-    saveMessage.value = `${result.updatedProducts} 个商品、${result.updatedRows} 行库存已更新`
-    closePreview()
-  } catch (importError) {
-    previewError.value = importError.message || '库存导入失败，请重新预览'
+    const body = new FormData();
+    body.append("file", importFile.value);
+    body.append("fileHash", preview.value.fileHash);
+    importResult.value = await api("inventory/import/confirm", {
+      method: "POST",
+      body,
+    });
+    list.load();
+  } catch (e) {
+    importError.value = e.message;
   } finally {
-    importing.value = false
+    importing.value = false;
   }
 }
-
-async function loadPage() {
-  loading.value = true
-  error.value = ''
+function closeImport(done) {
+  if (importing.value) return;
+  previewOpen.value = false;
+  if (typeof done === "function") done();
+}
+const receipt = ref(),
+  receiptOpen = ref(false),
+  receiving = ref(false),
+  receiptError = ref(""),
+  receiptRequest = ref("");
+async function prepareReceipt(row) {
   try {
-    await admin.loadInventory()
-    if (!auth.isCustomer) await admin.loadCategories()
-  } catch (loadError) {
-    error.value = loadError.message || '库存数据加载失败'
-  } finally {
-    loading.value = false
+    receipt.value = (await api(`inventory/${row.id}`)).product;
+    receiptRequest.value = crypto.randomUUID();
+    receiptError.value = "";
+    receiptOpen.value = true;
+  } catch (e) {
+    notifyError(e);
   }
 }
-
-onMounted(loadPage)
+function closeReceipt(done) {
+  if (!receiving.value) done();
+}
+async function receive() {
+  if (receiving.value) return;
+  receiving.value = true;
+  receiptError.value = "";
+  try {
+    const result = await save(
+      `inventory/${receipt.value.id}/receive`,
+      { version: receipt.value.version, requestId: receiptRequest.value },
+      "POST",
+    );
+    receiptOpen.value = false;
+    ElMessage.success(
+      `入库完成：${result.receivedSizes} 个尺码，共 ${result.receivedUnits} 件`,
+    );
+    list.load();
+  } catch (e) {
+    receiptError.value = e.message;
+  } finally {
+    receiving.value = false;
+  }
+}
+onMounted(async () => {
+  try {
+    categories.value = (await api("catalog-options")).items;
+  } catch (e) {
+    notifyError(e);
+  }
+});
 </script>
 
 <style scoped>
-.inventory-card { min-width: 0; overflow: hidden; }
-.inventory-page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 20px; }
-.inventory-page-head h1 { margin: 0 0 6px; }
-.inventory-kicker { margin: 0 0 6px; color: var(--accent); font-size: 0.76rem; font-weight: 700; letter-spacing: 0.12em; }
-.inventory-head-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-.filter-row { display: grid; grid-template-columns: minmax(190px, 250px) minmax(0, 1fr) auto; gap: 14px; margin-bottom: 18px; align-items: end; }
-.field-label { display: grid; gap: 8px; color: var(--muted); font-size: 0.9rem; }
-.search-field { min-width: 0; }
-.filter-actions { display: flex; align-items: end; }
-.inventory-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
-.inventory-summary-card { display: grid; gap: 7px; min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 255, 255, 0.78); }
-.inventory-summary-card span { color: var(--muted); font-size: 0.86rem; }
-.inventory-summary-card strong { overflow: hidden; color: var(--accent); font-size: 1.65rem; text-overflow: ellipsis; }
-.compact-summary { background: rgba(255, 255, 255, 0.56); }
-.inventory-message { margin: 0 0 14px; }
-.inventory-success { color: #2d7b46; }
-.inventory-loading { padding: 20px 0; }
-.inventory-table-wrap { width: 100%; overflow: hidden; border: 1px solid var(--line); border-radius: 16px; background: rgba(255, 255, 255, 0.74); }
-.inventory-table { width: 100%; table-layout: fixed; border-collapse: collapse; }
-.inventory-table th, .inventory-table td { padding: 12px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-.inventory-table th { background: #f6ede4; color: var(--text); font-size: 0.86rem; text-align: center; }
-.inventory-table tbody tr:last-child td { border-bottom: 0; }
-.inventory-table tbody tr:hover { background: rgba(255, 255, 255, 0.74); }
-.product-column { width: 27%; }
-.size-column { width: 47%; }
-.total-column { width: 10%; }
-.pending-column { width: 10%; }
-.action-column { width: 112px; }
-.product-cell { min-width: 0; }
-.product-info { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.inventory-thumb { width: 58px; height: 58px; flex: 0 0 58px; display: grid; place-items: center; overflow: hidden; border-radius: 12px; background: #f3ebe4; color: var(--muted); font-size: 0.72rem; text-align: center; }
-.inventory-thumb img { width: 100%; height: 100%; object-fit: cover; }
-.inventory-thumb.empty { border: 1px dashed var(--line); }
-.product-copy { display: grid; min-width: 0; gap: 4px; }
-.product-title { display: block; overflow: hidden; color: var(--text); line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
-.product-sku, .product-meta { overflow: hidden; color: var(--muted); font-size: 0.82rem; text-overflow: ellipsis; white-space: nowrap; }
-.product-sku { color: var(--text); font-weight: 600; }
-.size-cell { min-width: 0; }
-.size-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 7px; min-width: 0; }
-.size-card { min-width: 0; padding: 7px 6px; border: 1px solid var(--line); border-radius: 10px; background: rgba(250, 247, 243, 0.72); }
-.size-label { display: block; margin-bottom: 5px; overflow: hidden; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.size-metric { display: flex; align-items: baseline; justify-content: space-between; gap: 4px; color: var(--muted); font-size: 0.7rem; }
-.size-metric b { color: var(--text); font-size: 0.86rem; }
-.size-metric b.muted { color: #ad9e92; }
-.pending-metric { margin-top: 2px; }
-.pending-metric b { color: var(--accent); }
-.total-stock-cell { text-align: center !important; }
-.total-stock-cell span { display: block; color: var(--muted); font-size: 0.74rem; }
-.total-stock-cell strong { display: block; margin-top: 5px; color: var(--accent); font-size: 1.1rem; }
-.pending-total-cell strong { color: #8f5d3f; }
-.actions-cell { text-align: center !important; }
-.compact-button { min-height: 38px; padding: 0 10px; font-size: 0.8rem; }
-.editing-state { color: var(--accent); font-size: 0.82rem; }
-.empty-state { padding: 36px 0 20px; color: var(--muted); text-align: center; }
-.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
-.icon-button { width: 36px; height: 36px; flex: 0 0 36px; border: 1px solid var(--line); border-radius: 50%; background: white; color: var(--text); font-size: 1.35rem; line-height: 1; cursor: pointer; }
-.inventory-drawer-backdrop { position: fixed; inset: 0; z-index: 200; display: flex; justify-content: flex-end; background: rgba(46, 33, 24, 0.26); }
-.inventory-drawer, .inventory-import-modal { width: min(520px, 100%); height: 100%; overflow-y: auto; padding: 26px; background: #fffdfa; box-shadow: -12px 0 32px rgba(46, 33, 24, 0.16); }
-.inventory-import-modal { width: min(780px, 100%); height: auto; max-height: 92vh; align-self: center; margin: 18px; border-radius: 18px; box-shadow: 0 18px 42px rgba(46, 33, 24, 0.2); }
-.drawer-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 20px; }
-.drawer-head h2 { margin: 0 0 5px; }
-.drawer-size-list { display: grid; gap: 10px; }
-.drawer-size-row { display: grid; grid-template-columns: 70px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: end; padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: rgba(250, 247, 243, 0.68); }
-.drawer-size-row > strong { align-self: center; }
-.drawer-size-row label { display: grid; gap: 5px; color: var(--muted); font-size: 0.76rem; }
-.drawer-size-row .admin-field { min-height: 40px; padding: 0 9px; border-radius: 10px; }
-.drawer-total-row { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; margin-top: 16px; padding: 13px 0; border-top: 1px solid var(--line); color: var(--muted); }
-.drawer-total-row strong { color: var(--accent); font-size: 1.1rem; }
-.drawer-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
-.import-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.import-summary-grid span { padding: 10px; border: 1px solid var(--line); border-radius: 10px; color: var(--muted); font-size: 0.78rem; }
-.import-summary-grid b { display: block; margin-top: 4px; color: var(--accent); font-size: 1.15rem; }
-.import-errors { padding: 13px; border: 1px solid rgba(167, 63, 53, 0.2); border-radius: 12px; background: #fff4f2; color: #a73f35; }
-.import-errors p { margin: 6px 0 0; font-size: 0.84rem; }
-.import-preview-table-wrap { max-height: 440px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; }
-.import-preview-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
-.import-preview-table th, .import-preview-table td { padding: 9px 10px; border-bottom: 1px solid var(--line); text-align: left; }
-.import-preview-table th { position: sticky; top: 0; background: #f6ede4; }
-.import-preview-table td small { display: block; margin-top: 3px; color: var(--muted); }
-.import-preview-table td.changed { color: var(--accent); font-weight: 700; }
-
-@media (max-width: 1080px) {
-  .filter-row { grid-template-columns: minmax(180px, 240px) minmax(0, 1fr); }
-  .filter-actions { grid-column: 1 / -1; justify-content: flex-end; }
-  .inventory-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .product-column { width: 29%; }
-  .size-column { width: 43%; }
-  .action-column { width: 98px; }
+.inventory-expanded {
+  padding: 18px 24px;
+  background: #f8fafc;
 }
-
-@media (max-width: 720px) {
-  .inventory-page-head { flex-direction: column; }
-  .inventory-head-actions { width: 100%; justify-content: stretch; }
-  .inventory-head-actions .admin-button { flex: 1; }
-  .filter-row { grid-template-columns: 1fr; }
-  .filter-actions { grid-column: auto; justify-content: stretch; }
-  .filter-actions .admin-button { width: 100%; }
-  .inventory-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .inventory-table-wrap { border: 0; background: transparent; overflow: visible; }
-  .inventory-table, .inventory-table tbody, .inventory-table tr, .inventory-table td { display: block; width: 100%; }
-  .inventory-table thead { display: none; }
-  .inventory-table tbody { display: grid; gap: 12px; }
-  .inventory-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(84px, 0.34fr); border: 1px solid var(--line); border-radius: 14px; background: rgba(255, 255, 255, 0.78); overflow: hidden; }
-  .inventory-table tbody tr:hover { background: rgba(255, 255, 255, 0.78); }
-  .inventory-table td { padding: 12px; border-bottom: 1px solid var(--line); }
-  .inventory-table td:last-child { border-bottom: 0; }
-  .product-cell, .size-cell { grid-column: 1 / -1; }
-  .product-cell { padding-bottom: 8px !important; }
-  .size-cell { padding-top: 5px !important; }
-  .size-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .total-stock-cell, .actions-cell { grid-column: span 1; }
-  .actions-cell { display: grid !important; place-items: center; }
-  .compact-button { width: 100%; }
-  .drawer-size-row { grid-template-columns: 54px minmax(0, 1fr) minmax(0, 1fr); }
-  .inventory-drawer, .inventory-import-modal { padding: 20px 16px; }
-  .inventory-import-modal { margin: 8px; max-height: calc(100vh - 16px); }
-  .import-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.inventory-expanded .stock-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
 }
-
-@media (max-width: 390px) {
-  .inventory-summary-grid { gap: 8px; }
-  .inventory-summary-card { padding: 11px; }
-  .inventory-summary-card strong { font-size: 1.35rem; }
-  .inventory-thumb { width: 50px; height: 50px; flex-basis: 50px; }
-  .product-title { font-size: 0.9rem; }
-  .drawer-size-row { grid-template-columns: 44px minmax(0, 1fr) minmax(0, 1fr); gap: 6px; padding: 9px 7px; }
+.stock-cell {
+  background: white;
+  padding: 12px;
+}
+.stock-cell strong {
+  font-size: 13px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+.stock-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.stock-line span {
+  color: var(--muted);
+}
+.stock-line.inbound b {
+  color: #b45309;
 }
 </style>
