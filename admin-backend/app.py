@@ -385,36 +385,85 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
 
 
 def fetch_image_bytes(url: str) -> bytes | None:
+    from urllib.parse import urlsplit, unquote
+    from flask import has_request_context
+    from image_delivery import deliver_image, MAX_SOURCE_BYTES
     value = str(url or "").strip()
     if not value:
         return None
-    req = urllib_request.Request(
-        value,
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        },
-    )
+    cache = None
+    if has_request_context():
+        cache = g.setdefault('export_image_cache', {})
+        if value in cache:
+            return cache[value]
+    result = None
     try:
-        with urllib_request.urlopen(req, timeout=20) as resp:
-            content_type = str(resp.headers.get("Content-Type", "")).lower()
-            if not content_type.startswith("image/"):
-                return None
-            return resp.read()
+        parsed = urlsplit(value)
+        owned_hosts = {'img.smawell.shop', 'smawell.shop', 'admin.smawell.shop',
+                       'gingtto.store', 'admin.gingtto.store', 'img.gingtto.store'}
+        if parsed.path.startswith('/uploads/') and (not parsed.netloc or parsed.hostname in owned_hosts):
+            # Read the same local/R2 cache as image delivery, without an HTTP
+            # round trip through Cloudflare or another Gunicorn worker.
+            with app.test_request_context('/uploads/export?w=160'):
+                response = deliver_image(UPLOAD_DIR, BASE_DIR / 'data' / 'image-cache',
+                                         unquote(parsed.path[len('/uploads/'):]), app.logger)
+                try:
+                    if response.status_code == 200 and response.mimetype.startswith('image/'):
+                        response.direct_passthrough = False
+                        result = response.get_data()
+                finally:
+                    response.close()
+        elif parsed.scheme in {'https', 'http'}:
+            req = urllib_request.Request(value, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*'})
+            with urllib_request.urlopen(req, timeout=10) as response:
+                if str(response.headers.get('Content-Type', '')).lower().startswith('image/'):
+                    data = response.read(MAX_SOURCE_BYTES + 1)
+                    if len(data) <= MAX_SOURCE_BYTES:
+                        result = data
     except Exception:
-        return None
+        app.logger.warning('Order export image retrieval failed')
+    if cache is not None and sum(len(data) for data in cache.values() if data) + len(result or b'') <= MAX_SOURCE_BYTES:
+        cache[value] = result
+    return result
+
+
+def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
+    """Warm a bounded request cache with six concurrent local/R2 reads."""
+    from concurrent.futures import ThreadPoolExecutor
+    from flask import has_request_context
+    if not has_request_context():
+        return
+    urls = dict.fromkeys(
+        str(url) for order in orders
+        for url in ([item.get('image') for item in order.get('items', [])]
+                    + split_order_attachments(order)[0]) if url
+    )
+    cache = g.setdefault('export_image_cache', {})
+    pending = [url for url in urls if url not in cache][:128]
+    def read(url):
+        with app.test_request_context('/api/admin/orders/export'):
+            return fetch_image_bytes(url)
+    budget = sum(len(data) for data in cache.values() if data)
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        for url, data in zip(pending, pool.map(read, pending)):
+            if budget + len(data or b'') <= 32 * 1024 * 1024:
+                cache[url] = data
+                budget += len(data or b'')
 
 
 def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70) -> OpenpyxlImage | None:
     try:
+        from PIL import ImageOps
         with PILImage.open(BytesIO(image_bytes)) as img:
-            converted = img.convert("RGBA")
+            converted = ImageOps.exif_transpose(img).convert("RGBA")
+            converted.thumbnail((width * 2, height * 2), PILImage.Resampling.LANCZOS)
             output = BytesIO()
             converted.save(output, format="PNG")
             output.seek(0)
             excel_image = OpenpyxlImage(output)
-            excel_image.width = width
-            excel_image.height = height
+            ratio = min(width / converted.width, height / converted.height)
+            excel_image.width = converted.width * ratio
+            excel_image.height = converted.height * ratio
             return excel_image
     except Exception:
         return None
@@ -480,6 +529,8 @@ def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]
 
 
 def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
+    if include_images:
+        prefetch_export_images(orders)
     workbook = Workbook()
     worksheet = workbook.active
     worksheet.title = "Orders"
@@ -599,27 +650,24 @@ def prepare_invoice_item_row(worksheet: Any, row: int, *, source_row: int, max_c
     worksheet[f"B{row}"].alignment = Alignment(horizontal="center", vertical="center")
 
 
-def shift_invoice_template_merges_after_insert(worksheet: Any, insert_at: int, amount: int, *, static_start_row: int) -> None:
+def insert_invoice_rows(worksheet: Any, insert_at: int, amount: int) -> None:
+    """Unmerge before moving cells, then rebuild merges at their new positions.
+
+    openpyxl.insert_rows moves cells but leaves merged range metadata unchanged.
+    Unmerging afterwards can delete shifted content or raise KeyError.
+    """
     if amount <= 0:
         return
-    ranges_to_shift = []
-    for merged_range in list(worksheet.merged_cells.ranges):
-        if merged_range.min_row >= static_start_row:
-            ranges_to_shift.append(
-                (
-                    str(merged_range),
-                    merged_range.min_row + amount,
-                    merged_range.min_col,
-                    merged_range.max_row + amount,
-                    merged_range.max_col,
-                )
-            )
-
-    for original_range, *_ in ranges_to_shift:
-        worksheet.unmerge_cells(original_range)
-
-    for _, min_row, min_col, max_row, max_col in ranges_to_shift:
-        worksheet.merge_cells(start_row=min_row, start_column=min_col, end_row=max_row, end_column=max_col)
+    ranges = [copy(area) for area in worksheet.merged_cells.ranges if area.max_row >= insert_at]
+    for area in ranges:
+        worksheet.unmerge_cells(str(area))
+    worksheet.insert_rows(insert_at, amount)
+    for area in ranges:
+        if area.min_row >= insert_at:
+            area.shift(row_shift=amount)
+        else:
+            area.max_row += amount
+        worksheet.merge_cells(str(area))
 
 
 def normalize_order_shipping_fee(value: Any) -> float:
@@ -742,6 +790,8 @@ def safe_sheet_title(value: Any, fallback: str = "Sheet") -> str:
 
 
 def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
+    if include_images:
+        prefetch_export_images(orders)
     workbook = Workbook()
     default_sheet = workbook.active
     workbook.remove(default_sheet)
@@ -991,6 +1041,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     if shipping_fee <= 0:
         raise ValueError("Please enter shipping fee before exporting PI")
 
+    prefetch_export_images([order])
     workbook = load_workbook(PROFORMA_TEMPLATE_PATH)
     worksheet = workbook["PI"] if "PI" in workbook.sheetnames else workbook.active
     worksheet.sheet_view.showGridLines = False
@@ -1007,11 +1058,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
     if extra_rows > 0:
         insert_at = template_last_item_row + 1
-        worksheet.insert_rows(insert_at, extra_rows)
-        # openpyxl shifts cell values/styles but not all merged ranges reliably.
-        # Keep the fixed template area (remarks, bank info and signatures) aligned
-        # with the rows that were moved down by the inserted item rows.
-        shift_invoice_template_merges_after_insert(worksheet, insert_at, extra_rows, static_start_row=23)
+        insert_invoice_rows(worksheet, insert_at, extra_rows)
         for offset in range(extra_rows):
             prepare_invoice_item_row(worksheet, insert_at + offset, source_row=template_last_item_row, max_col=10)
 

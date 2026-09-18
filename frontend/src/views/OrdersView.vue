@@ -282,7 +282,7 @@ async function exportOrders(type) {
     const params = new URLSearchParams({
       ...list.query,
       view: "workbench",
-      includeImages: "0",
+      includeImages: "1",
       ...(selected.value.length
         ? { orderIds: selected.value.map((o) => o.id).join(",") }
         : {}),
