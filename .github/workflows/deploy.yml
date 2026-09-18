@@ -1,23 +1,49 @@
 name: Deploy Admin
-
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-
+permissions:
+  contents: read
+concurrency:
+  group: production-admin
+  cancel-in-progress: false
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - name: Deploy to server
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build frontend
+        working-directory: frontend
+        run: npm ci && npm run build
+      - name: Package release without runtime data or secrets
+        run: |
+          tar --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --exclude=uploads --exclude=data --exclude=__pycache__ -czf release.tar.gz admin-backend scripts frontend/dist db
+      - name: Upload release
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          password: ${{ secrets.DEPLOY_PASSWORD }}
+          fingerprint: ${{ secrets.DEPLOY_FINGERPRINT }}
+          source: release.tar.gz
+          target: /opt/smawell/incoming/admin-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Back up, deploy and verify
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           password: ${{ secrets.DEPLOY_PASSWORD }}
-          script_stop: true
-          envs: GITHUB_REF_NAME
+          fingerprint: ${{ secrets.DEPLOY_FINGERPRINT }}
+          command_timeout: 15m
           script: |
-            export GITHUB_REF_NAME="${GITHUB_REF_NAME:-main}"
-            bash /opt/gingtto/shopify-admin/scripts/deploy-admin.sh
+            set -eu
+            stage=/opt/smawell/incoming/admin-${{ github.run_id }}-${{ github.run_attempt }}
+            tar -xzf "$stage/release.tar.gz" -C "$stage"
+            bash "$stage/scripts/deploy-admin.sh" "$stage"

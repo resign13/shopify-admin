@@ -46,21 +46,16 @@ npm run dev
 
 ## GitHub 自动部署
 
-当前仓库已内置 GitHub Actions：
-- `.github/workflows/deploy.yml`
-- `scripts/deploy-admin.sh`
+推送 `main` 或手动运行 `.github/workflows/deploy.yml` 会在 GitHub runner
+使用 Node.js 22 构建前端，然后上传代码包到服务器并重启 `smawell-admin-api`。
+生产目录为 `/opt/smawell/shopify-admin`，采用 Nginx、systemd 和 PostgreSQL。
 
-推送到 `main` 后，会通过 SSH 登录服务器并执行：
-- `git fetch`
-- `git reset --hard origin/main`
-- `docker compose build admin-web admin-api`
-- `docker compose up -d admin-web admin-api`
+仓库 Secrets：`DEPLOY_HOST`、`DEPLOY_USER`、`DEPLOY_PASSWORD`、
+`DEPLOY_FINGERPRINT`（SSH SHA256 主机指纹）。当前部署主机为 `47.82.147.236`。
 
-GitHub 仓库需要配置以下 Secrets：
-- `DEPLOY_HOST`
-- `DEPLOY_USER`
-- `DEPLOY_PASSWORD`
-
-服务器预期目录：
-- `/opt/gingtto/shopify-admin`
-- `/opt/gingtto/deploy`
+部署包排除 `.env`、虚拟环境、上传目录和运行数据。服务器需预先具备
+Python 虚拟环境、rsync、生产配置和对应 systemd 服务。
+每次部署会备份代码、配置及数据库到 `/opt/smawell/backups/actions-*`，
+并通过共享锁串行执行商城和后台更新。部署失败恢复代码并重启服务，
+数据库新增字段保留，不自动恢复数据库备份以免覆盖新业务数据。
+前端构建失败时不会修改服务器。
