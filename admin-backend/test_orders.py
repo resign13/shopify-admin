@@ -7,6 +7,24 @@ from test_workbench import seed, application, db
 
 
 class AdminOrdersTest(unittest.TestCase):
+    def test_matrix_exports_use_local_images_and_preserve_size_quantities(self):
+        from tempfile import TemporaryDirectory
+        from pathlib import Path
+        from unittest.mock import patch
+        from PIL import Image
+        from openpyxl import load_workbook
+        with TemporaryDirectory() as directory:
+            Image.new('RGB', (600, 900), '#335577').save(Path(directory) / 'matrix.jpg')
+            order = {'orderNo': 'MATRIX-FIXTURE', 'items': [
+                {'productId': 1, 'sku': 'BLUE', 'sizeCode': size, 'quantity': qty,
+                 'image': 'https://img.smawell.shop/uploads/matrix.jpg'}
+                for size, qty in [('S', 2), ('30/M', 3), ('XXL', 4)]]}
+            for builder in [application.build_orders_export, application.build_orders_sheet_export]:
+                with patch.object(application, 'UPLOAD_DIR', Path(directory)), application.app.test_request_context('/api/admin/orders/export'):
+                    sheet = load_workbook(builder([order])).active
+                    self.assertEqual(len(sheet._images), 1)
+                    self.assertEqual([sheet.cell(6, c).value for c in [3, 4, 7, 8]], [2, 3, 4, 9])
+
     def setUp(self):
         self.tokens, _ = seed()
         application.app.config['TESTING'] = True

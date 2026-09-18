@@ -28,7 +28,7 @@ class InvoiceExportTest(unittest.TestCase):
                         self.assertEqual(read.call_count, 1)
                     with ZipFile(stream) as archive:
                         media = [name for name in archive.namelist() if name.startswith('xl/media/')]
-                        self.assertEqual(len(media), 3)
+                        self.assertEqual(len(media), 1)
                         for name in media:
                             content = archive.read(name)
                             self.assertLess(len(content), 50000)
