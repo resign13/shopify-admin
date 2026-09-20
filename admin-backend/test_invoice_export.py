@@ -83,6 +83,24 @@ class InvoiceExportTest(unittest.TestCase):
                             if picture.width == 1200:
                                 self.assertGreaterEqual(ws.row_dimensions[picture.anchor._from.row + 1].height, 300)
 
+    def test_invoice_attachments_follow_totals_and_product_pictures_are_large(self):
+        photo = BytesIO(); Image.new('RGB', (1200, 1600), '#335577').save(photo, format='PNG')
+        order = {'orderNo': 'VISIBLE-PHOTOS', 'shippingFee': 10, 'note': 'Packing note',
+                 'labelImageUrls': ['/uploads/attachment.png'], 'items': [
+                     {'sku': 'ONE', 'image': '/uploads/product.png', 'sizeCode': 'M', 'quantity': 2, 'unitPrice': 20}]}
+        with patch.object(application, 'fetch_image_bytes', return_value=photo.getvalue()):
+            sheet = load_workbook(application.build_order_invoice_export(order)).active
+        self.assertEqual(sheet.column_dimensions['B'].width, 22)
+        self.assertEqual(sheet.row_dimensions[13].height, 132)
+        self.assertIn('ATTACHMENTS', sheet['A28'].value)
+        self.assertIn('Packing note', sheet['A29'].value)
+        self.assertEqual(sheet['A33'].value, 'REMARKS:')
+        self.assertEqual(sheet['J23'].value, '=J21+J22')
+        product = next(pic for pic in sheet._images if pic.anchor._from.row == 12)
+        self.assertEqual(product.anchor.ext.cy, 160 * 9525)
+        self.assertTrue(any(pic.anchor._from.row == 30 for pic in sheet._images))
+        self.assertTrue(any('BANK' in str(c.value).upper() for row in sheet.iter_rows(max_col=10) for c in row))
+
     def test_invoice_product_picture_keeps_640_pixels(self):
         photo = BytesIO(); Image.new('RGB', (1800, 1800), '#335577').save(photo, format='PNG')
         order = {'orderNo': 'CLEAR-PI', 'shippingFee': 10, 'items': [

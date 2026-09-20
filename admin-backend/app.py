@@ -891,7 +891,15 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     last_item_row = product_total_row - 1
 
     reset_invoice_summary_merges(worksheet, item_start_row, balance_row, shipping_row, total_row, deposit_row)
-    rebuild_invoice_fixed_footer(worksheet, footer_start_row=remarks_row)
+    attachment_images, attachment_files = split_order_attachments(order)
+    note_text = str(order.get("note") or "").strip()
+    has_attachments = bool(note_text or attachment_files or attachment_images)
+    if has_attachments:
+        insert_invoice_rows(worksheet, remarks_row, 5)
+    rebuild_invoice_fixed_footer(worksheet, footer_start_row=remarks_row + (5 if has_attachments else 0))
+    worksheet.column_dimensions["B"].width = 22
+    worksheet.sheet_view.zoomScale = 90
+    worksheet.sheet_view.zoomScaleNormal = 90
 
     # Header/customer fields: keep all original template formatting.
     worksheet["B5"] = str(order.get("orderNo") or "")
@@ -909,14 +917,13 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         max_height=72,
     )
 
-    # Clear only the data part of the item rows. Do not change column widths or
-    # the red-box Spec.(Size) layout from the template.
+    # Preserve the paired-size columns while giving product pictures more room.
     for row in range(item_start_row, product_total_row):
         prepare_invoice_item_row(worksheet, row, source_row=template_last_item_row, max_col=10)
 
     for index, item in enumerate(invoice_items):
         row = item_start_row + index
-        worksheet.row_dimensions[row].height = 44
+        worksheet.row_dimensions[row].height = 132
         worksheet[f"A{row}"] = item.get("description") or "--"
         worksheet[f"H{row}"] = f"=SUM(C{row}:G{row})"
         worksheet[f"I{row}"] = float(item.get("unitPrice") or 0)
@@ -927,7 +934,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         if image_bytes:
-            excel_image = build_excel_image(image_bytes, width=46, height=40)
+            excel_image = build_excel_image(image_bytes, width=140, height=160)
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
 
@@ -967,13 +974,10 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     for cell_ref in (f"J{product_total_row}", f"J{shipping_row}", f"J{total_row}", f"C{deposit_row}", f"C{balance_row}"):
         worksheet[cell_ref].number_format = '$#,##0.00'
 
-    # Leave the template REMARKS, bank information and signature area untouched.
-    # Only append order-specific notes/attachments after the template if present.
-    attachment_images, attachment_files = split_order_attachments(order)
-    note_text = str(order.get("note") or "").strip()
-    if note_text or attachment_files or attachment_images:
-        append_row = remarks_row + 49
-        worksheet[f"A{append_row}"] = "ORDER NOTE / ATTACHMENTS:"
+    # Show order-specific remarks directly below totals, before the fixed terms.
+    if has_attachments:
+        append_row = remarks_row
+        worksheet[f"A{append_row}"] = f"订单备注 / 附件图片（{len(attachment_images)} 张） / ORDER NOTE / ATTACHMENTS"
         worksheet[f"A{append_row}"].font = Font(bold=True)
         worksheet[f"A{append_row + 1}"] = "\n".join(
             [part for part in [f"Note: {note_text}" if note_text else "", "Attachments: " + ", ".join(attachment_files) if attachment_files else ""] if part]
