@@ -17,13 +17,20 @@ class InvoiceExportTest(unittest.TestCase):
                  'labelImageUrls': [f'/uploads/attachment-{i}.png' for i in range(9)],
                  'items': [{'productId': 1, 'sku': 'BLUE', 'sizeCode': 'M', 'quantity': 1, 'unitPrice': 20}]}
         for builder in [application.build_orders_export, application.build_orders_sheet_export, application.build_order_invoice_export]:
-            with self.subTest(builder=builder.__name__), patch.object(application, 'fetch_image_bytes', side_effect=lambda url: photo.getvalue() if url else None):
+            with self.subTest(builder=builder.__name__), patch.object(application, 'fetch_image_bytes', side_effect=lambda url, **kwargs: photo.getvalue() if url else None):
                 stream = builder(order if builder == application.build_order_invoice_export else [order])
                 book = load_workbook(stream)
                 baseline_order = {**order, 'labelImageUrls': []}
                 baseline = load_workbook(builder(baseline_order if builder == application.build_order_invoice_export else [baseline_order]))
                 self.assertEqual(sum(len(ws._images) for ws in book) - sum(len(ws._images) for ws in baseline), 9)
                 self.assertTrue(any(order['note'] in str(c.value) for ws in book for row in ws for c in row))
+                self.assertFalse(any('/uploads/attachment-' in str(c.value) for ws in book for row in ws for c in row))
+                attachment_pictures = [pic for ws in book for pic in ws._images if pic.width == 40 and pic.height == 60]
+                self.assertEqual(len(attachment_pictures), 9)
+                self.assertEqual(len({pic.anchor._from.row for pic in attachment_pictures}), 1)
+                positions = [(pic.anchor._from.col, pic.anchor._from.colOff) for pic in attachment_pictures]
+                self.assertEqual(positions, sorted(set(positions)))
+
 
     def test_both_exports_embed_small_images_and_reuse_downloads(self):
         with TemporaryDirectory() as directory:
@@ -49,6 +56,32 @@ class InvoiceExportTest(unittest.TestCase):
                             with Image.open(BytesIO(content)) as image:
                                 self.assertLessEqual(image.width, 172)
                                 self.assertLessEqual(image.height, 224)
+
+    def test_attachment_quality_is_independent_of_product_thumbnail(self):
+        with TemporaryDirectory() as directory:
+            Image.new('RGB', (2400, 3200), '#335577').save(Path(directory) / 'large.jpg')
+            url = '/uploads/large.jpg'
+            order = {'orderNo': 'CLEAR-ATTACHMENT', 'shippingFee': 10, 'labelImageUrls': [url, url],
+                     'items': [{'sku': 'ONE', 'image': url, 'quantity': 1, 'unitPrice': 20}]}
+            for builder in (application.build_orders_export, application.build_orders_sheet_export, application.build_order_invoice_export):
+                with self.subTest(export=builder.__name__), patch.object(application, 'UPLOAD_DIR', Path(directory)), application.app.test_request_context('/'):
+                    stream = builder(order if builder == application.build_order_invoice_export else [order])
+                    book = load_workbook(stream)
+                    with ZipFile(stream) as archive:
+                        dimensions = []
+                        for name in archive.namelist():
+                            if name.startswith('xl/media/'):
+                                with Image.open(BytesIO(archive.read(name))) as picture:
+                                    dimensions.append(picture.size)
+                        self.assertIn((720, 960), dimensions)
+                    pictures = [pic for ws in book for pic in ws._images if pic.width == 720]
+                    self.assertEqual(len(pictures), 2)
+                    self.assertEqual(pictures[0].anchor._from.row, pictures[1].anchor._from.row)
+                    self.assertGreater(pictures[1].anchor._from.col, pictures[0].anchor._from.col)
+                    for ws in book:
+                        for picture in ws._images:
+                            if picture.width == 720:
+                                self.assertGreaterEqual(ws.row_dimensions[picture.anchor._from.row + 1].height, 300)
 
     def test_invoice_with_few_and_many_product_rows(self):
         for count in (1, 8, 20, 60):

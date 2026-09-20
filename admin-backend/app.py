@@ -384,18 +384,19 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
     }
 
 
-def fetch_image_bytes(url: str) -> bytes | None:
+def fetch_image_bytes(url: str, *, attachment: bool = False) -> bytes | None:
     from urllib.parse import urlsplit, unquote
     from flask import has_request_context
     from image_delivery import deliver_image, MAX_SOURCE_BYTES
     value = str(url or "").strip()
     if not value:
         return None
+    cache_key = (value, 1600) if attachment else value
     cache = None
     if has_request_context():
         cache = g.setdefault('export_image_cache', {})
-        if value in cache:
-            return cache[value]
+        if cache_key in cache:
+            return cache[cache_key]
     result = None
     try:
         parsed = urlsplit(value)
@@ -404,7 +405,7 @@ def fetch_image_bytes(url: str) -> bytes | None:
         if parsed.path.startswith('/uploads/') and (not parsed.netloc or parsed.hostname in owned_hosts):
             # Read the same local/R2 cache as image delivery, without an HTTP
             # round trip through Cloudflare or another Gunicorn worker.
-            with app.test_request_context('/uploads/export?w=160'):
+            with app.test_request_context('/uploads/export?w=' + ('1600' if attachment else '160')):
                 response = deliver_image(UPLOAD_DIR, BASE_DIR / 'data' / 'image-cache',
                                          unquote(parsed.path[len('/uploads/'):]), app.logger)
                 try:
@@ -423,7 +424,7 @@ def fetch_image_bytes(url: str) -> bytes | None:
     except Exception:
         app.logger.warning('Order export image retrieval failed')
     if cache is not None and sum(len(data) for data in cache.values() if data) + len(result or b'') <= MAX_SOURCE_BYTES:
-        cache[value] = result
+        cache[cache_key] = result
     return result
 
 
@@ -461,7 +462,7 @@ def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70) 
             converted.save(output, format="PNG")
             output.seek(0)
             excel_image = OpenpyxlImage(output)
-            ratio = min(width / converted.width, height / converted.height)
+            ratio = min(1, width / converted.width, height / converted.height)
             excel_image.width = converted.width * ratio
             excel_image.height = converted.height * ratio
             return excel_image
@@ -532,7 +533,8 @@ def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = 
     from order_matrix_export import build
     return build(orders, split=False, include_images=include_images,
                  fetch_image=fetch_image_bytes, make_image=build_excel_image,
-                 attachments=split_order_attachments)
+                 attachments=split_order_attachments,
+                 fetch_attachment=lambda url: fetch_image_bytes(url, attachment=True))
 
 
 PROFORMA_TEMPLATE_PATH = Path(
@@ -709,7 +711,8 @@ def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: b
     from order_matrix_export import build
     return build(orders, split=True, include_images=include_images,
                  fetch_image=fetch_image_bytes, make_image=build_excel_image,
-                 attachments=split_order_attachments)
+                 attachments=split_order_attachments,
+                 fetch_attachment=lambda url: fetch_image_bytes(url, attachment=True))
 
 
 def reset_invoice_summary_merges(
@@ -944,23 +947,14 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
             max_height=409,
         )
 
-        attachment_anchor_columns = ["A", "C", "E"]
-        attachment_anchor_rows = [append_row + 3, append_row + 9, append_row + 15]
-        for anchor_row in attachment_anchor_rows:
-            worksheet.row_dimensions[anchor_row].height = 102
-        for image_index, attachment_url in enumerate(attachment_images[:9]):
-            try:
-                attachment_bytes = fetch_image_bytes(attachment_url)
-                if not attachment_bytes:
-                    continue
-                attachment_image = build_excel_image(attachment_bytes, width=112, height=112)
-                if not attachment_image:
-                    continue
-                row = attachment_anchor_rows[image_index // len(attachment_anchor_columns)]
-                column = attachment_anchor_columns[image_index % len(attachment_anchor_columns)]
-                worksheet.add_image(attachment_image, f"{column}{row}")
-            except Exception:
-                continue
+        from order_matrix_export import add_attachment_strip
+        pictures = []
+        for attachment_url in attachment_images[:9]:
+            attachment_bytes = fetch_image_bytes(attachment_url, attachment=True)
+            attachment_image = build_excel_image(attachment_bytes, width=480, height=480) if attachment_bytes else None
+            if attachment_image:
+                pictures.append(attachment_image)
+        add_attachment_strip(worksheet, append_row + 3, pictures)
 
     output = BytesIO()
     workbook.save(output)

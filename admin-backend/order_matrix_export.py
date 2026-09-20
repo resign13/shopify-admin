@@ -45,22 +45,56 @@ def text_cell(ws, row, col, value):
     return cell
 
 
-def build(orders, *, split=False, include_images=True, fetch_image, make_image, attachments):
+def add_attachment_strip(ws, row, images):
+    """Place full-resolution images side by side without changing table columns."""
+    from openpyxl.drawing.spreadsheet_drawing import OneCellAnchor, AnchorMarker
+    from openpyxl.drawing.xdr import XDRPositiveSize2D
+    from openpyxl.utils.units import pixels_to_EMU
+    left = 0
+    max_height = 0
+    for image in images:
+        # Keep the embedded pixels; only scale the Excel display dimensions.
+        scale = min(1, 320 / image.width, 400 / image.height)
+        image.width *= scale
+        image.height *= scale
+        column, offset = 0, left
+        while True:
+            letter = get_column_letter(column + 1)
+            dimension = ws.column_dimensions.get(letter)
+            width = (dimension.width if dimension else ws.sheet_format.defaultColWidth or 8.43)
+            pixels = max(1, int(width * 7 + 5))
+            if offset < pixels:
+                break
+            offset -= pixels
+            column += 1
+        image.anchor = OneCellAnchor(
+            _from=AnchorMarker(col=column, colOff=pixels_to_EMU(offset), row=row - 1),
+            ext=XDRPositiveSize2D(pixels_to_EMU(image.width), pixels_to_EMU(image.height)))
+        ws.add_image(image)
+        left += image.width + 20
+        max_height = max(max_height, image.height)
+    if images:
+        ws.row_dimensions[row].height = max_height * 0.75 + 12
+    return row + (1 if images else 0)
+
+
+def build(orders, *, split=False, include_images=True, fetch_image, make_image, attachments, fetch_attachment=None):
     book = Workbook()
     book.remove(book.active)
     shared = None if split else book.create_sheet('Orders')
     cursor = 1
     image_cache = {}
     cache_bytes = 0
-    def image_bytes(url):
+    def image_bytes(url, attachment=False):
         nonlocal cache_bytes
-        if url not in image_cache:
-            data = fetch_image(url)
+        key = (url, attachment)
+        if key not in image_cache:
+            data = (fetch_attachment if attachment and fetch_attachment else fetch_image)(url)
             if cache_bytes + len(data or b'') > 32 * 1024 * 1024:
                 return data
-            image_cache[url] = data
+            image_cache[key] = data
             cache_bytes += len(data or b'')
-        return image_cache[url]
+        return image_cache[key]
     for index, order in enumerate(orders, 1):
         name = re.sub(r'[\[\]:*?/\\]', '_', str(order.get('orderNo') or f'Order {index}'))[:31]
         ws = book.create_sheet(name) if split else shared
@@ -119,18 +153,18 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             cell.fill = PatternFill('solid', fgColor='F1F5F9')
         image_urls, file_urls = attachments(order)
         full_line(row_no + 2, '备注：' + str(order.get('note') or ''), 48)
-        urls = file_urls + image_urls
+        urls = file_urls
         if urls:
             full_line(row_no + 3, '附件：' + '\n'.join(urls), min(180, 24 * len(urls) + 24))
         cursor = row_no + 5
         if include_images:
+            attachment_images = []
             for url in image_urls:
-                data = image_bytes(url)
-                image = make_image(data, width=160, height=120) if data else None
+                data = image_bytes(url, attachment=True)
+                image = make_image(data, width=480, height=480) if data else None
                 if image:
-                    ws.add_image(image, f'B{cursor}')
-                    ws.row_dimensions[cursor].height = 96
-                    cursor += 1
+                    attachment_images.append(image)
+            cursor = add_attachment_strip(ws, cursor, attachment_images)
         cursor += 2
         ws.freeze_panes = 'C6'
         ws.sheet_properties.pageSetUpPr.fitToPage = True
