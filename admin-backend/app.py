@@ -30,7 +30,7 @@ from flask_cors import CORS
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Alignment, Font, PatternFill
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, column_index_from_string
 from PIL import Image as PILImage
 from psycopg.errors import ForeignKeyViolation
 from werkzeug.utils import secure_filename
@@ -855,6 +855,14 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     workbook = load_workbook(PROFORMA_TEMPLATE_PATH)
     worksheet = workbook["PI"] if "PI" in workbook.sheetnames else workbook.active
     worksheet.sheet_view.showGridLines = False
+    # The inherited PI template styles empty cells through XFC. Remove only
+    # unused columns before insert_rows, which otherwise visits ~1M cells.
+    for key, cell in list(worksheet._cells.items()):
+        if key[1] > 10 and cell.value is None:
+            del worksheet._cells[key]
+    for name, dimension in list(worksheet.column_dimensions.items()):
+        if (dimension.min or column_index_from_string(name)) > 10:
+            del worksheet.column_dimensions[name]
 
     raw_items = [item for item in (order.get("items") or []) if isinstance(item, dict)]
     invoice_items = build_invoice_line_items(raw_items)

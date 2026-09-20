@@ -129,6 +129,8 @@ class InvoiceExportTest(unittest.TestCase):
                 output = application.build_order_invoice_export(order)
                 book = load_workbook(output)
                 sheet = book['PI']
+                self.assertEqual(sheet.max_column, 10)
+                self.assertTrue(all((d.max or d.min or 0) <= 10 for d in sheet.column_dimensions.values()))
                 last_item = 12 + max(count, 8)
                 self.assertEqual(sheet['B5'].value, 'SYNTHETIC-INVOICE')
                 self.assertEqual(sheet.cell(last_item + 1, 10).value, f'=SUM(J13:J{last_item})')
