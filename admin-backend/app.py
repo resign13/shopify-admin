@@ -2757,7 +2757,8 @@ def save_product_group():
             raise ValueError('缺少商品版本，请重新读取商品')
         for field, check in [('slug', product_slug_exists), ('sku', product_sku_exists), ('productCode', product_code_exists)]:
             if check(str(payload[field]).strip(), exclude_id=product_id):
-                raise ValueError(f"商品编码重复：{payload[field]}")
+                label = {"slug": "商品链接标识", "sku": "SKU", "productCode": "商品编码"}[field]
+                raise ValueError(f"{label}重复：{payload[field]}")
         product = update_product(int(product_id), payload) if product_id else create_product(payload)
         if not product:
             raise ValueError('商品不存在')

@@ -222,6 +222,7 @@
   >
 </template>
 <script setup>
+import { productSlug } from "../utils/productSlug";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -411,7 +412,7 @@ async function submit() {
       colorHex: v.colorHex,
       productCode: v.productCode,
       sku: v.sku,
-      slug: v.slug || v.productCode.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+      slug: v.slug || productSlug(v.productCode),
       sizes: v.sizePrices.map((s) => s.sizeCode),
       sizePrices: v.sizePrices.map((s) => ({
         sizeCode: s.sizeCode,

@@ -169,6 +169,24 @@ class WorkbenchTest(unittest.TestCase):
         p = self.call(f'products/{product_id}').json['product']
         return {**p, 'title':p['name']['zh'], 'familyCode':p['colorGroup']}
 
+    def test_six_chinese_color_products(self):
+        import copy
+        rows=[]
+        for color in ['黑色','白色','蓝色','棕色','灰色','绿色']:
+            row=copy.deepcopy(self.product_payload(1))
+            row.pop('id',None)
+            row['productCode']=row['sku']='CS5101-'+color
+            row['slug']='cs5101-'+color
+            row['colorName']=color
+            rows.append(row)
+        response=self.call('products/save-group','POST',{'products':rows})
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(len(response.json['items']),6)
+        self.assertEqual(len({r['slug'] for r in response.json['items']}),6)
+        duplicate=self.call('products/save-group','POST',{'products':[rows[-1]]})
+        self.assertEqual(duplicate.status_code,400)
+        self.assertIn('商品链接标识',duplicate.json['message'])
+
     def test_group_save_preserves_pending_and_rolls_back(self):
         rows=[self.product_payload(i) for i in [1,2]]
         versions={str(p['id']):p['version'] for p in rows}
