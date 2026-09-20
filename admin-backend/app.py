@@ -405,7 +405,7 @@ def fetch_image_bytes(url: str, *, attachment: bool = False) -> bytes | None:
         if parsed.path.startswith('/uploads/') and (not parsed.netloc or parsed.hostname in owned_hosts):
             # Read the same local/R2 cache as image delivery, without an HTTP
             # round trip through Cloudflare or another Gunicorn worker.
-            with app.test_request_context('/uploads/export?w=' + ('1600' if attachment else '160')):
+            with app.test_request_context('/uploads/export?w=' + ('1600' if attachment else '640')):
                 response = deliver_image(UPLOAD_DIR, BASE_DIR / 'data' / 'image-cache',
                                          unquote(parsed.path[len('/uploads/'):]), app.logger)
                 try:
@@ -415,12 +415,32 @@ def fetch_image_bytes(url: str, *, attachment: bool = False) -> bytes | None:
                 finally:
                     response.close()
         elif parsed.scheme in {'https', 'http'}:
-            req = urllib_request.Request(value, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*'})
-            with urllib_request.urlopen(req, timeout=10) as response:
-                if str(response.headers.get('Content-Type', '')).lower().startswith('image/'):
-                    data = response.read(MAX_SOURCE_BYTES + 1)
-                    if len(data) <= MAX_SOURCE_BYTES:
-                        result = data
+            # Cache the original once across requests and quality variants.
+            # URL hashes avoid persisting signed URLs or credentials in filenames.
+            import time
+            from filelock import FileLock
+            from image_delivery import atomic_write, prune_cache, SOURCE_TTL
+            cache_dir = BASE_DIR / 'data' / 'export-image-cache'
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            key = hashlib.sha256(value.encode()).hexdigest()
+            source = cache_dir / (key + '.source')
+            with FileLock(str(cache_dir / f'stripe-{int(key[:2], 16) % 64}.lock'), timeout=20):
+                if source.exists() and time.time() - source.stat().st_mtime < SOURCE_TTL:
+                    if source.stat().st_size <= MAX_SOURCE_BYTES:
+                        result = source.read_bytes()
+                else:
+                    req = urllib_request.Request(value, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*'})
+                    with urllib_request.urlopen(req, timeout=10) as response:
+                        if str(response.headers.get('Content-Type', '')).lower().startswith('image/'):
+                            data = response.read(MAX_SOURCE_BYTES + 1)
+                            if len(data) <= MAX_SOURCE_BYTES:
+                                result = data
+                                atomic_write(source, lambda output: output.write(data))
+                    if result:
+                        try:
+                            prune_cache(cache_dir, {source})
+                        except Exception:
+                            app.logger.warning('Export image cache cleanup deferred')
     except Exception:
         app.logger.warning('Order export image retrieval failed')
     if cache is not None and sum(len(data) for data in cache.values() if data) + len(result or b'') <= MAX_SOURCE_BYTES:
@@ -429,37 +449,46 @@ def fetch_image_bytes(url: str, *, attachment: bool = False) -> bytes | None:
 
 
 def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
-    """Warm a bounded request cache with six concurrent local/R2 reads."""
-    from concurrent.futures import ThreadPoolExecutor
+    """Fetch each URL at the highest required quality, with bounded concurrency."""
     from flask import has_request_context
     if not has_request_context():
         return
-    urls = dict.fromkeys(
-        str(url) for order in orders
-        for url in ([item.get('image') for item in order.get('items', [])]
-                    + split_order_attachments(order)[0]) if url
-    )
+    wanted = {}
+    for order in orders:
+        for item in order.get('items', []):
+            if item.get('image'):
+                wanted.setdefault(str(item['image']), False)
+        for url in split_order_attachments(order)[0]:
+            wanted[str(url)] = True
     cache = g.setdefault('export_image_cache', {})
-    pending = [url for url in urls if url not in cache][:128]
-    def read(url):
+    pending = [(url, attachment) for url, attachment in wanted.items()
+               if ((url, 1600) if attachment else url) not in cache][:128]
+    def read(pair):
+        url, attachment = pair
         with app.test_request_context('/api/admin/orders/export'):
-            return fetch_image_bytes(url)
+            return fetch_image_bytes(url, attachment=attachment)
     budget = sum(len(data) for data in cache.values() if data)
     with ThreadPoolExecutor(max_workers=6) as pool:
-        for url, data in zip(pending, pool.map(read, pending)):
-            if budget + len(data or b'') <= 32 * 1024 * 1024:
+        for (url, attachment), data in zip(pending, pool.map(read, pending)):
+            cost = len(data or b'') * (2 if attachment else 1)
+            if budget + cost <= 32 * 1024 * 1024:
                 cache[url] = data
-                budget += len(data or b'')
+                if attachment:
+                    cache[(url, 1600)] = data
+                budget += cost
 
 
-def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70) -> OpenpyxlImage | None:
+def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640) -> OpenpyxlImage | None:
     try:
         from PIL import ImageOps
         with PILImage.open(BytesIO(image_bytes)) as img:
             converted = ImageOps.exif_transpose(img).convert("RGBA")
-            converted.thumbnail((width * 2, height * 2), PILImage.Resampling.LANCZOS)
+            converted.thumbnail((pixels, pixels), PILImage.Resampling.LANCZOS)
             output = BytesIO()
-            converted.save(output, format="PNG")
+            if converted.getextrema()[3][0] == 255:
+                converted.convert("RGB").save(output, format="JPEG", quality=94, subsampling=0)
+            else:
+                converted.save(output, format="PNG")
             output.seek(0)
             excel_image = OpenpyxlImage(output)
             ratio = min(1, width / converted.width, height / converted.height)
@@ -531,6 +560,8 @@ def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]
 
 def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
     from order_matrix_export import build
+    if include_images:
+        prefetch_export_images(orders)
     return build(orders, split=False, include_images=include_images,
                  fetch_image=fetch_image_bytes, make_image=build_excel_image,
                  attachments=split_order_attachments,
@@ -709,6 +740,8 @@ def safe_sheet_title(value: Any, fallback: str = "Sheet") -> str:
 
 def build_orders_sheet_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
     from order_matrix_export import build
+    if include_images:
+        prefetch_export_images(orders)
     return build(orders, split=True, include_images=include_images,
                  fetch_image=fetch_image_bytes, make_image=build_excel_image,
                  attachments=split_order_attachments,
@@ -951,7 +984,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         pictures = []
         for attachment_url in attachment_images[:9]:
             attachment_bytes = fetch_image_bytes(attachment_url, attachment=True)
-            attachment_image = build_excel_image(attachment_bytes, width=480, height=480) if attachment_bytes else None
+            attachment_image = build_excel_image(attachment_bytes, width=480, height=480, pixels=1600) if attachment_bytes else None
             if attachment_image:
                 pictures.append(attachment_image)
         add_attachment_strip(worksheet, append_row + 3, pictures)

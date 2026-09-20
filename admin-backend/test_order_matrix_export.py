@@ -38,6 +38,8 @@ class OrderMatrixExportTest(unittest.TestCase):
             book = load_workbook(self.export(split=split))
             self.assertEqual(len(book.worksheets), 2 if split else 1)
             sheet = book.worksheets[0]
+            self.assertEqual(sheet.freeze_panes, 'A6')
+            self.assertFalse(sheet.sheet_view.pane.xSplit)
             self.assertEqual([sheet.cell(5, c).value for c in range(3, 8)], SIZES)
             self.assertEqual(sheet['H5'].value, 'Tall XL')
             self.assertEqual(sheet['I5'].value, '合计 pcs')

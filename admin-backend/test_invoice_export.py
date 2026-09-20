@@ -32,7 +32,7 @@ class InvoiceExportTest(unittest.TestCase):
                 self.assertEqual(positions, sorted(set(positions)))
 
 
-    def test_both_exports_embed_small_images_and_reuse_downloads(self):
+    def test_both_exports_embed_clear_images_and_reuse_downloads(self):
         with TemporaryDirectory() as directory:
             Image.new('RGB', (2400, 3200), '#335577').save(Path(directory) / 'fixture.jpg')
             order = {'orderNo': 'IMAGE-FIXTURE', 'items': [
@@ -54,8 +54,8 @@ class InvoiceExportTest(unittest.TestCase):
                             content = archive.read(name)
                             self.assertLess(len(content), 50000)
                             with Image.open(BytesIO(content)) as image:
-                                self.assertLessEqual(image.width, 172)
-                                self.assertLessEqual(image.height, 224)
+                                self.assertEqual(image.width, 480)
+                                self.assertEqual(image.height, 640)
 
     def test_attachment_quality_is_independent_of_product_thumbnail(self):
         with TemporaryDirectory() as directory:
@@ -73,15 +73,47 @@ class InvoiceExportTest(unittest.TestCase):
                             if name.startswith('xl/media/'):
                                 with Image.open(BytesIO(archive.read(name))) as picture:
                                     dimensions.append(picture.size)
-                        self.assertIn((720, 960), dimensions)
-                    pictures = [pic for ws in book for pic in ws._images if pic.width == 720]
+                        self.assertIn((1200, 1600), dimensions)
+                    pictures = [pic for ws in book for pic in ws._images if pic.width == 1200]
                     self.assertEqual(len(pictures), 2)
                     self.assertEqual(pictures[0].anchor._from.row, pictures[1].anchor._from.row)
                     self.assertGreater(pictures[1].anchor._from.col, pictures[0].anchor._from.col)
                     for ws in book:
                         for picture in ws._images:
-                            if picture.width == 720:
+                            if picture.width == 1200:
                                 self.assertGreaterEqual(ws.row_dimensions[picture.anchor._from.row + 1].height, 300)
+
+    def test_invoice_product_picture_keeps_640_pixels(self):
+        photo = BytesIO(); Image.new('RGB', (1800, 1800), '#335577').save(photo, format='PNG')
+        order = {'orderNo': 'CLEAR-PI', 'shippingFee': 10, 'items': [
+            {'sku': 'ONE', 'image': 'https://example.test/product.png', 'quantity': 1, 'unitPrice': 20}]}
+        with patch.object(application, 'fetch_image_bytes', return_value=photo.getvalue()):
+            book = load_workbook(application.build_order_invoice_export(order))
+        self.assertTrue(any(pic.width == 640 and pic.height == 640 for pic in book.active._images))
+
+    def test_parallel_prefetch_and_disk_cache_reuse_originals(self):
+        from threading import Barrier
+        from unittest.mock import MagicMock
+        barrier = Barrier(2)
+        photo = BytesIO(); Image.new('RGB', (1800, 1800), '#335577').save(photo, format='PNG')
+        urls = ['https://example.test/one.png', 'https://example.test/two.png']
+        order = {'items': [{'image': urls[0]}], 'labelImageUrls': urls}
+        def download(*args, **kwargs):
+            barrier.wait(timeout=10)
+            response = MagicMock()
+            response.__enter__.return_value = response
+            response.headers = {'Content-Type': 'image/png'}
+            response.read.return_value = photo.getvalue()
+            return response
+        with TemporaryDirectory() as directory, patch.object(application, 'BASE_DIR', Path(directory)), \
+                patch.object(application.urllib_request, 'urlopen', side_effect=download) as network:
+            for repeat in range(2):
+                with application.app.test_request_context('/'):
+                    application.prefetch_export_images([order])
+                    for url in urls:
+                        self.assertEqual(application.fetch_image_bytes(url, attachment=True), photo.getvalue())
+                    self.assertEqual(application.fetch_image_bytes(urls[0]), photo.getvalue())
+            self.assertEqual(network.call_count, 2)
 
     def test_invoice_with_few_and_many_product_rows(self):
         for count in (1, 8, 20, 60):

@@ -161,12 +161,12 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             attachment_images = []
             for url in image_urls:
                 data = image_bytes(url, attachment=True)
-                image = make_image(data, width=480, height=480) if data else None
+                image = make_image(data, width=480, height=480, pixels=1600) if data else None
                 if image:
                     attachment_images.append(image)
             cursor = add_attachment_strip(ws, cursor, attachment_images)
         cursor += 2
-        ws.freeze_panes = 'C6'
+        ws.freeze_panes = 'A6'
         ws.sheet_properties.pageSetUpPr.fitToPage = True
         ws.page_setup.orientation = 'landscape'
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
