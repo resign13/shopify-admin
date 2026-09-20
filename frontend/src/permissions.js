@@ -8,7 +8,13 @@ export const moduleGroups = [
       ["categories", "商品分类"],
     ],
   },
-  { label: "订单业务", items: [["orders", "订单管理"]] },
+  {
+    label: "订单业务",
+    items: [
+      ["orders", "订单管理"],
+      ["contracts", "合同管理"],
+    ],
+  },
   {
     label: "商城运营",
     items: [

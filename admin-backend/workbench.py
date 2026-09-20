@@ -13,6 +13,8 @@ SHANGHAI = timezone(timedelta(hours=8))
 
 
 def migrate(cur):
+    import contracts
+    contracts.migrate(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admin_order_requests (
           request_id UUID PRIMARY KEY, actor_id BIGINT NOT NULL, payload_hash TEXT NOT NULL,
@@ -60,7 +62,7 @@ def migrate(cur):
     """)
     for table in ['products', 'product_size_prices', 'product_translations', 'product_images',
                   'product_sizes', 'orders', 'order_items', 'homepage_configs', 'product_categories',
-                  'product_category_translations', 'admin_users', 'store_users', 'banners']:
+                  'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts']:
         cur.execute(f'DROP TRIGGER IF EXISTS admin_audit ON {table}')
         cur.execute(f'CREATE TRIGGER admin_audit AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION capture_admin_audit()')
 

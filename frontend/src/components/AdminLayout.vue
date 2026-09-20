@@ -110,7 +110,10 @@ const definitions = [
   },
   {
     label: "订单业务",
-    items: [["/orders", "订单管理", Document, "admin,sales,warehouse"]],
+    items: [
+      ["/orders", "订单管理", Document, "admin,sales,warehouse"],
+      ["/contracts", "合同管理", Document, "admin,sales"],
+    ],
   },
   {
     label: "商城运营",

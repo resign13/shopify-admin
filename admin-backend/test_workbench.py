@@ -17,7 +17,7 @@ import workbench
 
 def seed():
     with db.get_connection() as conn:
-        conn.execute('TRUNCATE admin_order_requests,admin_audit_logs,inventory_receipts,inventory_import_receipts,admin_users,store_users,products,product_categories,orders,homepage_configs,banners RESTART IDENTITY CASCADE')
+        conn.execute('TRUNCATE purchase_contracts,admin_order_requests,admin_audit_logs,inventory_receipts,inventory_import_receipts,admin_users,store_users,products,product_categories,orders,homepage_configs,banners RESTART IDENTITY CASCADE')
     tokens={}
     for role,name in [('admin','陈管理员'),('sales','林外贸'),('warehouse','王仓管'),('customer','测试客户')]:
         user=db.create_admin_user({'name':name,'email':f'{role}@gingtto.test','passwordHash':generate_password_hash('Workbench-Test-2026',method='pbkdf2:sha256:1000'),'status':'active','role':role})

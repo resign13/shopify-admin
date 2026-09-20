@@ -149,6 +149,7 @@ const modules = {
     products: "商品",
     inventory: "库存",
     orders: "订单",
+    contracts: "采购合同",
     "home-config": "首页与活动",
     categories: "分类",
     "admin-users": "后台账号",

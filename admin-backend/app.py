@@ -2826,6 +2826,52 @@ def audit_detail_route(log_id):
     return jsonify({'item':workbench.serialize_audit(row)}) if row else (jsonify({'message':'记录不存在'}),404)
 
 
+
+@app.route('/api/admin/contracts', methods=['GET', 'POST'])
+@require_auth
+@require_roles('admin', 'sales')
+def contracts_route():
+    import contracts
+    return jsonify(contracts.create(request.get_json() or {}) if request.method == 'POST' else contracts.listing(request.args))
+
+
+@app.get('/api/admin/contracts/<int:contract_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def contract_detail_route(contract_id):
+    import contracts
+    item = contracts.detail(contract_id)
+    return jsonify({'item': item}) if item else (jsonify({'message': '合同不存在'}), 404)
+
+
+@app.put('/api/admin/contracts/<int:contract_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def contract_update_route(contract_id):
+    import contracts
+    return jsonify({'item': contracts.update(contract_id, request.get_json() or {})})
+
+
+@app.post('/api/admin/contracts/<int:contract_id>/cancel')
+@require_auth
+@require_roles('admin', 'sales')
+def contract_cancel_route(contract_id):
+    import contracts
+    return jsonify({'item': contracts.cancel(contract_id, request.get_json() or {})})
+
+
+@app.get('/api/admin/contracts/<int:contract_id>/export')
+@require_auth
+@require_roles('admin', 'sales')
+def contract_export_route(contract_id):
+    import contracts
+    item = contracts.detail(contract_id)
+    if not item: return jsonify({'message': '合同不存在'}), 404
+    result = contracts.export(item, lambda url: fetch_image_bytes(url, attachment=True), build_excel_image)
+    return send_file(result, download_name=f"购买合同-{item['contractNo']}.xlsx", as_attachment=True,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
 ensure_database_ready()
 
 

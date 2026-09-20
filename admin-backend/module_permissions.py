@@ -4,10 +4,10 @@ NULL preserves legacy role defaults; [] deliberately grants no modules.
 """
 MODULES = ['dashboard', 'products', 'inventory', 'orders', 'categories',
            'home-config', 'activity-zone/apply', 'activity-zone/manage',
-           'store-accounts', 'admin-users', 'audit-logs']
+           'store-accounts', 'admin-users', 'audit-logs', 'contracts']
 DEFAULTS = {
     'admin': MODULES,
-    'sales': MODULES[:8],
+    'sales': MODULES[:8] + ['contracts'],
     'warehouse': ['inventory', 'orders'],
     'customer': ['inventory'],
 }
@@ -36,10 +36,10 @@ def allows_request(user, path, method):
     if module == 'catalog-options':
         return bool(granted)
     if module == 'uploads':
-        return bool(granted & {'products', 'home-config', 'orders'})
+        return bool(granted & {'products', 'home-config', 'orders', 'contracts'})
     if module == 'products' and method == 'GET':
         # Order and operation editors need the same read-only product picker.
-        return bool(granted & ({'products', 'orders'} | operations))
+        return bool(granted & ({'products', 'orders', 'contracts'} | operations))
     if module == 'activity-config':
         return bool(granted & {'activity-zone/apply', 'activity-zone/manage'})
     if module == 'banners':
