@@ -106,7 +106,7 @@
                 :max="2147483647"
                 :precision="0"
                 :disabled="lockedLines"
-                controls-position="right"
+                :controls="false"
                 size="small"
                 @update:model-value="setMatrixQuantity(row, sizeCode, $event)"
               />
