@@ -35,16 +35,10 @@
         reserve-selection
         :selectable="(row) => !modelValue.includes(row.id)"
         width="40"
-      /><ElTableColumn label="商品"
+      /><ElTableColumn label="款号"
         ><template #default="{ row }"
           ><div class="product-cell">
-            <ProductImage :src="row.image" />
-            <div>
-              <span class="product-name" :title="productName(row)">{{
-                shortName(row)
-              }}</span
-              ><small>{{ row.sku }} · {{ row.colorName }}</small>
-            </div>
+            <span class="product-name" :title="row.sku">{{ row.sku }}</span>
           </div></template
         ></ElTableColumn
       ><ElTableColumn label="操作" width="100"
@@ -68,22 +62,21 @@
     /><template #footer
       ><span class="small-note">已选 {{ selected.length }} 个商品 </span
       ><ElButton
+        type="primary"
         :disabled="!selected.length"
         @click="
           emit('select-many', selected);
           table.clearSelection();
+          open = false;
         "
-        >加入所选</ElButton
-      ><ElButton type="primary" @click="open = false"
-        >完成选择</ElButton
+        >加入所选并完成</ElButton
       ></template
     ></ElDrawer
   >
 </template>
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import ProductImage from "./ProductImage.vue";
-import { api, productName, shortName } from "../composables/workbench";
+import { api } from "../composables/workbench";
 const props = defineProps({
     visible: Boolean,
     modelValue: { type: Array, default: () => [] },
@@ -136,3 +129,4 @@ watch(
   },
 );
 </script>
+

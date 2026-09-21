@@ -90,8 +90,7 @@
       <ElTable :data="matrixRows" empty-text="请添加颜色商品并填写至少一个尺码数量"
         ><ElTableColumn label="商品 / SKU" fixed="left" min-width="220"
           ><template #default="{ row }"
-            ><span class="product-name" :title="row.productName">{{ row.productName }}</span
-            ><small>{{ row.sku }}</small></template
+            ><span class="product-name" :title="row.sku">{{ row.sku }}</span></template
           ></ElTableColumn
         ><ElTableColumn
           v-for="sizeCode in matrixSizes"
