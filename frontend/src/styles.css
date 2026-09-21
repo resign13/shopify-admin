@@ -846,3 +846,21 @@ small,
 .el-table .el-button + .el-button {
   margin-left: 6px;
 }
+
+.order-size-matrix-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  min-height: 54px;
+  justify-content: center;
+}
+.order-size-matrix-cell .el-input-number {
+  width: 112px;
+}
+.order-size-price {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}

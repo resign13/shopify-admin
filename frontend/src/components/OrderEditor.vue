@@ -87,55 +87,45 @@
         type="info"
         :closable="false"
       />
-      <ElTable :data="form.items" empty-text="请添加商品并选择真实尺码"
-        ><ElTableColumn label="商品 / SKU" min-width="190"
+      <ElTable :data="matrixRows" empty-text="请添加颜色商品并填写至少一个尺码数量"
+        ><ElTableColumn label="商品 / SKU" fixed="left" min-width="220"
           ><template #default="{ row }"
-            ><span class="product-name" :title="row.productName">{{
-              row.productName
-            }}</span
+            ><span class="product-name" :title="row.productName">{{ row.productName }}</span
             ><small>{{ row.sku }}</small></template
           ></ElTableColumn
-        ><ElTableColumn label="真实尺码" width="135"
+        ><ElTableColumn
+          v-for="sizeCode in matrixSizes"
+          :key="sizeCode"
+          :label="sizeCode"
+          min-width="128"
+          align="center"
           ><template #default="{ row }"
-            ><ElSelect
-              v-model="row.sizeCode"
-              :disabled="lockedLines"
-              @change="selectSize(row)"
-              ><ElOption
-                v-for="s in sizeOptions(row)"
-                :key="s.sizeCode"
-                :value="s.sizeCode"
-                :label="s.sizeCode" /></ElSelect></template></ElTableColumn
-        ><ElTableColumn label="数量" width="130"
+            ><div class="order-size-matrix-cell">
+              <ElInputNumber
+                :model-value="quantityFor(row, sizeCode)"
+                :min="0"
+                :max="2147483647"
+                :precision="0"
+                :disabled="lockedLines"
+                controls-position="right"
+                size="small"
+                @update:model-value="setMatrixQuantity(row, sizeCode, $event)"
+              />
+              <small v-if="lineFor(row, sizeCode)" class="order-size-price">
+                {{ money(lineFor(row, sizeCode).unitPrice) }} / 件
+              </small>
+            </div></template
+        ></ElTableColumn
+        ><ElTableColumn label="小计" width="105" align="right"
+          ><template #default="{ row }">{{ money(matrixRowSubtotal(row)) }}</template
+        ></ElTableColumn
+        ><ElTableColumn label="操作" width="70"
           ><template #default="{ row }"
-            ><ElInputNumber
-              v-model="row.quantity"
-              :min="1"
-              :max="2147483647"
-              :precision="0"
-              :disabled="lockedLines"
-              controls-position="right"
-              style="width: 110px" /></template></ElTableColumn
-        ><ElTableColumn label="单价（USD）" width="140"
-          ><template #default="{ row }"
-            ><ElInputNumber
-              v-model="row.unitPrice"
-              :min="0"
-              :precision="2"
-              :disabled="lockedLines"
-              controls-position="right"
-              style="width: 120px" /></template></ElTableColumn
-        ><ElTableColumn label="小计" width="100" align="right"
-          ><template #default="{ row }">{{
-            money(row.quantity * row.unitPrice)
-          }}</template></ElTableColumn
-        ><ElTableColumn label="操作" width="65"
-          ><template #default="{ $index }"
             ><ElButton
               link
               type="danger"
               :disabled="lockedLines"
-              @click="form.items.splice($index, 1)"
+              @click="removeMatrixProduct(row)"
               >移除</ElButton
             ></template
           ></ElTableColumn
@@ -308,6 +298,79 @@ const { dirty, markClean, canLeave } = useDirty(() => form),
   units = computed(() =>
     form.items.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
   );
+const matrixRows = computed(() => {
+  const grouped = new Map();
+  for (const row of form.items) {
+    if (!grouped.has(row.productId)) {
+      grouped.set(row.productId, {
+        productId: row.productId,
+        productName: row.productName,
+        sku: row.sku,
+      });
+    }
+  }
+  return [...grouped.values()];
+});
+const matrixSizes = computed(() => {
+  const seen = new Set();
+  const sizes = [];
+  for (const row of matrixRows.value) {
+    const product = products[row.productId];
+    const configured = product?.sizePrices?.map((item) => item.sizeCode) || [];
+    const existing = form.items
+      .filter((item) => item.productId === row.productId)
+      .map((item) => item.sizeCode);
+    for (const sizeCode of [...configured, ...existing]) {
+      if (sizeCode && !seen.has(sizeCode)) {
+        seen.add(sizeCode);
+        sizes.push(sizeCode);
+      }
+    }
+  }
+  return sizes;
+});
+function lineFor(row, sizeCode) {
+  return form.items.find(
+    (item) => item.productId === row.productId && item.sizeCode === sizeCode,
+  );
+}
+function priceFor(row, sizeCode) {
+  const line = lineFor(row, sizeCode);
+  if (line) return Number(line.unitPrice || 0);
+  return Number(
+    products[row.productId]?.sizePrices?.find((item) => item.sizeCode === sizeCode)?.price || 0,
+  );
+}
+function quantityFor(row, sizeCode) {
+  return Number(lineFor(row, sizeCode)?.quantity || 0);
+}
+function setMatrixQuantity(row, sizeCode, value) {
+  if (lockedLines.value) return;
+  const next = Math.max(0, Math.min(2147483647, Math.trunc(Number(value) || 0)));
+  let line = lineFor(row, sizeCode);
+  if (!line && next > 0) {
+    line = {
+      productId: row.productId,
+      productName: row.productName,
+      sku: row.sku,
+      sizeCode,
+      quantity: 0,
+      unitPrice: priceFor(row, sizeCode),
+    };
+    form.items.push(line);
+  }
+  if (line) line.quantity = next;
+}
+function matrixRowSubtotal(row) {
+  return matrixSizes.value.reduce((sum, sizeCode) => {
+    const line = lineFor(row, sizeCode);
+    return sum + Number(line?.quantity || 0) * Number(line?.unitPrice || 0);
+  }, 0);
+}
+function removeMatrixProduct(row) {
+  if (lockedLines.value) return;
+  form.items = form.items.filter((item) => item.productId !== row.productId);
+}
 function statusDisabled(value) {
   if (status.value === 'cancelled' || status.value === 'completed') return value !== status.value;
   return status.value === 'shipped' && !['shipped','completed'].includes(value);
@@ -443,34 +506,40 @@ function sizeOptions(row) {
     : [...sizes, { sizeCode: row.sizeCode }];
 }
 function addProduct(product) {
-  if (form.items.length >= 500) {
-    ElMessage.warning("最多 500 个尺码行");
-    return;
-  }
   if (!product.sizePrices?.length) {
     ElMessage.warning("该商品尚未配置尺码");
     return;
   }
   products[product.id] = product;
-  const size = product.sizePrices.find(
-    (s) =>
-      !form.items.some(
-        (r) => r.productId === product.id && r.sizeCode === s.sizeCode,
-      ),
+  const existingSizes = new Set(
+    form.items
+      .filter((row) => row.productId === product.id)
+      .map((row) => row.sizeCode),
   );
-  if (!size) {
+  const missingSizes = product.sizePrices.filter(
+    (size) => !existingSizes.has(size.sizeCode),
+  );
+  if (!missingSizes.length) {
     ElMessage.info("该商品所有尺码均已添加，请直接调整数量");
     return;
   }
-  form.items.push({
-    productId: product.id,
-    productName: productName(product),
-    sku: product.sku,
-    sizeCode: size.sizeCode,
-    quantity: 1,
-    unitPrice: size.price,
-  });
-  ElMessage.success("已添加商品，可继续选择其他商品或尺码");
+  if (form.items.length + missingSizes.length > 500) {
+    ElMessage.warning("最多 500 个尺码行");
+    return;
+  }
+  form.items.push(
+    ...missingSizes.map((size) => ({
+      productId: product.id,
+      productName: productName(product),
+      sku: product.sku,
+      sizeCode: size.sizeCode,
+      quantity: 0,
+      unitPrice: Number(size.price || 0),
+    })),
+  );
+  ElMessage.success(
+    `已添加 ${productName(product)} 的 ${missingSizes.length} 个尺码，请填写订购数量`,
+  );
 }
 function selectSize(row) {
   const size = products[row.productId]?.sizePrices.find(
@@ -507,23 +576,22 @@ async function submit() {
     !(await formRef.value.validate().catch(() => false))
   )
     return;
-  if (
-    !form.items.length ||
-    form.items.some(
-      (r) =>
-        !Number.isInteger(r.quantity) ||
-        r.quantity < 1 ||
-        typeof r.unitPrice !== "number" ||
-        !Number.isFinite(r.unitPrice) ||
-        r.unitPrice < 0,
-    )
-  ) {
-    error.value = "请添加商品，并填写有效的正整数数量和非负单价";
+  const invalidRow = form.items.find(
+    (r) =>
+      !Number.isInteger(r.quantity) ||
+      r.quantity < 0 ||
+      typeof r.unitPrice !== "number" ||
+      !Number.isFinite(r.unitPrice) ||
+      r.unitPrice < 0,
+  );
+  const items = form.items.filter((r) => r.quantity > 0);
+  if (invalidRow || !items.length) {
+    error.value = "请至少填写一个尺码，并确保数量为非负整数、单价为非负金额";
     return;
   }
   if (
-    new Set(form.items.map((r) => `${r.productId}:${r.sizeCode}`)).size !==
-    form.items.length
+    new Set(items.map((r) => `${r.productId}:${r.sizeCode}`)).size !==
+    items.length
   ) {
     error.value = "同一商品尺码不能重复，请合并数量";
     return;
@@ -539,7 +607,7 @@ async function submit() {
   try {
     const payload = {
       ...form,
-      items: form.items.map(({ productId, sizeCode, quantity, unitPrice }) => ({
+      items: items.map(({ productId, sizeCode, quantity, unitPrice }) => ({
         productId,
         sizeCode,
         quantity,
