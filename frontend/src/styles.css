@@ -856,7 +856,7 @@ small,
   justify-content: center;
 }
 .order-size-matrix-cell .el-input-number {
-  width: 112px;
+  width: 72px;
 }
 .order-size-price {
   color: var(--muted);
