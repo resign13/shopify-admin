@@ -170,8 +170,8 @@ def apply_delta(before, after):
         row = db._fetch_one('SELECT contract_pending,pending_inbound FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE',(pid,size))
         if not row: raise ValueError(f'商品 {pid} 的库存尺码 {size} 不存在')
         value = row['contract_pending'] + change
-        if value < row['pending_inbound'] or value < 0:
-            raise ValueError(f'商品 {pid} 尺码 {size} 的合同未送已减少或包含待入库，当前数量不足以回退；请先核对入库记录')
+        if value < 0:
+            raise ValueError(f'商品 {pid} 尺码 {size} 的合同未送已减少，当前数量不足以回退；请先核对待验货、待入库及入库记录')
         if value > 2147483647: raise ValueError('合同未送数量超出允许范围')
         db._fetch_one('UPDATE product_size_prices SET contract_pending=%s WHERE product_id=%s AND size_code=%s RETURNING id',(value,pid,size))
         db._fetch_one('UPDATE products SET updated_at=clock_timestamp() WHERE id=%s RETURNING id',(pid,))

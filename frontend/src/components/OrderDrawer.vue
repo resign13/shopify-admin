@@ -121,7 +121,7 @@
                   v-for="(label, value) in statusNames"
                   :key="value"
                   :value="value"
-                  :label="label" /></ElSelect></ElFormItem
+                  :label="label" :disabled="['cancelled','completed'].includes(order.status) ? value !== order.status : order.status === 'shipped' && !['shipped','completed'].includes(value)" /></ElSelect></ElFormItem
             ><ElFormItem
               label="运费（USD）"
               prop="shippingFee"

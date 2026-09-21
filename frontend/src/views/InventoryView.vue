@@ -1,7 +1,7 @@
 <template>
   <PageHeader
     title="库存管理"
-    description="从合同未送、待入库到现货，清晰掌握每个尺码的到货进度。"
+    description="从合同未送、待验货、待入库到现货，清晰掌握每个尺码的到货进度。"
     eyebrow="INVENTORY / 商品与库存"
     ><template v-if="canEdit"
       ><ElButton :loading="exporting" @click="exportFile">导出库存</ElButton
@@ -16,17 +16,23 @@
   ></PageHeader>
   <div
     class="metric-grid"
-    :style="{ gridTemplateColumns: `repeat(${canEdit ? 5 : 3},minmax(0,1fr))` }"
+    :style="{ gridTemplateColumns: `repeat(${canEdit ? 8 : 3},minmax(0,1fr))` }"
   >
     <div class="metric">
       <span>颜色 SKU 数</span><strong>{{ list.total }}</strong>
     </div>
     <div class="metric">
-      <span>当前库存合计</span><strong>{{ list.summary.stock || 0 }}</strong>
+      <span>现货余额合计</span><strong>{{ list.summary.stock || 0 }}</strong>
     </div>
+    <div v-if="canEdit" class="metric"><span>可用现货</span><strong>{{ list.summary.availableStock || 0 }}</strong></div>
+    <div v-if="canEdit" class="metric"><span>欠货件数 / 尺码数</span><strong class="negative">{{ list.summary.shortageUnits || 0 }} / {{ list.summary.shortageSizeCount || 0 }}</strong></div>
     <div v-if="canEdit" class="metric">
       <span>合同未送合计</span
       ><strong>{{ list.summary.contractPending || 0 }}</strong>
+    </div>
+    <div v-if="canEdit" class="metric">
+      <span>待验货合计</span
+      ><strong>{{ list.summary.pendingInspection || 0 }}</strong>
     </div>
     <div v-if="canEdit" class="metric">
       <span>待入库合计</span
@@ -49,7 +55,7 @@
           :key="c.key"
           :value="c.key"
           :label="c.labels?.zh || c.key" /></ElSelect
-      ><ElButton native-type="submit" type="primary">查询</ElButton
+      ><ElSelect v-if="canEdit" v-model="filters.stock" clearable placeholder="全部库存"><ElOption label="欠货" value="backordered"/><ElOption label="有可用现货" value="available"/><ElOption label="无可用现货" value="empty"/></ElSelect><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton
       ><span class="small-note">汇总和导出覆盖全部筛选结果</span>
     </form>
@@ -57,7 +63,7 @@
       ref="inventoryTable"
       expandable
       :expanded-keys="expandedKeys"
-      @expand-change="(_, rows) => expandedKeys = rows.map(row => row.id)"
+      @expand-change="(_, rows) => (expandedKeys = rows.map((row) => row.id))"
       storage-key="inventory-v2"
       :rows="list.rows"
       :columns="columns"
@@ -70,14 +76,20 @@
       @sort-change="list.sort"
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
-      ><template #toolbar><ElButton :disabled="list.loading || !list.rows.length" @click="toggleAllSizes">{{ allSizesExpanded ? "一键收起" : "一键展开" }}</ElButton></template><template #name="{ row }"
+      ><template #toolbar
+        ><ElButton
+          :disabled="list.loading || !list.rows.length"
+          @click="toggleAllSizes"
+          >{{ allSizesExpanded ? "一键收起" : "一键展开" }}</ElButton
+        ></template
+      ><template #name="{ row }"
         ><div class="product-cell">
           <ProductImage :src="row.image" :alt="productName(row)" />
           <div>
             <span class="product-name" :title="productName(row)">{{
               shortName(row)
             }}</span
-            ><small class="sku" :title="row.sku">{{ row.sku }}</small
+            ><small class="sku" :title="row.sku">{{ row.sku }}</small><ElTag v-if="canEdit && row.shortageUnits" type="danger">欠货 {{ row.shortageUnits }} 件 · {{ row.shortageSizeCount }} 个尺码</ElTag><ElTag v-if="canEdit && row.isActive === false" type="info">已下架</ElTag
             ><small
               >{{ row.colorName }} · {{ row.categoryLabel }} ·
               <a href="#" @click.prevent="inventoryTable.toggleExpansion(row)"
@@ -90,7 +102,9 @@
         ><div class="inventory-expanded">
           <div class="panel-title">
             <strong>真实尺码明细</strong
-            ><span class="small-note">现货可销售；待入库包含在合同未送中</span>
+            ><span class="small-note"
+              >现货余额可为负数，表示欠货；到货后入库抵减欠货</span
+            >
           </div>
           <div class="stock-grid">
             <div
@@ -98,17 +112,20 @@
               :key="size.sizeCode"
               class="stock-cell"
             >
-              <strong :title="'原始尺码：' + size.sizeCode">{{ inventorySizeLabel(size.sizeCode) }}</strong>
+              <strong :title="'原始尺码：' + size.sizeCode">{{
+                inventorySizeLabel(size.sizeCode)
+              }}</strong>
               <div class="stock-line">
                 <span>现货</span
-                ><b :class="{ negative: size.stock === 0 }">{{ size.stock }}</b>
+                ><b :class="{ negative: size.stock <= 0 }">{{ size.stock }}</b>
               </div>
               <template v-if="canEdit"
                 ><div class="stock-line">
                   <span>合同未送</span><b>{{ size.contractPending }}</b>
                 </div>
                 <div class="stock-line inbound">
-                  <span>待入库</span><b>{{ size.pendingInbound }}</b>
+                  <span>待验货</span><b>{{ size.pendingInspection || 0 }}</b
+                  ><span>待入库</span><b>{{ size.pendingInbound }}</b>
                 </div></template
               >
             </div>
@@ -116,6 +133,9 @@
         </div></template
       ><template #pending="{ row }">{{
         total(row, "contractPending")
+      }}</template
+      ><template #inspection="{ row }">{{
+        total(row, "pendingInspection")
       }}</template
       ><template #inbound="{ row }"
         ><ElTag :type="total(row, 'pendingInbound') ? 'warning' : 'info'">{{
@@ -135,24 +155,27 @@
   </section>
   <ElDrawer
     v-model="editing"
-    title="登记库存与待入库"
-    size="680px"
+    title="登记库存与到货进度"
+    size="min(960px, 96vw)"
     :before-close="close"
     ><template v-if="product"
       ><h3>{{ productName(product) }}</h3>
       <p class="small-note">{{ product.sku }} · {{ product.colorName }}</p>
       <ElAlert
-        title="待入库包含在合同未送中。登记不会增加现货；一键入库后才增加现货并减少合同未送。"
+        title="增加待验货会等量减少合同未送；增加待入库会等量减少待验货。一键入库仅增加现货并清零待入库。"
         type="info"
         :closable="false"
       /><ElTable :data="draft"
-        ><ElTableColumn prop="sizeCode" :formatter="row => inventorySizeLabel(row.sizeCode)" label="真实尺码" /><ElTableColumn
-          label="当前库存"
-          min-width="155"
+        ><ElTableColumn
+          prop="sizeCode"
+          :formatter="(row) => inventorySizeLabel(row.sizeCode)"
+          label="真实尺码"
+        /><ElTableColumn label="现货余额" min-width="155"
           ><template #default="{ row }"
             ><ElInputNumber
               v-model="row.stock"
-              :min="0"
+              :min="-2147483648"
+              :max="2147483647"
               :precision="0"
               controls-position="right"
             /><small style="display: block"
@@ -172,10 +195,22 @@
               {{ delta(row.contractPending, row.originalPending) }}</small
             ></template
           ></ElTableColumn
+        ><ElTableColumn label="待验货" min-width="155"
+          ><template #default="{ row }">
+            <ElInputNumber
+              v-model="row.pendingInspection"
+              :min="0"
+              :precision="0"
+              controls-position="right"
+              @change="(value, old) => moveStage(row, 'inspection', value, old)"
+            />
+            <small style="display: block">原值 {{ row.originalInspection }} · 变化 {{delta(row.pendingInspection,row.originalInspection)}}</small>
+          </template></ElTableColumn
         ><ElTableColumn label="待入库" min-width="155"
           ><template #default="{ row }"
             ><ElInputNumber
               v-model="row.pendingInbound"
+              @change="(value, old) => moveStage(row, 'inbound', value, old)"
               :min="0"
               :precision="0"
               controls-position="right"
@@ -194,7 +229,8 @@
         <h3>线上最新数量</h3>
         <p v-for="s in latest.sizePrices" :key="s.sizeCode">
           {{ inventorySizeLabel(s.sizeCode) }}：库存 {{ s.stock }} / 合同未送
-          {{ s.contractPending }} / 待入库 {{ s.pendingInbound }}
+          {{ s.contractPending }} / 待验货 {{ s.pendingInspection }} / 待入库
+          {{ s.pendingInbound }}
         </p>
         <ElButton @click="adoptLatest">使用最新数据重新编辑</ElButton>
       </div></template
@@ -249,6 +285,7 @@
         ><ElRadioButton value="all">全部</ElRadioButton
         ><ElRadioButton value="stock">库存变化</ElRadioButton
         ><ElRadioButton value="pending">合同未送变化</ElRadioButton
+        ><ElRadioButton value="inspection">待验货变化</ElRadioButton
         ><ElRadioButton value="inbound">待入库变化</ElRadioButton
         ><ElRadioButton value="errors">错误</ElRadioButton></ElRadioGroup
       ><ElTable
@@ -270,7 +307,8 @@
               }}<small style="display: block">{{ row.sku }}</small></template
             ></ElTableColumn
           ><ElTableColumn
-            prop="sizeCode" :formatter="row => inventorySizeLabel(row.sizeCode)"
+            prop="sizeCode"
+            :formatter="(row) => inventorySizeLabel(row.sizeCode)"
             label="尺码"
             width="90"
           /><ElTableColumn label="库存"
@@ -285,6 +323,11 @@
                 >{{ row.originalContractPending }} →
                 {{ row.contractPending }}</span
               ></template
+            ></ElTableColumn
+          ><ElTableColumn label="待验货"
+            ><template #default="{ row }"
+              >{{ row.originalPendingInspection }} →
+              {{ row.pendingInspection }}</template
             ></ElTableColumn
           ><ElTableColumn label="待入库"
             ><template #default="{ row }"
@@ -331,11 +374,15 @@
         <strong>{{ total(receipt, "pendingInbound") }}</strong> 件。
       </p>
       <ElAlert
-        title="现货增加、合同未送等量减少、待入库清零；各尺码整笔提交。"
+        title="现货增加、待入库清零；合同未送和待验货保持不变，各尺码整笔提交。"
         type="info"
         :closable="false" /><ElTable
         :data="receipt.sizePrices.filter((s) => s.pendingInbound > 0)"
-        ><ElTableColumn prop="sizeCode" :formatter="row => inventorySizeLabel(row.sizeCode)" label="尺码" /><ElTableColumn
+        ><ElTableColumn
+          prop="sizeCode"
+          :formatter="(row) => inventorySizeLabel(row.sizeCode)"
+          label="尺码"
+        /><ElTableColumn
           prop="pendingInbound"
           label="本次入库"
           align="right"
@@ -345,8 +392,7 @@
           ></ElTableColumn
         ><ElTableColumn label="合同未送"
           ><template #default="{ row }"
-            >{{ row.contractPending }} →
-            {{ row.contractPending - row.pendingInbound }}</template
+            >{{ row.contractPending }} → {{ row.contractPending }}</template
           ></ElTableColumn
         ></ElTable
       ><ElAlert
@@ -393,28 +439,43 @@ const auth = useAdminAuthStore(),
   filters = reactive({
     keyword: list.query.keyword || "",
     category: list.query.category || "",
+    stock: list.query.stock || "",
   });
 const inventoryTable = ref();
 const expandedKeys = ref([]);
-const allSizesExpanded = computed(() => list.rows.length > 0 && list.rows.every(row => expandedKeys.value.includes(row.id)));
+const allSizesExpanded = computed(
+  () =>
+    list.rows.length > 0 &&
+    list.rows.every((row) => expandedKeys.value.includes(row.id)),
+);
 function toggleAllSizes() {
-  expandedKeys.value = allSizesExpanded.value ? [] : list.rows.map(row => row.id);
+  expandedKeys.value = allSizesExpanded.value
+    ? []
+    : list.rows.map((row) => row.id);
 }
-watch(() => list.rows, () => { expandedKeys.value = []; });
+watch(
+  () => list.rows,
+  () => {
+    expandedKeys.value = [];
+  },
+);
 const total = (row, field) =>
   row.sizePrices.reduce((sum, size) => sum + Number(size[field] || 0), 0);
 const columns = computed(() => [
   { prop: "name", label: "商品 / 颜色 SKU", width: 300 },
   {
     prop: "stock",
-    label: "现货库存",
+    label: "现货余额",
     width: 100,
     numeric: true,
     sortable: true,
   },
   ...(canEdit.value
     ? [
+        { prop: "availableStock", label: "可用现货", width: 100, numeric: true },
+        { prop: "shortageUnits", label: "欠货件数", width: 100, numeric: true },
         { prop: "pending", label: "合同未送", width: 100, numeric: true },
+        { prop: "inspection", label: "待验货", width: 100, numeric: true },
         { prop: "inbound", label: "待入库", width: 100, numeric: true },
         { prop: "actions", label: "操作", width: 160 },
       ]
@@ -441,6 +502,7 @@ function populate(item) {
     originalStock: s.stock,
     originalPending: s.contractPending,
     originalInbound: s.pendingInbound,
+    originalInspection: s.pendingInspection || 0,
   }));
   markClean();
   error.value = "";
@@ -468,9 +530,22 @@ async function apply() {
 }
 async function reset() {
   if (await canLeave()) {
-    Object.assign(filters, { keyword: "", category: "" });
+    Object.assign(filters, { keyword: "", category: "", stock: "" });
     list.apply(filters);
   }
+}
+function moveStage(row, stage, value, old) {
+  if (!Number.isInteger(value) || !Number.isInteger(old)) return;
+  const delta = value - old;
+  const source =
+    stage === "inspection" ? "contractPending" : "pendingInspection";
+  if (row[source] - delta < 0) {
+    row[stage === "inspection" ? "pendingInspection" : "pendingInbound"] = old;
+    error.value = "本次转移超过上一阶段可用数量";
+    return;
+  }
+  row[source] -= delta;
+  error.value = "";
 }
 async function submit() {
   if (saving.value) return;
@@ -478,15 +553,16 @@ async function submit() {
     draft.value.some(
       (s) =>
         !Number.isInteger(s.stock) ||
-        s.stock < 0 ||
+        s.stock < -2147483648 || s.stock > 2147483647 ||
         !Number.isInteger(s.contractPending) ||
         s.contractPending < 0 ||
         !Number.isInteger(s.pendingInbound) ||
         s.pendingInbound < 0 ||
-        s.pendingInbound > s.contractPending,
+        !Number.isInteger(s.pendingInspection) ||
+        s.pendingInspection < 0,
     )
   ) {
-    error.value = "数量必须为非负整数，待入库不能超过合同未送";
+    error.value = "现货须为范围内的整数，其他阶段须为非负整数，转移数量不能超过上一阶段";
     return;
   }
   saving.value = true;
@@ -503,6 +579,11 @@ async function submit() {
         draft.value
           .filter((s) => s.contractPending !== s.originalPending)
           .map((s) => [s.sizeCode, s.contractPending]),
+      ),
+      pendingInspectionBySize: Object.fromEntries(
+        draft.value
+          .filter((s) => s.pendingInspection !== s.originalInspection)
+          .map((s) => [s.sizeCode, s.pendingInspection]),
       ),
       pendingInboundBySize: Object.fromEntries(
         draft.value
@@ -566,7 +647,9 @@ const previewRows = computed(() =>
               ? r.stockChanged
               : previewFilter.value === "inbound"
                 ? r.pendingInboundChanged
-                : r.contractPendingChanged),
+                : previewFilter.value === "inspection"
+                  ? r.pendingInspectionChanged
+                  : r.contractPendingChanged),
         ),
 );
 async function previewFile(event) {

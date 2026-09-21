@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import json
+import inventory_policy
 import os
 import secrets
 from contextlib import contextmanager
@@ -173,6 +174,25 @@ def _apply_schema_migrations(cur: Any) -> None:
     from workbench import migrate
     for column in ('product_code', 'color_group', 'color_name', 'color_hex'):
         cur.execute(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} VARCHAR(160) NOT NULL DEFAULT ''")
+    cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS style_code VARCHAR(160) NOT NULL DEFAULT ''")
+    cur.execute(
+        """
+        UPDATE products
+        SET style_code = CASE
+          WHEN NULLIF(BTRIM(color_group), '') IS NOT NULL
+               AND LOWER(BTRIM(color_group)) <> LOWER(BTRIM(product_code))
+            THEN BTRIM(color_group)
+          ELSE COALESCE(
+            NULLIF(regexp_replace(BTRIM(COALESCE(NULLIF(product_code, ''), NULLIF(sku, ''))), '[-_－][^-_－]+$', ''), ''),
+            NULLIF(BTRIM(product_code), ''),
+            NULLIF(BTRIM(sku), ''),
+            ''
+          )
+        END
+        WHERE style_code = ''
+        """
+    )
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_products_style_code_active ON products (style_code, is_active)")
     cur.execute("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS permissions JSONB")
     # Workbench migration runs after the legacy schema below is ready.
     cur.execute("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS role VARCHAR(32) NOT NULL DEFAULT 'admin'")
@@ -190,38 +210,42 @@ def _apply_schema_migrations(cur: Any) -> None:
         )
         """
     )
+    cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='product_size_prices' AND column_name='stock') AS present")
+    had_size_stock = cur.fetchone()['present']
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS contract_pending INTEGER NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE product_size_prices DROP CONSTRAINT IF EXISTS product_size_prices_contract_pending_check")
     cur.execute(
         "ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_contract_pending_check CHECK (contract_pending >= 0)"
     )
-    cur.execute(
-        """
-        WITH grouped AS (
-          SELECT product_id, COUNT(*)::INTEGER AS row_count, COALESCE(SUM(stock), 0)::INTEGER AS current_stock
-          FROM product_size_prices
-          GROUP BY product_id
-        ),
-        ranked AS (
-          SELECT id, product_id, ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY sort_order, id) AS row_index
-          FROM product_size_prices
+    if not had_size_stock:
+        cur.execute(
+            """
+            WITH grouped AS (
+              SELECT product_id, COUNT(*)::INTEGER AS row_count, COALESCE(SUM(stock), 0)::INTEGER AS current_stock
+              FROM product_size_prices
+              GROUP BY product_id
+            ),
+            ranked AS (
+              SELECT id, product_id, ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY sort_order, id) AS row_index
+              FROM product_size_prices
+            )
+            UPDATE product_size_prices psp
+            SET stock = CASE
+              WHEN ranked.row_index = 1
+                THEN (products.stock / grouped.row_count) + (products.stock % grouped.row_count)
+              ELSE products.stock / grouped.row_count
+            END
+            FROM ranked
+            JOIN grouped ON grouped.product_id = ranked.product_id
+            JOIN products ON products.id = ranked.product_id
+            WHERE psp.id = ranked.id
+              AND grouped.row_count > 0
+              AND grouped.current_stock = 0
+              AND products.stock > 0
+            """
         )
-        UPDATE product_size_prices psp
-        SET stock = CASE
-          WHEN ranked.row_index = 1
-            THEN (products.stock / grouped.row_count) + (products.stock % grouped.row_count)
-          ELSE products.stock / grouped.row_count
-        END
-        FROM ranked
-        JOIN grouped ON grouped.product_id = ranked.product_id
-        JOIN products ON products.id = ranked.product_id
-        WHERE psp.id = ranked.id
-          AND grouped.row_count > 0
-          AND grouped.current_stock = 0
-          AND products.stock > 0
-        """
-    )
+    inventory_policy.migrate(cur)
     cur.execute("ALTER TABLE order_items ADD COLUMN IF NOT EXISTS size_code VARCHAR(32)")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS contact_email VARCHAR(190)")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS marketing_opt_in BOOLEAN NOT NULL DEFAULT FALSE")
@@ -256,9 +280,14 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE homepage_configs ADD COLUMN IF NOT EXISTS hero_banner_images TEXT NOT NULL DEFAULT '{}'")
     cur.execute("ALTER TABLE homepage_configs ADD COLUMN IF NOT EXISTS collection_product_ids TEXT NOT NULL DEFAULT '{}'")
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS pending_inbound INTEGER NOT NULL DEFAULT 0")
-    cur.execute("SELECT 1 FROM pg_constraint WHERE conname='product_size_prices_pending_inbound_check'")
-    if not cur.fetchone():
-        cur.execute("ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_pending_inbound_check CHECK(pending_inbound >= 0 AND pending_inbound <= contract_pending)")
+    cur.execute("SELECT 1 FROM information_schema.columns WHERE table_name='product_size_prices' AND column_name='pending_inspection'")
+    new_flow = cur.fetchone() is None
+    cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS pending_inspection INTEGER NOT NULL DEFAULT 0 CHECK(pending_inspection >= 0)")
+    cur.execute("ALTER TABLE product_size_prices DROP CONSTRAINT IF EXISTS product_size_prices_pending_inbound_check")
+    if new_flow:
+        cur.execute("UPDATE product_size_prices SET contract_pending=contract_pending-pending_inbound WHERE pending_inbound>0")
+    cur.execute("SELECT 1 FROM pg_constraint WHERE conname='product_size_prices_inbound_nonnegative'")
+    if not cur.fetchone(): cur.execute("ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_inbound_nonnegative CHECK(pending_inbound >= 0)")
     migrate(cur)
 
 
@@ -352,7 +381,7 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
     )
     size_price_rows = _fetch_all(
         """
-        SELECT product_id, size_code, price, stock, contract_pending, pending_inbound, sort_order
+        SELECT product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, sort_order
         FROM product_size_prices
         WHERE product_id = ANY(%s)
         ORDER BY product_id, sort_order, id
@@ -387,6 +416,7 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
         if include_contract_pending:
             size_price["contractPending"] = int(row["contract_pending"] or 0)
             size_price["pendingInbound"] = int(row["pending_inbound"] or 0)
+            size_price["pendingInspection"] = int(row["pending_inspection"] or 0)
         size_prices[int(row["product_id"])].append(size_price)
     return names, summaries, descriptions, galleries, sizes, size_prices
 
@@ -406,9 +436,12 @@ def _build_product_result(rows: list[dict[str, Any]], *, include_contract_pendin
         items.append(
             {
                 "id": product_id,
+                "isActive": bool(row.get("is_active", True)),
+                **inventory_policy.stock_metrics([int(x["stock"]) for x in size_price_list] if size_price_list else [int(row["stock"])]),
                 "slug": row["slug"],
                 "sku": row["sku"],
                 "productCode": row.get("product_code") or "",
+                "styleCode": row.get("style_code") or "",
                 "colorGroup": row.get("color_group") or "",
                 "colorName": row.get("color_name") or "",
                 "colorHex": row.get("color_hex") or "",
@@ -437,9 +470,11 @@ def _product_base_query() -> str:
     return """
         SELECT
           p.id,
+          p.is_active,
           p.slug,
           p.sku,
           p.product_code,
+          p.style_code,
           p.color_group,
           p.color_name,
           p.color_hex,
@@ -460,6 +495,9 @@ def _product_base_query() -> str:
 
 
 def _format_color_options(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    available = {r['id']: int(r['available']) for r in _fetch_all(
+        'SELECT p.id,' + inventory_policy.available_sql('p') + ' AS available FROM products p WHERE p.id=ANY(%s)',
+        ([r['id'] for r in rows],))} if rows else {}
     return [
         {
             "id": int(row["id"]),
@@ -469,6 +507,7 @@ def _format_color_options(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "colorHex": row.get("color_hex") or "",
             "image": row["main_image_url"],
             "stock": int(row["stock"]),
+            "availableStock": available[int(row["id"])],
         }
         for row in rows
     ]
@@ -482,6 +521,22 @@ def _product_code_family_prefix(product_code: str) -> str:
             if len(prefix) >= 3 and prefix.lower() != code.lower():
                 return prefix
     return ""
+
+
+def normalize_style_code(product_code: str = "", color_group: str = "", sku: str = "") -> str:
+    """Return the stable style identifier shared by all color variants."""
+    code = str(product_code or "").strip()
+    group = str(color_group or "").strip()
+    fallback_sku = str(sku or "").strip()
+    if group and group.casefold() != code.casefold():
+        return group
+    source = code or fallback_sku
+    for separator in ("-", "_", "－"):
+        if separator in source:
+            prefix = source.rsplit(separator, 1)[0].strip()
+            if prefix:
+                return prefix
+    return source
 
 
 def _list_color_options(
@@ -565,23 +620,23 @@ def _attach_color_options(product: dict[str, Any] | None) -> dict[str, Any] | No
 
 
 
-def list_products(*, include_contract_pending: bool = False) -> list[dict[str, Any]]:
+def list_products(*, include_contract_pending: bool = False, include_inactive: bool = False) -> list[dict[str, Any]]:
     rows = _fetch_all(
         _product_base_query() + """
-        WHERE p.is_active = TRUE
+        WHERE (p.is_active = TRUE OR %s)
         ORDER BY p.id
         """,
-        (DEFAULT_LANG,),
+        (DEFAULT_LANG, include_inactive),
     )
     return _build_product_result(rows, include_contract_pending=include_contract_pending)
 
 
-def get_product_by_id(product_id: int, *, include_contract_pending: bool = False) -> dict[str, Any] | None:
+def get_product_by_id(product_id: int, *, include_contract_pending: bool = False, include_inactive: bool = False) -> dict[str, Any] | None:
     rows = _fetch_all(
         _product_base_query() + """
-        WHERE p.id = %s AND p.is_active = TRUE
+        WHERE p.id = %s AND (p.is_active = TRUE OR %s)
         """,
-        (DEFAULT_LANG, product_id),
+        (DEFAULT_LANG, product_id, include_inactive),
     )
     items = _build_product_result(rows, include_contract_pending=include_contract_pending)
     return _attach_color_options(items[0] if items else None)
@@ -673,7 +728,7 @@ def _normalize_size_prices(size_prices: list[dict[str, Any]] | None, sizes: list
             raise ValueError(f"Invalid size price for {size_code}") from exc
         if not price.is_finite() or price < 0:
             raise ValueError(f"Invalid size price for {size_code}")
-        stock = _parse_non_negative_int(row.get("stock"), f"size stock for {size_code}", allow_blank=True)
+        stock = inventory_policy.parse_stock(row.get("stock"), f"size stock for {size_code}", allow_blank=True)
         contract_pending = _parse_non_negative_int(
             row.get("contractPending"), f"contract pending for {size_code}", allow_blank=True
         )
@@ -693,7 +748,7 @@ def _normalize_size_prices(size_prices: list[dict[str, Any]] | None, sizes: list
 
 def _sum_size_stock(size_prices: list[dict[str, Any]]) -> int:
     total = sum(int(item.get("stock") or 0) for item in size_prices)
-    if total > 2147483647:
+    if not -2147483648 <= total <= 2147483647:
         raise ValueError("库存总数超出允许范围")
     return total
 
@@ -731,7 +786,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     # values attached to existing real size codes instead of resetting them.
     cur.execute(
         """
-        SELECT size_code, contract_pending, pending_inbound
+        SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection
         FROM product_size_prices
         WHERE product_id = %s
         FOR UPDATE
@@ -741,12 +796,17 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     existing_size_rows = list(cur.fetchall())
     existing_contract_pending = {str(row["size_code"]): int(row["contract_pending"] or 0) for row in existing_size_rows}
     existing_inbound = {str(row["size_code"]): int(row["pending_inbound"] or 0) for row in existing_size_rows}
+    existing_inspection = {str(row["size_code"]): int(row["pending_inspection"] or 0) for row in existing_size_rows}
     normalized_size_prices = _normalize_size_prices(payload.get("sizePrices"), payload.get("sizes", []))
     next_size_codes = {item["sizeCode"] for item in normalized_size_prices}
+    cur.execute("SELECT DISTINCT i.size_code FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.product_id=%s AND o.status IN ('pending_payment','allocated','paid')", (product_id,))
+    protected = {r['size_code'] for r in cur.fetchall()} | {r['size_code'] for r in existing_size_rows if r['stock'] < 0}
+    if protected - next_size_codes:
+        raise ValueError('不能删除或改掉仍有欠货或未履约订单引用的尺码：' + ', '.join(sorted(protected-next_size_codes)))
     removed_pending = [
         size_code
         for size_code, amount in existing_contract_pending.items()
-        if size_code not in next_size_codes and amount > 0
+        if size_code not in next_size_codes and (amount > 0 or existing_inbound.get(size_code,0) > 0 or existing_inspection.get(size_code,0) > 0)
     ]
     if removed_pending:
         raise ValueError(
@@ -790,8 +850,8 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
         cur.execute(
             """
             INSERT INTO product_size_prices
-              (product_id, size_code, price, stock, contract_pending, pending_inbound, sort_order)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+              (product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 product_id,
@@ -800,6 +860,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
                 item["stock"],
                 contract_pending,
                 existing_inbound.get(item["sizeCode"], 0),
+                existing_inspection.get(item["sizeCode"], 0),
                 item["sortOrder"],
             ),
         )
@@ -821,23 +882,27 @@ def _insert_product_row(cur: Any, payload: dict[str, Any]) -> int:
     category_id = _get_category_id(cur, payload["categoryKey"])
     size_prices = _normalize_size_prices(payload.get("sizePrices"), payload.get("sizes", []))
     price = size_prices[0]["price"] if size_prices else Decimal(str(payload.get("price", 0) or 0))
-    stock = _sum_size_stock(size_prices) if size_prices else int(payload.get("stock", 0))
+    stock = _sum_size_stock(size_prices) if size_prices else inventory_policy.parse_stock(payload.get("stock", 0))
+    product_code = str(payload["productCode"]).strip()
+    sku = str(payload["sku"]).strip()
+    color_group = str(payload.get("colorGroup") or payload.get("familyCode") or product_code).strip()
     cur.execute(
         """
         INSERT INTO products (
-          category_id, slug, sku, product_code, color_group, color_name, color_hex,
+          category_id, slug, sku, product_code, style_code, color_group, color_name, color_hex,
           price, stock, featured, origin, main_image_url, size_chart_image_url, description_image_url,
           is_active, created_at, updated_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())
         RETURNING id
         """,
         (
             category_id,
             payload["slug"],
-            payload["sku"],
-            payload["productCode"],
-            payload.get("colorGroup") or payload.get("familyCode") or payload["productCode"],
+            sku,
+            product_code,
+            normalize_style_code(product_code, color_group, sku),
+            color_group,
             payload.get("colorName", ""),
             payload.get("colorHex", ""),
             price,
@@ -932,7 +997,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
             ).strip()
             size_prices = _normalize_size_prices(payload.get("sizePrices"), details["sizes"])
             price = size_prices[0]["price"] if size_prices else Decimal(str(payload.get("price", 0) or 0))
-            stock = _sum_size_stock(size_prices) if size_prices else int(payload.get("stock", 0))
+            stock = _sum_size_stock(size_prices) if size_prices else inventory_policy.parse_stock(payload.get("stock", 0))
             cur.execute(
                 """
                 UPDATE products
@@ -940,6 +1005,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                     slug = %s,
                     sku = %s,
                     product_code = %s,
+                    style_code = %s,
                     color_group = %s,
                     color_name = %s,
                     color_hex = %s,
@@ -958,6 +1024,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                     payload["slug"],
                     payload["sku"],
                     payload["productCode"],
+                    normalize_style_code(payload["productCode"], next_color_group, payload["sku"]),
                     next_color_group,
                     payload.get("colorName", ""),
                     payload.get("colorHex", ""),
@@ -982,13 +1049,14 @@ def update_product_inventory(
     size_stocks: dict[str, Any],
     contract_pending_by_size: dict[str, Any] | None = None,
     pending_inbound_by_size: dict[str, Any] | None = None,
+    pending_inspection_by_size: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     normalized: dict[str, int] = {}
     for size_code, stock_value in (size_stocks or {}).items():
         size_key = str(size_code or "").strip()
         if not size_key:
             continue
-        stock = _parse_non_negative_int(stock_value, f"size stock for {size_key}")
+        stock = inventory_policy.parse_stock(stock_value, f"size stock for {size_key}")
         normalized[size_key] = stock
 
     normalized_contract_pending: dict[str, int] = {}
@@ -1001,18 +1069,19 @@ def update_product_inventory(
         )
 
     normalized_inbound = {str(size): _parse_non_negative_int(value, f"pending inbound for {size}") for size, value in (pending_inbound_by_size or {}).items()}
-    if not normalized and not normalized_contract_pending and not normalized_inbound:
+    inspection = {str(k): _parse_non_negative_int(v,"待验货") for k,v in (pending_inspection_by_size or {}).items()}
+    if not normalized and not normalized_contract_pending and not normalized_inbound and not inspection:
         raise ValueError("Missing field: sizeStocks")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM products WHERE id = %s AND is_active = TRUE FOR UPDATE", (product_id,))
+            cur.execute("SELECT id FROM products WHERE id = %s FOR UPDATE", (product_id,))
             if not cur.fetchone():
                 return None
 
             cur.execute(
                 """
-                SELECT size_code, stock, contract_pending, pending_inbound
+                SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection
                 FROM product_size_prices
                 WHERE product_id = %s
                 ORDER BY sort_order, id
@@ -1026,7 +1095,7 @@ def update_product_inventory(
 
             existing_sizes = [str(row["size_code"]) for row in rows]
             unknown_sizes = [
-                size for size in set(normalized) | set(normalized_contract_pending) | set(normalized_inbound) if size not in existing_sizes
+                size for size in set(normalized) | set(normalized_contract_pending) | set(normalized_inbound) | set(inspection) if size not in existing_sizes
             ]
             if unknown_sizes:
                 raise ValueError(f"Unknown sizes: {', '.join(unknown_sizes)}")
@@ -1034,18 +1103,17 @@ def update_product_inventory(
             for row in rows:
                 size_code = row['size_code']
                 stock = normalized.get(size_code, row['stock'])
-                pending = normalized_contract_pending.get(size_code, row['contract_pending'])
-                inbound = normalized_inbound.get(size_code, row['pending_inbound'])
-                if inbound > pending:
-                    raise ValueError(f"{size_code}：待入库不能超过合同未送数量")
-                if (stock, pending, inbound) != (row['stock'], row['contract_pending'], row['pending_inbound']):
-                    cur.execute("UPDATE product_size_prices SET stock=%s,contract_pending=%s,pending_inbound=%s WHERE product_id=%s AND size_code=%s", (stock,pending,inbound,product_id,size_code))
+                updates = {}
+                for values,key in [(normalized_contract_pending,'contractPending'),(normalized_inbound,'pendingInbound'),(inspection,'pendingInspection')]:
+                    if size_code in values: updates[key]=values[size_code]
+                pending, inspect, inbound = inventory_stages(row, updates)
+                cur.execute("UPDATE product_size_prices SET stock=%s,contract_pending=%s,pending_inspection=%s,pending_inbound=%s WHERE product_id=%s AND size_code=%s", (stock,pending,inspect,inbound,product_id,size_code))
 
             cur.execute(
                 "SELECT COALESCE(SUM(stock), 0) AS total_stock FROM product_size_prices WHERE product_id = %s",
                 (product_id,),
             )
-            total_stock = int((cur.fetchone() or {}).get("total_stock") or 0)
+            total_stock = inventory_policy.parse_stock((cur.fetchone() or {}).get("total_stock") or 0, "商品库存合计")
             cur.execute(
                 """
                 UPDATE products
@@ -1057,7 +1125,7 @@ def update_product_inventory(
             )
         conn.commit()
 
-    return get_product_by_id(product_id, include_contract_pending=True)
+    return get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
 
 
 def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
@@ -1088,9 +1156,9 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                        COALESCE(NULLIF(pt.name, ''), NULLIF(pte.name, ''), p.product_code, p.sku, '') AS title,
                        psp.size_code,
                        psp.stock,
-                       psp.contract_pending, psp.pending_inbound
+                       psp.contract_pending, psp.pending_inbound, psp.pending_inspection
                     FROM product_size_prices psp
-                    JOIN products p ON p.id = psp.product_id AND p.is_active = TRUE
+                    JOIN products p ON p.id = psp.product_id
                     JOIN product_categories pc ON pc.id = p.category_id
                     LEFT JOIN product_translations pt
                       ON pt.product_id = p.id AND pt.lang_code = 'zh'
@@ -1118,7 +1186,7 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 current_pending = int(current["contract_pending"] or 0)
                 original_stock = int(row["originalStock"])
                 original_pending = int(row["originalContractPending"])
-                next_stock = int(row["stock"])
+                next_stock = inventory_policy.parse_stock(row["stock"])
                 next_pending = int(row["contractPending"])
                 stock_changed = next_stock != original_stock
                 pending_changed = next_pending != original_pending
@@ -1134,8 +1202,14 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 next_inbound = int(row['pendingInbound']) if inbound_changed else current_inbound
                 if inbound_changed and current_inbound not in (int(row['originalPendingInbound']), next_inbound):
                     raise ValueError(f"待入库数量冲突：{product_id} / {size_code}")
-                if next_inbound > (next_pending if pending_changed else current_pending):
-                    raise ValueError(f"{product_id} / {size_code}：待入库不能超过合同未送")
+                prepare_inventory_import(row)
+                fields=[('contractPending','originalContractPending','contract_pending'),('pendingInspection','originalPendingInspection','pending_inspection'),('pendingInbound','originalPendingInbound','pending_inbound')]
+                moving = any(row[k] != row[o] for k,o,_ in fields)
+                if moving and not all(int(current[col]) == row[o] for k,o,col in fields):
+                    if not all(int(current[col]) == row[k] for k,o,col in fields): raise ValueError('库存阶段数量冲突，请重新导出')
+                next_pending=row['contractPending'];next_inbound=row['pendingInbound']
+                pending_changed=next_pending != original_pending
+                inbound_changed=next_inbound != int(row['originalPendingInbound'])
                 assignments: list[str] = []
                 params: list[Any] = []
                 if stock_changed and current_stock != next_stock:
@@ -1147,6 +1221,8 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 if inbound_changed and current_inbound != next_inbound:
                     assignments.append("pending_inbound = %s")
                     params.append(next_inbound)
+                if row['pendingInspection'] != row['originalPendingInspection'] and int(current['pending_inspection']) != row['pendingInspection']:
+                    assignments.append('pending_inspection = %s');params.append(row['pendingInspection'])
                 if assignments:
                     params.extend([product_id, size_code])
                     cur.execute(
@@ -1158,19 +1234,10 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                     updated_rows += 1
                     updated_fields += len(assignments)
 
-            for product_id in affected_products:
-                cur.execute(
-                    """
-                    UPDATE products
-                    SET stock = (
-                      SELECT COALESCE(SUM(stock), 0)
-                      FROM product_size_prices
-                      WHERE product_id = %s
-                    ), updated_at = NOW()
-                    WHERE id = %s
-                    """,
-                    (product_id, product_id),
-                )
+            for product_id in sorted(affected_products):
+                cur.execute('SELECT COALESCE(SUM(stock),0) AS total FROM product_size_prices WHERE product_id=%s', (product_id,))
+                total = inventory_policy.parse_stock(cur.fetchone()['total'], '商品库存合计')
+                cur.execute('UPDATE products SET stock=%s,updated_at=clock_timestamp() WHERE id=%s', (total, product_id))
         conn.commit()
     return {
         "updatedRows": updated_rows,
@@ -1186,7 +1253,7 @@ def delete_product(product_id: int) -> dict[str, Any] | None:
                 """
                 SELECT id
                 FROM products
-                WHERE id = %s AND is_active = TRUE
+                WHERE id = %s AND is_active = TRUE FOR UPDATE
                 """,
                 (product_id,),
             )
@@ -1203,6 +1270,9 @@ def delete_product(product_id: int) -> dict[str, Any] | None:
                 if order_row and int(order_row["total"]) > 0:
                     has_related_orders = True
 
+                cur.execute('SELECT 1 FROM product_size_prices WHERE product_id=%s AND (stock<0 OR contract_pending>0 OR pending_inspection>0 OR pending_inbound>0) LIMIT 1', (product_id,))
+                if cur.fetchone():
+                    has_related_orders = True
                 if has_related_orders:
                     cur.execute(
                         """
@@ -1274,7 +1344,7 @@ def count_products() -> int:
 
 
 def count_units_in_stock() -> int:
-    row = _fetch_one("SELECT COALESCE(SUM(stock), 0) AS total FROM products WHERE is_active = TRUE")
+    row = _fetch_one("SELECT COALESCE(SUM(" + inventory_policy.available_sql("p") + "),0) AS total FROM products p WHERE p.is_active=TRUE")
     return int(row["total"]) if row else 0
 
 
@@ -2153,6 +2223,9 @@ def get_order_by_id(order_id: int) -> dict[str, Any] | None:
 
 
 def create_order(payload: dict[str, Any]) -> dict[str, Any]:
+    quantity = _parse_non_negative_int(payload.get('quantity'), '商品数量')
+    if quantity <= 0:
+        raise ValueError('商品数量必须大于零')
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -2182,8 +2255,11 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
             product = cur.fetchone()
             if not product:
                 raise LookupError("Product not found")
-            if int(payload["quantity"]) > int(product["stock"]):
-                raise RuntimeError("Insufficient stock")
+            cur.execute('SELECT 1 FROM product_size_prices WHERE product_id=%s LIMIT 1', (payload['productId'],))
+            if cur.fetchone() and not size_code:
+                raise ValueError('请选择有效尺码')
+            if not size_code and quantity > product['stock']:
+                raise RuntimeError('Insufficient stock')
 
             if size_code:
                 cur.execute(
@@ -2208,19 +2284,7 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
             unit_price = base_price
             total_price = unit_price * quantity
 
-            cur.execute(
-                "UPDATE products SET stock = stock - %s, updated_at = NOW() WHERE id = %s",
-                (quantity, payload["productId"]),
-            )
-            if size_code:
-                cur.execute(
-                    """
-                    UPDATE product_size_prices
-                    SET stock = stock - %s
-                    WHERE product_id = %s AND size_code = %s
-                    """,
-                    (quantity, payload["productId"], size_code),
-                )
+            inventory_policy.adjust_stock(cur, {(int(payload['productId']), size_code): -quantity})
             cur.execute(
                 """
                 INSERT INTO orders (
@@ -2276,6 +2340,13 @@ def update_order_status(
 ) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
+            cur.execute('SELECT status FROM orders WHERE id=%s FOR UPDATE', (order_id,))
+            previous = cur.fetchone()
+            if not previous:
+                return None
+            inventory_policy.validate_transition(previous['status'], status)
+            if previous['status'] in inventory_policy.OPEN_STATUSES and status == 'cancelled':
+                inventory_policy.return_order_stock(cur, [order_id])
             shipping_fee_decimal = _safe_decimal(shipping_fee)
             cur.execute("SELECT COALESCE(SUM(total_price), 0) AS subtotal FROM order_items WHERE order_id = %s", (order_id,))
             subtotal_row = cur.fetchone()
@@ -2335,47 +2406,20 @@ def update_order_status(
 
 
 def delete_orders(order_ids: list[int]) -> dict[str, Any]:
-    normalized_ids = sorted({int(order_id) for order_id in order_ids if int(order_id) > 0})
-    if not normalized_ids:
-        return {"deletedIds": [], "deletedCount": 0}
-
+    ids = sorted({int(i) for i in order_ids if int(i) > 0})
+    if not ids:
+        return {'deletedIds': [], 'deletedCount': 0}
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM orders WHERE id = ANY(%s) FOR UPDATE", (normalized_ids,))
-            existing_order_ids = [int(row["id"]) for row in cur.fetchall()]
-            if not existing_order_ids:
-                return {"deletedIds": [], "deletedCount": 0}
-
-            cur.execute(
-                """
-                SELECT product_id, COALESCE(size_code, '') AS size_code, SUM(quantity)::INTEGER AS quantity
-                FROM order_items
-                WHERE order_id = ANY(%s)
-                GROUP BY product_id, COALESCE(size_code, '')
-                """,
-                (existing_order_ids,),
-            )
-            for row in cur.fetchall():
-                product_id = int(row.get("product_id") or 0)
-                quantity = int(row.get("quantity") or 0)
-                size_code = str(row.get("size_code") or "").strip()
-                if product_id <= 0 or quantity <= 0:
-                    continue
-                cur.execute(
-                    "UPDATE products SET stock = stock + %s, updated_at = NOW() WHERE id = %s",
-                    (quantity, product_id),
-                )
-                if size_code:
-                    cur.execute(
-                        "UPDATE product_size_prices SET stock = stock + %s WHERE product_id = %s AND size_code = %s",
-                        (quantity, product_id, size_code),
-                    )
-
-            cur.execute("DELETE FROM orders WHERE id = ANY(%s) RETURNING id", (existing_order_ids,))
-            deleted_ids = [int(row["id"]) for row in cur.fetchall()]
+            cur.execute('SELECT id,status FROM orders WHERE id=ANY(%s) ORDER BY id FOR UPDATE', (ids,))
+            rows = cur.fetchall()
+            restore = [r['id'] for r in rows if r['status'] in inventory_policy.OPEN_STATUSES]
+            if restore:
+                inventory_policy.return_order_stock(cur, restore)
+            cur.execute('DELETE FROM orders WHERE id=ANY(%s) RETURNING id', ([r['id'] for r in rows],))
+            deleted = [r['id'] for r in cur.fetchall()]
         conn.commit()
-
-    return {"deletedIds": deleted_ids, "deletedCount": len(deleted_ids)}
+    return {'deletedIds': deleted, 'deletedCount': len(deleted)}
 
 
 def count_orders() -> int:
@@ -2386,3 +2430,26 @@ def count_orders() -> int:
 
 
 
+
+
+def inventory_stages(current, updates):
+    old_p, old_i, old_b = (int(current[k]) for k in ['contract_pending','pending_inspection','pending_inbound'])
+    inbound = updates.get('pendingInbound', old_b)
+    inspection = updates.get('pendingInspection', old_i - (inbound-old_b))
+    expected = old_p - (inspection + inbound - old_i - old_b)
+    moving = inspection != old_i or inbound != old_b
+    pending = updates.get('contractPending', expected)
+    if moving and pending != expected:
+        raise ValueError('阶段转移时合同未送须按差额同步，请勿重复扣减或增加合同数量')
+    if min(pending,inspection,inbound) < 0:
+        raise ValueError('本次转移超过上一阶段可用数量：请核对合同未送和待验货')
+    if max(pending,inspection,inbound)>2147483647: raise ValueError('数量超出允许范围')
+    return pending,inspection,inbound
+
+
+def prepare_inventory_import(row):
+    if row.get('_stagePrepared'): return
+    originals = {'contract_pending':row['originalContractPending'], 'pending_inspection':row['originalPendingInspection'], 'pending_inbound':row['originalPendingInbound']}
+    changes={k:row[k] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')] if row[k] != row[o]}
+    p,i,b=inventory_stages(originals,changes)
+    row.update(contractPending=p,pendingInspection=i,pendingInbound=b,_stagePrepared=True)

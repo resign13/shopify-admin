@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from decimal import Decimal, InvalidOperation
 from flask import g
 import db
+import inventory_policy
 
 
 def amount(value, label):
@@ -82,6 +83,8 @@ def save_order(payload, order_id=None):
         raise ValueError('订单状态无效')
     if not old and next_status != 'pending_payment':
         raise ValueError('新增订单必须为待付款状态')
+    if old:
+        inventory_policy.validate_transition(old["status"], next_status)
     tracking = payload.get('trackingNo', (old or {}).get('tracking_no') or '')
     payment = payload.get('paymentLink', (old or {}).get('payment_link') or '')
     if not isinstance(tracking, str) or len(tracking) > 500 or not isinstance(payment, str) or len(payment) > 2048:
@@ -132,28 +135,18 @@ def save_order(payload, order_id=None):
         new = desired.get(key)
         delta = (new['quantity'] if new else 0) - previous_quantities.get(key, 0)
         size = db._fetch_one('SELECT stock FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE', key)
-        if new and not size and key not in previous_quantities:
+        if new and not size and (key not in previous_quantities or delta > 0):
             raise ValueError(f"{products[product_id]['sku']} 的尺码 {size_code} 不存在")
         if delta and not size and size_code:
             raise ValueError('原订单尺码已移除，请先恢复尺码再调整数量')
         if delta > 0 and not products[product_id]['is_active']:
             raise ValueError('已下架商品不能增加订购数量')
-        available = size['stock'] if size else products[product_id]['stock']
-        if delta > available:
-            raise ValueError(f"{products[product_id]['sku']} / {size_code} 库存不足，现货 {available}，需追加 {delta}")
-        if not 0 <= available - delta <= 2147483647:
-            raise ValueError('调整后的库存超出允许范围')
-        if delta:
-            if size:
-                db._fetch_one('UPDATE product_size_prices SET stock=stock-%s WHERE product_id=%s AND size_code=%s RETURNING id', (delta, *key))
-    for product_id, product in products.items():
-        delta = sum(r['quantity'] for k,r in desired.items() if k[0] == product_id) - sum(q for k,q in previous_quantities.items() if k[0] == product_id)
-        if not 0 <= product['stock'] - delta <= 2147483647:
-            raise ValueError('商品总库存不足或超出允许范围，请核对库存')
-        if delta:
-            db._fetch_one('UPDATE products SET stock=stock-%s,updated_at=NOW() WHERE id=%s RETURNING id', (delta, product_id))
-        elif any(k[0] == product_id and (desired.get(k, {}).get('quantity', 0) != previous_quantities.get(k, 0)) for k in set(desired) | set(previous_quantities)):
-            db._fetch_one('UPDATE products SET updated_at=NOW() WHERE id=%s RETURNING id', (product_id,))
+    changes = {key: previous_quantities.get(key, 0) - desired.get(key, {}).get('quantity', 0)
+               for key in set(desired) | set(previous_quantities)}
+    changes = {key: delta for key, delta in changes.items() if delta}
+    if changes:
+        with db.get_connection() as conn, conn.cursor() as cur:
+            inventory_policy.adjust_stock(cur, changes)
     total = amount(sum(row['quantity'] * row['price'] for row in desired.values()) + shipping, '订单总额')
     address = ', '.join(fields[key] for key in ['address', 'apartment', 'city', 'state', 'zip', 'country'] if fields[key])
     if not old:

@@ -82,7 +82,7 @@
         :title="
           lockedLines
             ? '已取消、已发货、已完成订单保留原商品明细；可修改客户与收货资料。'
-            : '保存时校验实际库存，新增订单扣减库存，修改数量仅按差额调整。合同未送和待入库不受影响。'
+            : '后台允许欠货下单。新增扣减现货余额，修改仅按数量差额调整；实际余额以保存时为准。'
         "
         type="info"
         :closable="false"
@@ -141,6 +141,12 @@
           ></ElTableColumn
         ></ElTable
       >
+      <ElTable :data="inventoryImpact" size="small" empty-text="添加商品后显示库存变化">
+        <ElTableColumn prop="sku" label="库存核对 / SKU"/><ElTableColumn prop="sizeCode" label="尺码"/>
+        <ElTableColumn prop="current" label="当前余额"/><ElTableColumn prop="change" label="此次库存增减"/>
+        <ElTableColumn label="预计保存后余额"><template #default="{row}"><ElTag :type="row.after < 0 ? 'danger' : 'info'">{{ row.after }}{{ row.after < 0 ? ' · 欠货' : '' }}</ElTag></template></ElTableColumn>
+      </ElTable>
+      <ElAlert v-if="inventoryImpact.some(row => row.after < 0)" title="保存后存在欠货，仍可提交。入库时会抵减欠货余额。" type="warning" :closable="false"/>
       <div class="detail-grid section-gap">
         <ElFormItem
           label="运费（USD）"
@@ -166,7 +172,7 @@
               v-for="(label, value) in statusNames"
               :key="value"
               :value="value"
-              :label="label" /></ElSelect
+              :label="label" :disabled="statusDisabled(value)" /></ElSelect
         ></ElFormItem>
         <ElFormItem label="物流单号"
           ><ElInput v-model.trim="form.trackingNo" placeholder="发货时必填"
@@ -264,6 +270,7 @@ const fields = [
   { key: "state", label: "州 / 省" },
   { key: "zip", label: "邮编" },
 ];
+const originalItems = ref([]);
 const uploading = ref(false);
 const isImage = (url) =>
   /\.(jpg|jpeg|png|webp|gif|avif|bmp)(?:[?#]|$)/i.test(url);
@@ -301,6 +308,24 @@ const { dirty, markClean, canLeave } = useDirty(() => form),
   units = computed(() =>
     form.items.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
   );
+function statusDisabled(value) {
+  if (status.value === 'cancelled' || status.value === 'completed') return value !== status.value;
+  return status.value === 'shipped' && !['shipped','completed'].includes(value);
+}
+const inventoryImpact = computed(() => {
+  const rows = new Map();
+  for (const row of [...originalItems.value, ...form.items]) {
+    const key = `${row.productId}:${row.sizeCode}`;
+    if (!rows.has(key)) rows.set(key, {...row, before: 0, next: 0});
+  }
+  for (const row of originalItems.value) rows.get(`${row.productId}:${row.sizeCode}`).before += Number(row.quantity || 0);
+  for (const row of form.items) rows.get(`${row.productId}:${row.sizeCode}`).next += Number(row.quantity || 0);
+  return [...rows.values()].map(row => {
+    const stock = products[row.productId]?.sizePrices?.find(s => s.sizeCode === row.sizeCode)?.stock;
+    const change = lockedLines.value ? 0 : form.status === 'cancelled' ? row.before : row.before - row.next;
+    return {...row, current: stock ?? '待刷新', change: change > 0 ? `+${change}` : change, after: stock == null ? '待刷新' : stock + change};
+  });
+});
 let serial = 0,
   customerSerial = 0;
 async function searchCustomers(keyword = "") {
@@ -324,6 +349,7 @@ async function searchCustomers(keyword = "") {
   }
 }
 async function populate(item) {
+  originalItems.value = item.items.map(row => ({...row}));
   version.value = item.version;
   status.value = item.status;
   originalCount.value = item.itemCount;
@@ -353,7 +379,7 @@ async function populate(item) {
   await Promise.all(
     [...new Set(item.items.map((r) => r.productId))].map(async (id) => {
       try {
-        products[id] = (await api(`products/${id}`)).product;
+        products[id] = (await api(`inventory/${id}`)).product;
       } catch {}
     }),
   );
@@ -395,6 +421,7 @@ watch(
           shippingFee: 0,
           items: [],
         });
+        originalItems.value = [];
         status.value = "pending_payment";
         requestId.value = crypto.randomUUID();
         markClean();

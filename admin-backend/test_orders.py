@@ -127,8 +127,8 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(self.call(f"orders/{order['id']}/details",'PUT',body).status_code,200)
         self.assertEqual(self.stock()['stock'],26)
 
-    def test_shortage_and_invalid_input_rollback(self):
-        for modify in [lambda b:b['items'][1].update(quantity=100),
+    def test_overflow_and_invalid_input_rollback(self):
+        for modify in [lambda b:b['items'][1].update(quantity=2147483648),
                        lambda b:b['items'][0].update(quantity=1.5),
                        lambda b:b['items'][0].update(sizeCode='UNKNOWN'),
                        lambda b:b['items'][0].update(unitPrice=-1),

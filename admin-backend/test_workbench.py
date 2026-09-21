@@ -32,7 +32,9 @@ def seed():
                  'sizes':['M','L','Tall XL'],'sizePrices':[{'sizeCode':size,'price':29.9,'stock':10} for size in ['M','L','Tall XL']],
                  'image':'/uploads/fixture.jpg','gallery':['/uploads/fixture.jpg']*3,'sizeChartImage':'/uploads/fixture.jpg','descriptionImage':'/uploads/fixture.jpg','featured':index==1}
         product=db.create_product(payload);products.append(product)
-        db.update_product_inventory(product['id'],{}, {'M':12,'L':6,'Tall XL':3},{'M':4,'L':2})
+        db.update_product_inventory(product['id'],{}, {'M':12,'L':6,'Tall XL':3})
+        db._fetch_one("UPDATE product_size_prices SET pending_inbound=4,pending_inspection=6 WHERE product_id=%s AND size_code='M' RETURNING id",(product['id'],))
+        db._fetch_one("UPDATE product_size_prices SET pending_inbound=2,pending_inspection=3 WHERE product_id=%s AND size_code='L' RETURNING id",(product['id'],))
     buyer=db.create_store_user({'name':'Alex Morgan','companyName':'Northline Apparel','email':'buyer@gingtto.test','passwordHash':generate_password_hash('Fixture-Only'),'status':'active'})
     for index,(status,created,country) in enumerate([('paid','2026-09-17 16:30:00+00','Germany'),('pending_payment','2026-09-18 09:00:00+00','United States'),('cancelled','2026-09-18 10:00:00+00','Germany'),('completed','2026-09-16 12:00:00+00','France')],start=1):
         order=db._fetch_one('INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,country,shipping_address,total_amount,shipping_fee,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
@@ -97,6 +99,54 @@ class WorkbenchTest(unittest.TestCase):
         self.assertGreater(logs['total'],0)
         self.assertTrue(all(row['actor']['role']=='warehouse' for row in logs['items']))
 
+    def test_inspection_stage_flow_and_overdraft(self):
+        db._fetch_one("UPDATE product_size_prices SET contract_pending=100,pending_inspection=0,pending_inbound=0 WHERE product_id=1 AND size_code='M' RETURNING id")
+        def stage(**fields):
+            p=self.detail()
+            return self.call('inventory/1','PUT',{'version':p['version'],'sizeStocks':{},**fields})
+        self.assertEqual(stage(pendingInspectionBySize={'M':20}).status_code,200)
+        self.assertEqual(stage(pendingInboundBySize={'M':10}).status_code,200)
+        size=self.detail()['sizePrices'][0]
+        self.assertEqual((size['contractPending'],size['pendingInspection'],size['pendingInbound']),(80,10,10))
+        before=self.detail()
+        self.assertEqual(stage(pendingInboundBySize={'M':21}).status_code,400)
+        self.assertEqual(self.detail()['sizePrices'],before['sizePrices'])
+        self.assertEqual(stage(pendingInspectionBySize={'M':91}).status_code,400)
+        r=self.call('inventory/1/receive','POST',{'version':self.detail()['version'],'requestId':str(uuid.uuid4())})
+        self.assertEqual(r.status_code,200,r.json)
+        size=self.detail()['sizePrices'][0]
+        self.assertEqual((size['stock'],size['contractPending'],size['pendingInspection'],size['pendingInbound']),(20,80,10,0))
+        customer=self.detail('customer')['sizePrices'][0]
+        self.assertNotIn('pendingInspection',customer)
+
+    def test_inspection_migration_runs_once(self):
+        with db._connect() as conn:
+            cur=conn.cursor()
+            cur.execute('ALTER TABLE product_size_prices DROP COLUMN pending_inspection')
+            cur.execute("UPDATE product_size_prices SET contract_pending=100,pending_inbound=20 WHERE product_id=1 AND size_code='M'")
+            db._apply_schema_migrations(cur)
+            db._apply_schema_migrations(cur)
+            cur.execute("SELECT stock,contract_pending,pending_inspection,pending_inbound FROM product_size_prices WHERE product_id=1 AND size_code='M'")
+            self.assertEqual(tuple(cur.fetchone().values()),(10,80,0,20))
+            conn.rollback()
+
+    def test_inspection_excel_delta_conflict_and_preservation(self):
+        raw=self.workbook(lambda s:setattr(s['O2'],'value',8))
+        preview=self.upload('preview',raw).json
+        self.assertEqual(preview['errors'],[])
+        self.assertEqual(preview['rows'][0]['contractPending'],10)
+        self.assertEqual(self.upload('confirm',raw,preview['fileHash']).status_code,200)
+        size=self.detail()['sizePrices'][0]
+        self.assertEqual((size['contractPending'],size['pendingInspection']),(10,8))
+        p=self.product_payload(1)
+        r=self.call('products/save-group','POST',{'products':[p],'versions':{'1':p['version']}})
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual(self.detail()['sizePrices'][0]['pendingInspection'],8)
+        raw=self.workbook(lambda s:setattr(s['M2'],'value',5))
+        preview=self.upload('preview',raw).json
+        db.update_product_inventory(1,{},None,None,{'M':9})
+        self.assertEqual(self.upload('confirm',raw,preview['fileHash']).status_code,400)
+
     def test_inbound_validation_and_atomic_rollback(self):
         before=self.detail()
         response=self.call('inventory/1','PUT',{'version':before['version'],'sizeStocks':{'M':99},'pendingInboundBySize':{'L':100}})
@@ -114,7 +164,7 @@ class WorkbenchTest(unittest.TestCase):
         self.assertEqual(responses[0].json['receivedUnits'],6)
         after=self.detail()
         self.assertEqual(after['stock'],36)
-        self.assertEqual(sum(s['contractPending'] for s in after['sizePrices']),15)
+        self.assertEqual(sum(s['contractPending'] for s in after['sizePrices']),21)
         self.assertEqual(sum(s['pendingInbound'] for s in after['sizePrices']),0)
         self.assertEqual(self.call('inventory/1/receive','POST',{**body,'requestId':str(uuid.uuid4())}).status_code,409)
 
@@ -145,10 +195,10 @@ class WorkbenchTest(unittest.TestCase):
         preview=self.upload('preview',raw)
         self.assertEqual(preview.status_code,200,preview.json)
         self.assertEqual(preview.json['errors'],[])
-        self.assertEqual(preview.json['summary']['changedFieldCount'],1)
+        self.assertEqual(preview.json['summary']['changedFieldCount'],2)
         result=self.upload('confirm',raw,preview.json['fileHash'])
         self.assertEqual(result.status_code,200,result.json)
-        self.assertEqual(result.json['updatedFields'],1)
+        self.assertEqual(result.json['updatedFields'],2)
         replay=self.upload('confirm',raw,preview.json['fileHash'])
         self.assertEqual(replay.json['updatedFields'],0)
         self.assertTrue(replay.json['alreadyProcessed'])
@@ -211,12 +261,8 @@ class WorkbenchTest(unittest.TestCase):
             for row in range(2,sheet.max_row+1):sheet.cell(row,1,'inventory-v1')
             sheet['H2']=11
         raw=self.workbook(legacy)
-        preview=self.upload('preview',raw).json
-        self.assertEqual(preview['errors'],[])
-        response=self.upload('confirm',raw,preview['fileHash'])
-        self.assertEqual(response.status_code,200,response.json)
-        self.assertEqual(sum(s['pendingInbound'] for s in self.detail()['sizePrices']),6)
-        for value in ['',-1,1.5,True,2147483648]:
+        self.assertEqual(self.upload('preview',raw).status_code,400)
+        for value in ['',-2147483649,1.5,True,2147483648]:
             with self.subTest(value=value):
                 raw=self.workbook(lambda s:setattr(s['H2'],'value',value))
                 self.assertTrue(self.upload('preview',raw).json['errors'])

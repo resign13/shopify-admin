@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS products (
   slug VARCHAR(160) NOT NULL UNIQUE,
   sku VARCHAR(80) NOT NULL UNIQUE,
   price NUMERIC(12, 2) NOT NULL CHECK (price >= 0),
-  stock INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
+  stock INTEGER NOT NULL DEFAULT 0,
   featured BOOLEAN NOT NULL DEFAULT FALSE,
   origin VARCHAR(255),
   main_image_url TEXT NOT NULL,
@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS product_size_prices (
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   size_code VARCHAR(32) NOT NULL,
   price NUMERIC(12, 2) NOT NULL CHECK (price >= 0),
-  stock INTEGER NOT NULL DEFAULT 0 CHECK (stock >= 0),
+  stock INTEGER NOT NULL DEFAULT 0,
   contract_pending INTEGER NOT NULL DEFAULT 0 CHECK (contract_pending >= 0),
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE (product_id, size_code)

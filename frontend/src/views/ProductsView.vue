@@ -20,7 +20,7 @@
           :value="c.key"
           :label="c.labels?.zh || c.key" /></ElSelect
       ><ElSelect v-model="filters.stock" clearable placeholder="库存状态"
-        ><ElOption value="available" label="有库存" /><ElOption
+        ><ElOption value="backordered" label="欠货" /><ElOption value="available" label="有可用现货" /><ElOption
           value="empty"
           label="无库存" /></ElSelect
       ><ElSelect v-model="filters.featured" clearable placeholder="首页推荐"
@@ -76,6 +76,7 @@
           >复制</ElButton
         ></template
       >
+      <template #stock="{ row }">{{ row.stock }}<ElTag v-if="row.shortageUnits" type="danger" size="small">欠货 {{ row.shortageUnits }}</ElTag></template>
       <template #price="{ row }">{{ priceRange(row) }}</template
       ><template #featured="{ row }"
         ><ElTag :type="row.featured ? 'primary' : 'info'">{{
@@ -216,7 +217,7 @@ const columns = [
   { prop: "sku", label: "颜色 SKU", width: 135, sortable: true },
   { prop: "categoryLabel", label: "分类", width: 90 },
   { prop: "price", label: "价格", numeric: true, sortable: true, width: 115 },
-  { prop: "stock", label: "库存", numeric: true, sortable: true, width: 80 },
+  { prop: "stock", label: "现货余额", numeric: true, sortable: true, width: 130 },
   { prop: "featured", label: "推荐", width: 80 },
   { prop: "updatedAt", label: "更新时间", width: 140, sortable: true },
   { prop: "actions", label: "操作", width: 100 },

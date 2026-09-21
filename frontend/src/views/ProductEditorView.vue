@@ -125,7 +125,8 @@
             /><ElButton @click="fill('price')">应用价格</ElButton
             ><ElInputNumber
               v-model="bulkStock"
-              :min="0"
+              :min="-2147483648"
+              :max="2147483647"
               :precision="0"
               placeholder="统一库存"
             /><ElButton @click="fill('stock')">应用库存</ElButton>
@@ -157,10 +158,11 @@
                   :min="0"
                   :precision="2"
                   controls-position="right"
-                /><label>实际库存</label
+                /><label>现货余额</label
                 ><ElInputNumber
                   v-model="size.stock"
-                  :min="0"
+                  :min="-2147483648"
+                  :max="2147483647"
                   :precision="0"
                   controls-position="right"
                 />
@@ -342,7 +344,7 @@ function addSize() {
 async function removeSize(variant, index) {
   if (
     await confirm(
-      `移除 ${variant.colorName || "该颜色"} 的 ${variant.sizePrices[index].sizeCode} 尺码？合同未送非零时服务器会阻止删除。`,
+      `移除 ${variant.colorName || "该颜色"} 的 ${variant.sizePrices[index].sizeCode} 尺码？存在欠货、在途数量或未履约订单时不能删除。`,
     )
   )
     variant.sizePrices.splice(index, 1);
@@ -352,8 +354,8 @@ async function fill(field) {
   if (
     typeof value !== "number" ||
     !Number.isFinite(value) ||
-    value < 0 ||
-    (field === "stock" && !Number.isInteger(value))
+    (field === "price" && value < 0) ||
+    (field === "stock" && (!Number.isInteger(value) || value < -2147483648 || value > 2147483647))
   ) {
     ElMessage.error("请填写有效数量");
     return;
@@ -388,13 +390,13 @@ async function submit() {
       v.sizePrices.some(
         (s) =>
           !Number.isInteger(s.stock) ||
-          s.stock < 0 ||
+          s.stock < -2147483648 || s.stock > 2147483647 ||
           typeof s.price !== "number" ||
           !Number.isFinite(s.price) ||
           s.price < 0,
       )
     ) {
-      error.value = `请核对 ${v.colorName} 的尺码、价格和非负整数库存`;
+      error.value = `请核对 ${v.colorName} 的尺码、价格和整数现货余额`;
       return;
     }
   }

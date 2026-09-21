@@ -25,6 +25,8 @@ LOCAL_VENDOR_DIR = BASE_DIR / "_vendor"
 if LOCAL_VENDOR_DIR.exists():
     sys.path.insert(0, str(LOCAL_VENDOR_DIR))
 
+import inventory_policy
+
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
 from flask_cors import CORS
 from openpyxl import Workbook, load_workbook
@@ -1007,7 +1009,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     return output
 
 
-INVENTORY_TEMPLATE_VERSION = "inventory-v2"
+INVENTORY_TEMPLATE_VERSION = "inventory-v3"
 INVENTORY_HEADERS = [
     "模板版本",
     "商品ID",
@@ -1023,6 +1025,8 @@ INVENTORY_HEADERS = [
     "导出指纹",
     "待入库",
     "原始待入库",
+    "待验货",
+    "原始待验货",
 ]
 INVENTORY_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 INVENTORY_MAX_ROWS = 20_000
@@ -1083,6 +1087,7 @@ def inventory_export_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "stock": int(size.get("stock") or 0),
                     "contractPending": int(size.get("contractPending") or 0),
                     "pendingInbound": int(size.get("pendingInbound") or 0),
+                    "pendingInspection": int(size.get("pendingInspection") or 0),
                 }
             )
     return rows
@@ -1117,19 +1122,27 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
                 f"{row['productId']}:{row['sizeCode']}",
                 row["pendingInbound"],
                 row["pendingInbound"],
+                row["pendingInspection"],
+                row["pendingInspection"],
             ]
         )
 
+    from openpyxl.comments import Comment
+    worksheet['I1'].comment = Comment('转移待验货或待入库时可保持此列原值，系统会自动按阶段差额计算合同未送；若同时填写此列，须与自动计算结果一致。', 'GINGTTO')
+    worksheet['M1'].comment = Comment('填写待入库目标数量。增加量从待验货扣减；单独修改此列时系统自动计算待验货余额，一键入库另行操作。', 'GINGTTO')
+    worksheet['O1'].comment = Comment('填写待验货目标数量。单独增加时从合同未送扣减；与待入库同时修改时，两列均填写转移后的最终余额。', 'GINGTTO')
+    worksheet.column_dimensions['M'].width = 16
+    worksheet.column_dimensions['O'].width = 16
     widths = {"A": 16, "B": 12, "C": 36, "D": 22, "E": 16, "F": 20, "G": 14, "H": 14, "I": 14, "J": 14, "K": 18, "L": 24}
     for column, width in widths.items():
         worksheet.column_dimensions[column].width = width
-    for column in ("A", "J", "K", "L", "N"):
+    for column in ("A", "J", "K", "L", "N", "P"):
         worksheet.column_dimensions[column].hidden = True
     for row in worksheet.iter_rows():
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=cell.column in (3, 4, 5, 6))
     if worksheet.max_row > 1:
-        worksheet.auto_filter.ref = f"B1:M{worksheet.max_row}"
+        worksheet.auto_filter.ref = f"B1:O{worksheet.max_row}"
 
     output = BytesIO()
     workbook.save(output)
@@ -1144,12 +1157,16 @@ def _excel_text(cell: Any) -> str:
     return str(value).strip()
 
 
-def _excel_quantity(cell: Any, label: str) -> int:
+def _excel_quantity(cell: Any, label: str, *, signed: bool = False) -> int:
     if cell.value is None or (isinstance(cell.value, str) and not cell.value.strip()):
         raise ValueError(f"{label}不能为空")
     if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("=")):
         raise ValueError(f"{label}不能使用公式")
     value = cell.value
+    if signed:
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        return inventory_policy.parse_stock(value, label)
     if isinstance(value, bool):
         raise ValueError(f"{label}必须是非负整数")
     if isinstance(value, float) and not value.is_integer():
@@ -1184,7 +1201,7 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
         if worksheet.max_row > INVENTORY_MAX_ROWS + 1:
             raise ValueError("数据行不能超过 20,000 行")
         header = [_excel_text(cell) for cell in next(worksheet.iter_rows(min_row=1, max_row=1, max_col=len(INVENTORY_HEADERS)))]
-        if header != INVENTORY_HEADERS and header != INVENTORY_HEADERS[:12] + ["", ""]:
+        if header != INVENTORY_HEADERS:
             raise ValueError("库存模板版本或列名不匹配，请使用库存页面导出的文件")
 
         lookup: dict[tuple[int, str], dict[str, Any]] = {}
@@ -1207,7 +1224,7 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
                     if cell.data_type == "f" or (isinstance(cell.value, str) and cell.value.startswith("=")):
                         raise ValueError("不支持公式，请填写固定值")
                 version = _excel_text(cells[0])
-                if version not in {"inventory-v1", INVENTORY_TEMPLATE_VERSION}:
+                if version != INVENTORY_TEMPLATE_VERSION:
                     raise ValueError("模板版本不匹配")
                 product_id_raw = _excel_text(cells[1])
                 if not re.fullmatch(r"\d+", product_id_raw) or int(product_id_raw) <= 0:
@@ -1241,13 +1258,13 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
                 mismatches = [label for label in actual_identity if actual_identity[label] != imported_identity[label]]
                 if mismatches:
                     raise ValueError("身份字段不匹配：" + ", ".join(mismatches))
-                original_stock = _excel_quantity(cells[9], "原始库存")
+                original_stock = _excel_quantity(cells[9], "原始库存", signed=True)
                 original_pending = _excel_quantity(cells[10], "原始合同未送")
-                stock = _excel_quantity(cells[7], "当前库存")
+                stock = _excel_quantity(cells[7], "当前库存", signed=True)
                 contract_pending = _excel_quantity(cells[8], "合同未送")
                 inbound_fields = {}
                 if version == INVENTORY_TEMPLATE_VERSION:
-                    inbound_fields = {"pendingInbound": _excel_quantity(cells[12], "待入库"), "originalPendingInbound": _excel_quantity(cells[13], "原始待入库")}
+                    inbound_fields = {"pendingInbound": _excel_quantity(cells[12], "待入库"), "originalPendingInbound": _excel_quantity(cells[13], "原始待入库"), "pendingInspection": _excel_quantity(cells[14], "待验货"), "originalPendingInspection": _excel_quantity(cells[15], "原始待验货")}
                 parsed.append(
                     {
                         **inbound_fields,
@@ -1274,25 +1291,32 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
 
 
 def inventory_import_payload(raw: bytes) -> dict[str, Any]:
-    snapshot = list_products(include_contract_pending=True)
+    snapshot = list_products(include_contract_pending=True, include_inactive=True)
     parsed, errors = parse_inventory_workbook(raw, snapshot)
     current = {(int(item['id']), str(size['sizeCode'])): size for item in snapshot for size in item.get('sizePrices', [])}
     for index, row in enumerate(parsed, start=2):
         size = current[(row['productId'], row['sizeCode'])]
         effective = dict(size)
-        for field, original in [('stock','originalStock'),('contractPending','originalContractPending'),('pendingInbound','originalPendingInbound')]:
+        for field, original in [('stock','originalStock'),('contractPending','originalContractPending'),('pendingInbound','originalPendingInbound'),('pendingInspection','originalPendingInspection')]:
             if field in row and row[field] != row[original]:
                 if size[field] not in (row[original], row[field]):
                     errors.append({'row':row.get('rowNumber',index),'message':f"{row['sku']} / {row['sizeCode']}：{field} 已在线上变更"})
                 effective[field] = row[field]
-        if effective.get('pendingInbound',0) > effective['contractPending']:
-            errors.append({'row':row.get('rowNumber',index),'message':'待入库不能超过合同未送数量'})
+        try:
+            import db as inventory_db
+            inventory_db.prepare_inventory_import(row)
+            moving = any(row[k] != row[o] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')])
+            if moving and any(size[k] != row[o] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')]):
+                if any(size[k] != row[k] for k in ['contractPending','pendingInspection','pendingInbound']): raise ValueError('库存阶段数量已变化，请重新导出')
+        except ValueError as exc:
+            errors.append({'row':row.get('rowNumber',index),'message':str(exc)})
     changed_rows = [
         row
         for row in parsed
         if row["stock"] != row["originalStock"]
         or row["contractPending"] != row["originalContractPending"]
         or row.get("pendingInbound") != row.get("originalPendingInbound")
+        or row.get("pendingInspection") != row.get("originalPendingInspection")
     ]
     return {
         "fileHash": hashlib.sha256(raw).hexdigest(),
@@ -1302,6 +1326,7 @@ def inventory_import_payload(raw: bytes) -> dict[str, Any]:
                 "stockChanged": row["stock"] != row["originalStock"],
                 "contractPendingChanged": row["contractPending"] != row["originalContractPending"],
                 "pendingInboundChanged": row.get("pendingInbound") != row.get("originalPendingInbound"),
+                "pendingInspectionChanged": row.get("pendingInspection") != row.get("originalPendingInspection"),
             }
             for row in parsed
         ],
@@ -1313,6 +1338,7 @@ def inventory_import_payload(raw: bytes) -> dict[str, Any]:
                 int(row["stock"] != row["originalStock"])
                 + int(row["contractPending"] != row["originalContractPending"])
                 + int(row.get("pendingInbound") != row.get("originalPendingInbound"))
+                + int(row.get("pendingInspection") != row.get("originalPendingInspection"))
                 for row in changed_rows
             ),
             "productCount": len({int(row["productId"]) for row in parsed}),
@@ -1348,6 +1374,7 @@ def localize(value: Any, lang: str) -> Any:
 
 
 def serialize_product(product: dict[str, Any], lang: str) -> dict[str, Any]:
+    product = inventory_policy.public_inventory(product)
     category_label = product.get("categoryLabel") or product.get("categoryKey", "")
     name = localize(product["name"], lang)
     summary = localize(product["summary"], lang)
@@ -1941,8 +1968,18 @@ def service_create_order() -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def dashboard() -> Any:
-    if request.args.get('view') == 'workbench':
+    view = request.args.get('view')
+    if view == 'workbench':
         return jsonify(workbench.dashboard(request.args))
+    if view == 'style-performance':
+        return jsonify(workbench.style_performance(request.args))
+    if view == 'style-detail':
+        try:
+            return jsonify(workbench.style_detail(request.args))
+        except LookupError as error:
+            return jsonify({'message': str(error)}), 404
+    if view == 'style-size-detail':
+        return jsonify(workbench.style_size_detail(request.args))
     hero_count = len(
         [item for item in get_homepage_config().get("heroBanners", {}).values() if str(item or "").strip()]
     )
@@ -1995,9 +2032,9 @@ def products() -> Any:
 @require_roles("admin", "sales", "warehouse", "customer")
 def inventory_products() -> Any:
     include_contract_pending = str(g.current_user.get("role") or "").lower() != "customer"
-    if 'page' in request.args:
+    if 'page' in request.args or request.args.get('stock'):
         return jsonify(workbench.products_page(request.args, pending=include_contract_pending))
-    return jsonify({"items": list_products(include_contract_pending=include_contract_pending)})
+    return jsonify({"items": workbench.products_for_export(request.args) if include_contract_pending else list_products()})
 
 
 @app.get("/api/admin/inventory/export")
@@ -2007,7 +2044,7 @@ def export_inventory() -> Any:
     category = str(request.args.get("category", "")).strip()
     keyword = str(request.args.get("keyword", "")).strip()
     items = (workbench.products_for_export(request.args) if request.args.get('view') == 'workbench'
-             else filter_inventory_items(list_products(include_contract_pending=True), category=category, keyword=keyword))
+             else workbench.products_for_export(request.args))
     file_stream = build_inventory_export(items)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(
@@ -2073,7 +2110,7 @@ def confirm_inventory_import() -> Any:
 def update_inventory_route(product_id: int) -> Any:
     payload = request.get_json(silent=True) or {}
     size_stocks = payload.get("sizeStocks")
-    if not isinstance(size_stocks, dict) or (not size_stocks and not payload.get("contractPendingBySize") and not payload.get("pendingInboundBySize")):
+    if not isinstance(size_stocks, dict) or (not size_stocks and not payload.get("contractPendingBySize") and not payload.get("pendingInboundBySize") and not payload.get("pendingInspectionBySize")):
         return jsonify({"message": "Missing field: sizeStocks"}), 400
     contract_pending_by_size = payload.get("contractPendingBySize")
     if contract_pending_by_size is not None and not isinstance(contract_pending_by_size, dict):
@@ -2082,7 +2119,9 @@ def update_inventory_route(product_id: int) -> Any:
         inbound = payload.get('pendingInboundBySize')
         if inbound is not None and not isinstance(inbound, dict):
             raise ValueError('pendingInboundBySize must be an object')
-        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size, inbound)
+        inspection = payload.get('pendingInspectionBySize')
+        if inspection is not None and not isinstance(inspection,dict): raise ValueError('待验货数量格式错误')
+        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size, inbound, inspection)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     if not product:
@@ -2872,11 +2911,16 @@ def contract_export_route(contract_id):
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
+@app.after_request
+def sanitize_customer_inventory(response):
+    user = getattr(g, 'current_user', None) or {}
+    if user.get('role') == 'customer' and request.path.startswith('/api/admin/inventory') and response.is_json:
+        response.set_data(app.json.dumps(inventory_policy.public_inventory(response.get_json())))
+    return response
+
+
 ensure_database_ready()
 
 
 if __name__ == "__main__":
     app.run(debug=False, use_reloader=False, host="0.0.0.0", port=5002)
-
-
-
