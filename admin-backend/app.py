@@ -2530,7 +2530,7 @@ def orders() -> Any:
 
 @app.get("/api/admin/orders/export")
 @require_auth
-@require_roles("admin", "sales")
+@require_roles("admin", "sales", "warehouse")
 def export_orders() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     status = str(request.args.get("status", "all")).strip() or "all"
@@ -2563,7 +2563,7 @@ def export_orders() -> Any:
 
 @app.get("/api/admin/orders/export-by-sheet")
 @require_auth
-@require_roles("admin", "sales")
+@require_roles("admin", "sales", "warehouse")
 def export_orders_by_sheet() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     status = str(request.args.get("status", "all")).strip() or "all"

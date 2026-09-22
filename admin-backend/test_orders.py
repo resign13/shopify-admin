@@ -149,7 +149,8 @@ class AdminOrdersTest(unittest.TestCase):
         result=self.call('orders?page=1&status=allocated').json
         self.assertEqual(result['total'],1)
         self.assertEqual(result['statusCounts']['allocated'],1)
-        self.assertEqual(self.call('orders/export?view=workbench&status=allocated&includeImages=0', role='warehouse').status_code,403)
+        self.assertEqual(self.call('orders/export?view=workbench&status=allocated&includeImages=0', role='warehouse').status_code,200)
+        self.assertEqual(self.call('orders/export-by-sheet?view=workbench&status=allocated&includeImages=0', role='warehouse').status_code,200)
         self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'paid','shippingFee':99,'paymentLink':'https://changed.example'},role='warehouse').status_code,200)
         updated=self.call(f"orders/{order['id']}").json['order']
         self.assertEqual(float(updated['shippingFee']),12.5)

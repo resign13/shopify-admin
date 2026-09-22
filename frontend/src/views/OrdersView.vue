@@ -171,7 +171,7 @@ const auth = useAdminAuthStore(),
 const canEditDetails = computed(() =>
     ["admin", "sales"].includes(auth.userRole),
   ),
-  canExportOrders = computed(() => auth.userRole !== "warehouse"),
+  canExportOrders = computed(() => ["admin", "sales", "warehouse"].includes(auth.userRole)),
   editorOpen = ref(false);
 function orderSaved(id) {
   list.load();
