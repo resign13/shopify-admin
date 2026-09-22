@@ -2597,8 +2597,6 @@ def export_orders_by_sheet() -> Any:
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def export_order_invoice(order_id: int) -> Any:
-    if g.current_user.get('role') == 'sales' and not workbench.db._fetch_one('SELECT 1 FROM orders WHERE id=%s AND created_by_admin_id=%s', (order_id, g.current_user['id'])):
-        return jsonify({"message": "无权访问其他外贸人员的订单"}), 403
     order = get_order_by_id(order_id)
     if not order:
         return jsonify({"message": "Order not found"}), 404
@@ -2622,8 +2620,6 @@ def export_order_invoice(order_id: int) -> Any:
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def update_order_route(order_id: int) -> Any:
-    if g.current_user.get('role') == 'sales' and not workbench.db._fetch_one('SELECT 1 FROM orders WHERE id=%s AND created_by_admin_id=%s', (order_id, g.current_user['id'])):
-        return jsonify({"message": "无权编辑其他外贸人员的订单"}), 403
     payload = request.get_json(silent=True) or {}
     status = str(payload.get("status", "")).strip()
     tracking_no = str(payload.get("trackingNo", "")).strip()
@@ -2738,8 +2734,6 @@ def create_admin_order():
 @require_auth
 @require_roles('admin', 'sales')
 def edit_admin_order(order_id):
-    if g.current_user.get('role') == 'sales' and not workbench.db._fetch_one('SELECT 1 FROM orders WHERE id=%s AND created_by_admin_id=%s', (order_id, g.current_user['id'])):
-        return jsonify({"message": "无权编辑其他外贸人员的订单"}), 403
     from order_management import save_order
     return jsonify(save_order(request.get_json(silent=True) or {}, order_id))
 
@@ -2851,8 +2845,6 @@ def inventory_detail_route(product_id):
 @require_auth
 @require_roles('admin', 'sales', 'warehouse')
 def order_detail_route(order_id):
-    if g.current_user.get('role') == 'sales' and not workbench.db._fetch_one('SELECT 1 FROM orders WHERE id=%s AND created_by_admin_id=%s', (order_id, g.current_user['id'])):
-        return jsonify({'message':'无权访问其他外贸人员的订单'}), 403
     item = get_order_by_id(order_id)
     if not item: return jsonify({'message':'订单不存在'}),404
     item['version'] = workbench.version('orders', order_id)
