@@ -263,6 +263,8 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS label_image_urls TEXT NOT NULL DEFAULT '[]'")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ")
     cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
+    cur.execute("ALTER TABLE orders ADD COLUMN IF NOT EXISTS created_by_admin_id BIGINT REFERENCES admin_users(id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_created_by_admin_id ON orders (created_by_admin_id)")
     _migrate_order_status_values(cur)
     cur.execute(
         """
@@ -289,6 +291,10 @@ def _apply_schema_migrations(cur: Any) -> None:
     cur.execute("SELECT 1 FROM pg_constraint WHERE conname='product_size_prices_inbound_nonnegative'")
     if not cur.fetchone(): cur.execute("ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_inbound_nonnegative CHECK(pending_inbound >= 0)")
     migrate(cur)
+    cur.execute("""UPDATE orders o SET created_by_admin_id = r.actor_id
+                 FROM (SELECT DISTINCT ON (order_id) order_id, actor_id
+                       FROM admin_order_requests ORDER BY order_id, created_at) r
+                 WHERE o.id = r.order_id AND o.created_by_admin_id IS NULL""")
 
 
 

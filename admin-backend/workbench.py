@@ -615,8 +615,10 @@ def receive_inventory(product_id, payload):
     return result
 
 
-def order_where(args, status=True):
+def order_where(args, status=True, owner_id=None):
     where, params = ['TRUE'], []
+    if owner_id is not None:
+        where.append('o.created_by_admin_id=%s'); params.append(owner_id)
     if status and args.get('status') not in {None, '', 'all'}:
         where.append('o.status=%s'); params.append(args['status'])
     if args.get('keyword'):
@@ -644,8 +646,8 @@ def order_where(args, status=True):
     return ' AND '.join(where), params
 
 
-def order_ids(args, limit=None, offset=0, status=True):
-    where, params = order_where(args, status)
+def order_ids(args, limit=None, offset=0, status=True, owner_id=None):
+    where, params = order_where(args, status, owner_id)
     sort = {'createdAt': 'o.created_at', 'totalAmount': 'o.total_amount', 'id': 'o.id'}.get(args.get('sort'), 'o.created_at')
     direction = 'ASC' if args.get('direction') == 'asc' else 'DESC'
     query = f'SELECT o.id FROM orders o JOIN store_users su ON su.id=o.store_user_id WHERE {where} ORDER BY {sort} {direction},o.id DESC'
@@ -654,13 +656,13 @@ def order_ids(args, limit=None, offset=0, status=True):
     return [row['id'] for row in db._fetch_all(query, tuple(params))]
 
 
-def orders_page(args):
+def orders_page(args, owner_id=None):
     page, size = paging(args)
-    where, params = order_where(args, status=False)
+    where, params = order_where(args, status=False, owner_id=owner_id)
     counts = db._fetch_all('SELECT o.status,COUNT(*) AS count FROM orders o JOIN store_users su ON su.id=o.store_user_id WHERE '+where+' GROUP BY o.status', tuple(params))
     status_counts = {row['status']: row['count'] for row in counts}
     total = status_counts.get(args['status'], 0) if args.get('status') not in {None,'','all'} else sum(status_counts.values())
-    ids = order_ids(args, size, (page-1)*size)
+    ids = order_ids(args, size, (page-1)*size, owner_id=owner_id)
     items = db.list_orders(order_ids=ids)
     positions = {v:i for i,v in enumerate(ids)}
     items.sort(key=lambda item: positions[item['id']])

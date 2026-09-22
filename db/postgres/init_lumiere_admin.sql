@@ -157,7 +157,8 @@ CREATE TABLE IF NOT EXISTS orders (
   total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
   payment_link TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_by_admin_id BIGINT REFERENCES admin_users(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_store_user_id
@@ -165,6 +166,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_store_user_id
 
 CREATE INDEX IF NOT EXISTS idx_orders_status
   ON orders (status);
+CREATE INDEX IF NOT EXISTS idx_orders_created_by_admin_id ON orders (created_by_admin_id);
 
 CREATE TABLE IF NOT EXISTS order_items (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

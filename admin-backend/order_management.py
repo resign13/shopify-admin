@@ -150,7 +150,7 @@ def save_order(payload, order_id=None):
     total = amount(sum(row['quantity'] * row['price'] for row in desired.values()) + shipping, '订单总额')
     address = ', '.join(fields[key] for key in ['address', 'apartment', 'city', 'state', 'zip', 'country'] if fields[key])
     if not old:
-        record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s) RETURNING id", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total))
+        record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount,created_by_admin_id) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s,%s) RETURNING id", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total, g.current_user['id']))
         order_id = record['id']
         db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id', (f'LM-{order_id:06d}', order_id))
     db._fetch_one('''UPDATE orders SET store_user_id=%s,contact_name=%s,phone=%s,country=%s,contact_email=%s,
