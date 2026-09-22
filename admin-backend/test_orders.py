@@ -152,7 +152,7 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(self.call('orders/export?view=workbench&status=allocated&includeImages=0', role='warehouse').status_code,403)
         self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'paid','shippingFee':99,'paymentLink':'https://changed.example'},role='warehouse').status_code,200)
         updated=self.call(f"orders/{order['id']}").json['order']
-        self.assertEqual(float(updated['shippingFee']),0.0)
+        self.assertEqual(float(updated['shippingFee']),12.5)
         self.assertEqual(updated['paymentLink'],'')
         with db.get_connection() as conn:
             with conn.cursor() as cur: db._migrate_order_status_values(cur)
