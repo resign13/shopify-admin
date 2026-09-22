@@ -2530,7 +2530,7 @@ def orders() -> Any:
 
 @app.get("/api/admin/orders/export")
 @require_auth
-@require_roles("admin", "sales", "warehouse")
+@require_roles("admin", "sales")
 def export_orders() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     status = str(request.args.get("status", "all")).strip() or "all"
@@ -2563,7 +2563,7 @@ def export_orders() -> Any:
 
 @app.get("/api/admin/orders/export-by-sheet")
 @require_auth
-@require_roles("admin", "sales", "warehouse")
+@require_roles("admin", "sales")
 def export_orders_by_sheet() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     status = str(request.args.get("status", "all")).strip() or "all"
@@ -2595,7 +2595,7 @@ def export_orders_by_sheet() -> Any:
 
 @app.get("/api/admin/orders/<int:order_id>/invoice")
 @require_auth
-@require_roles("admin", "sales", "warehouse")
+@require_roles("admin", "sales")
 def export_order_invoice(order_id: int) -> Any:
     order = get_order_by_id(order_id)
     if not order:
@@ -2626,6 +2626,14 @@ def update_order_route(order_id: int) -> Any:
     payment_link = str(payload.get("paymentLink", "")).strip()
     from order_management import amount
     shipping_fee = amount(payload.get("shippingFee", 0), "运费")
+    if g.current_user.get("role") == "warehouse":
+        current = workbench.db._fetch_one(
+            "SELECT shipping_fee, payment_link FROM orders WHERE id=%s", (order_id,)
+        )
+        if not current:
+            return jsonify({"message": "Order not found"}), 404
+        shipping_fee = current["shipping_fee"]
+        payment_link = current["payment_link"] or ""
     if not status:
         return jsonify({"message": "Missing status"}), 400
     if status not in ORDER_STATUSES:

@@ -5,7 +5,7 @@
     eyebrow="ORDERS / 订单业务"
     ><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
       >＋ 新增订单</ElButton
-    ><ElDropdown @command="exportOrders"
+    ><ElDropdown v-if="canExportOrders" @command="exportOrders"
       ><ElButton :loading="exporting">导出订单 ▾</ElButton
       ><template #dropdown
         ><ElDropdownMenu
@@ -171,6 +171,7 @@ const auth = useAdminAuthStore(),
 const canEditDetails = computed(() =>
     ["admin", "sales"].includes(auth.userRole),
   ),
+  canExportOrders = computed(() => auth.userRole !== "warehouse"),
   editorOpen = ref(false);
 function orderSaved(id) {
   list.load();

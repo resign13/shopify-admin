@@ -128,6 +128,7 @@
               :rules="[{ validator: validateFee, trigger: 'blur' }]"
               ><ElInputNumber
                 v-model="form.shippingFee"
+                :disabled="warehouseStatusOnly"
                 :min="0"
                 :precision="2"
                 controls-position="right"
@@ -142,6 +143,7 @@
             ><ElFormItem label="付款链接"
               ><ElInput
                 v-model.trim="form.paymentLink"
+                :disabled="warehouseStatusOnly"
                 placeholder="填写付款地址"
             /></ElFormItem></div
         ></ElForm>
@@ -177,15 +179,22 @@
       ></template
     ><template #footer>
       <ElButton
-        v-if="!editing"
+        v-if="!editing && !warehouseStatusOnly"
         :disabled="loading || !order"
         @click="editDetails"
         >修改订单资料</ElButton
+      >
+      <ElButton
+        v-if="!editing && warehouseStatusOnly"
+        :disabled="loading || !order"
+        @click="editDetails"
+        >修改订单状态</ElButton
       >
       <ElButton v-if="editing" :disabled="busy" @click="cancelEdit"
         >取消修改</ElButton
       >
       <ElButton
+        v-if="!warehouseStatusOnly"
         :disabled="busy || !order || (fullEditing ? editor?.dirty : dirty)"
         @click="exportInvoice"
         >导出订单详情</ElButton
@@ -229,6 +238,7 @@ const editing = ref(false),
 const fullEditing = computed(
   () => editing.value && ["admin", "sales"].includes(auth.userRole),
 );
+const warehouseStatusOnly = computed(() => auth.userRole === "warehouse");
 const busy = computed(
   () => saving.value || editor.value?.saving || editor.value?.uploading,
 );
