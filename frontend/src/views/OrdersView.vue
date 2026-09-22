@@ -192,24 +192,28 @@ const filters = reactive({
   dates = ref(
     list.query.dateFrom ? [list.query.dateFrom, list.query.dateTo] : null,
   );
-const columns = [
+const columns = computed(() => [
   { prop: "orderNo", label: "订单号", width: 165 },
   { prop: "userName", label: "业务员", width: 150 },
   { prop: "country", label: "国家", width: 90 },
   { prop: "itemCount", label: "件数", numeric: true, width: 60 },
-  { prop: "goodsAmount", label: "商品金额", numeric: true, width: 100 },
-  { prop: "shippingFee", label: "运费", numeric: true, width: 85 },
-  {
-    prop: "totalAmount",
-    label: "应付总额",
-    numeric: true,
-    width: 105,
-    sortable: true,
-  },
+  ...(!auth.isWarehouse
+    ? [
+        { prop: "goodsAmount", label: "商品金额", numeric: true, width: 100 },
+        { prop: "shippingFee", label: "运费", numeric: true, width: 85 },
+        {
+          prop: "totalAmount",
+          label: "应付总额",
+          numeric: true,
+          width: 105,
+          sortable: true,
+        },
+      ]
+    : []),
   { prop: "status", label: "状态", width: 85 },
   { prop: "createdAt", label: "下单时间", width: 145, sortable: true },
   { prop: "actions", label: "操作", width: 85 },
-];
+]);
 watch(
   () => list.filterKey,
   () => {

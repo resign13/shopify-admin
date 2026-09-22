@@ -1440,6 +1440,18 @@ def sanitize_store_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def redact_order_amounts_for_warehouse(order: dict[str, Any]) -> dict[str, Any]:
+    """Remove financial fields before returning an order to warehouse staff."""
+    sanitized = dict(order)
+    for key in ("totalAmount", "goodsAmount", "shippingFee", "paymentLink"):
+        sanitized.pop(key, None)
+    sanitized["items"] = [
+        {key: value for key, value in item.items() if key not in {"unitPrice", "totalPrice"}}
+        for item in (order.get("items") or [])
+    ]
+    return sanitized
+
+
 def extract_token() -> str:
     auth_header = request.headers.get("Authorization", "")
     if auth_header.startswith("Bearer "):
@@ -2524,8 +2536,12 @@ def delete_admin_user_route(user_id: int) -> Any:
 def orders() -> Any:
     owner_id = g.current_user['id'] if g.current_user.get('role') == 'sales' else None
     if 'page' in request.args:
-        return jsonify(workbench.orders_page(request.args, owner_id=owner_id))
-    return jsonify({"items": list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id))})
+        result = workbench.orders_page(request.args, owner_id=owner_id)
+    else:
+        result = {"items": list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id))}
+    if g.current_user.get("role") == "warehouse":
+        result["items"] = [redact_order_amounts_for_warehouse(item) for item in result["items"]]
+    return jsonify(result)
 
 
 @app.get("/api/admin/orders/export")
@@ -2551,6 +2567,8 @@ def export_orders() -> Any:
                                category=category, keyword=keyword)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
+    if g.current_user.get("role") == "warehouse":
+        orders = [redact_order_amounts_for_warehouse(order) for order in orders]
     file_stream = build_orders_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(
@@ -2583,6 +2601,8 @@ def export_orders_by_sheet() -> Any:
                                category=category, keyword=keyword)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
+    if g.current_user.get("role") == "warehouse":
+        orders = [redact_order_amounts_for_warehouse(order) for order in orders]
     file_stream = build_orders_sheet_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return send_file(
@@ -2643,6 +2663,8 @@ def update_order_route(order_id: int) -> Any:
     order = update_order_status(order_id, status, tracking_no, payment_link, shipping_fee)
     if not order:
         return jsonify({"message": "Order not found"}), 404
+    if g.current_user.get("role") == "warehouse":
+        order = redact_order_amounts_for_warehouse(order)
     return jsonify({"message": "Order updated", "order": order})
 
 
@@ -2857,6 +2879,8 @@ def order_detail_route(order_id):
     if not item: return jsonify({'message':'订单不存在'}),404
     item['version'] = workbench.version('orders', order_id)
     item['goodsAmount'] = round(sum(float(row['totalPrice']) for row in item['items']),2)
+    if g.current_user.get("role") == "warehouse":
+        item = redact_order_amounts_for_warehouse(item)
     return jsonify({'order': item})
 
 

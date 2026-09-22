@@ -62,17 +62,17 @@
               label="数量"
               width="70"
               align="right"
-            /><ElTableColumn label="单价" width="85" align="right"
+            /><ElTableColumn v-if="!warehouseStatusOnly" label="单价" width="85" align="right"
               ><template #default="{ row }">{{
                 money(row.unitPrice)
               }}</template></ElTableColumn
-            ><ElTableColumn label="金额" width="95" align="right"
+            ><ElTableColumn v-if="!warehouseStatusOnly" label="金额" width="95" align="right"
               ><template #default="{ row }">{{
                 money(row.totalPrice)
               }}</template></ElTableColumn
             ></ElTable
           >
-          <div class="detail-grid section-gap">
+          <div v-if="!warehouseStatusOnly" class="detail-grid section-gap">
             <div>
               <span>商品金额</span
               ><strong>{{ money(order.goodsAmount) }}</strong>
@@ -122,7 +122,7 @@
                   :key="value"
                   :value="value"
                   :label="label" :disabled="['cancelled','completed'].includes(order.status) ? value !== order.status : order.status === 'shipped' && !['shipped','completed'].includes(value)" /></ElSelect></ElFormItem
-            ><ElFormItem
+            ><ElFormItem v-if="!warehouseStatusOnly"
               label="运费（USD）"
               prop="shippingFee"
               :rules="[{ validator: validateFee, trigger: 'blur' }]"
@@ -140,7 +140,7 @@
               ><ElInput
                 v-model.trim="form.trackingNo"
                 placeholder="发货时必填" /></ElFormItem
-            ><ElFormItem label="付款链接"
+            ><ElFormItem v-if="!warehouseStatusOnly" label="付款链接"
               ><ElInput
                 v-model.trim="form.paymentLink"
                 :disabled="warehouseStatusOnly"
@@ -158,7 +158,7 @@
             >读取最新数据（保留草稿）</ElButton
           ></ElAlert
         >
-        <div v-if="latest" class="panel">
+        <div v-if="latest && !warehouseStatusOnly" class="panel">
           <h3>线上最新数据</h3>
           <p>
             状态：{{ statusNames[latest.status] }}；运费：{{

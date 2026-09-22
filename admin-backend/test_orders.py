@@ -160,6 +160,27 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(self.call(f"orders/{order['id']}").json['order']['status'],'paid')
         self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'allocated','shippingFee':-1}).status_code,400)
 
+    def test_warehouse_order_responses_hide_financial_fields(self):
+        order = self.create()
+        financial_fields = {'totalAmount', 'goodsAmount', 'shippingFee', 'paymentLink'}
+
+        listing = self.call('orders?page=1', role='warehouse').json
+        listed = next(item for item in listing['items'] if item['id'] == order['id'])
+        self.assertTrue(financial_fields.isdisjoint(listed))
+        self.assertTrue(all({'unitPrice', 'totalPrice'}.isdisjoint(item) for item in listed['items']))
+
+        detail = self.call(f"orders/{order['id']}", role='warehouse').json['order']
+        self.assertTrue(financial_fields.isdisjoint(detail))
+        self.assertTrue(all({'unitPrice', 'totalPrice'}.isdisjoint(item) for item in detail['items']))
+
+        updated = self.call(
+            f"orders/{order['id']}",
+            'PUT',
+            {'status': 'allocated', 'shippingFee': 999, 'paymentLink': 'https://example.invalid'},
+            role='warehouse',
+        ).json['order']
+        self.assertTrue(financial_fields.isdisjoint(updated))
+
     def test_permissions_and_fulfilled_lines(self):
         for role in ['warehouse','customer']:
             self.assertEqual(self.call('orders','POST',self.payload(),role).status_code,403)
