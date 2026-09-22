@@ -171,7 +171,9 @@ const auth = useAdminAuthStore(),
 const canEditDetails = computed(() =>
     ["admin", "sales"].includes(auth.userRole),
   ),
-  canExportOrders = computed(() => ["admin", "sales", "warehouse"].includes(auth.userRole)),
+  // The route is already protected by the orders module permission. Reuse that
+  // capability here so warehouse accounts with the module grant see exports.
+  canExportOrders = computed(() => auth.can("orders")),
   editorOpen = ref(false);
 function orderSaved(id) {
   list.load();
