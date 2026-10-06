@@ -371,8 +371,8 @@ function removeMatrixProduct(row) {
   form.items = form.items.filter((item) => item.productId !== row.productId);
 }
 function statusDisabled(value) {
-  if (status.value === 'cancelled' || status.value === 'completed') return value !== status.value;
-  return status.value === 'shipped' && !['shipped','completed'].includes(value);
+  if (status.value === 'completed') return value !== status.value;
+  return false;
 }
 const inventoryImpact = computed(() => {
   const rows = new Map();
@@ -384,7 +384,7 @@ const inventoryImpact = computed(() => {
   for (const row of form.items) rows.get(`${row.productId}:${row.sizeCode}`).next += Number(row.quantity || 0);
   return [...rows.values()].map(row => {
     const stock = products[row.productId]?.sizePrices?.find(s => s.sizeCode === row.sizeCode)?.stock;
-    const change = lockedLines.value ? 0 : form.status === 'cancelled' ? row.before : row.before - row.next;
+    const change = (status.value === 'cancelled' ? 0 : row.before) - (form.status === 'cancelled' ? 0 : row.next);
     return {...row, current: stock ?? '待刷新', change: change > 0 ? `+${change}` : change, after: stock == null ? '待刷新' : stock + change};
   });
 });

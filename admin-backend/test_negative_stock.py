@@ -63,7 +63,8 @@ class NegativeStockTest(unittest.TestCase):
         order = self.update(order, note='cancelled metadata')
         self.assertEqual(self.balance(), 4)
         response = self.call(f"orders/{order['id']}", 'PUT', {'status':'paid'})
-        self.assertEqual(response.status_code, 400, response.json)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(self.balance(), -2)
         self.assertEqual(self.call('orders', 'DELETE', {'orderIds':[order['id']]}).status_code, 200)
         self.assertEqual(self.balance(), 4)
 
@@ -114,8 +115,14 @@ class NegativeStockTest(unittest.TestCase):
             order=self.create(2)
             order=self.update(order,status=status,trackingNo='FIXTURE')
             before=self.balance()
-            for target in ['paid','pending_payment','allocated','cancelled']:
-                self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':target}).status_code,400)
+            if status == 'completed':
+                for target in ['paid','pending_payment','allocated','cancelled','shipped']:
+                    self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':target}).status_code,400)
+            else:
+                for target in ['cancelled','cancelled','paid','allocated','shipped']:
+                    response = self.call(f"orders/{order['id']}",'PUT',{'status':target,'trackingNo':'FIXTURE'})
+                    self.assertEqual(response.status_code,200,response.json)
+                    self.assertEqual(self.balance(), before + (2 if target == 'cancelled' else 0))
             self.assertEqual(self.call('orders','DELETE',{'orderIds':[order['id']]}).status_code,200)
             self.assertEqual(self.balance(),before)
         order=self.create(3);before=self.balance()

@@ -84,7 +84,7 @@ def save_order(payload, order_id=None):
     if not old and next_status != 'pending_payment':
         raise ValueError('新增订单必须为待付款状态')
     if old:
-        inventory_policy.validate_transition(old["status"], next_status)
+        db.validate_admin_order_transition(old["status"], next_status)
     tracking = payload.get('trackingNo', (old or {}).get('tracking_no') or '')
     payment = payload.get('paymentLink', (old or {}).get('payment_link') or '')
     if not isinstance(tracking, str) or len(tracking) > 500 or not isinstance(payment, str) or len(payment) > 2048:

@@ -69,13 +69,6 @@
     <div v-if="selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个订单</strong
       ><ElButton text @click="clear">清空选择</ElButton
-      ><ElButton
-        v-if="auth.userRole === 'admin'"
-        type="danger"
-        plain
-        :loading="deleting"
-        @click="remove"
-        >删除已选订单</ElButton
       >
     </div>
     <DataTable
@@ -108,7 +101,23 @@
       ><template #shippingFee="{ row }">{{ money(row.shippingFee) }}</template
       ><template #totalAmount="{ row }">{{ money(row.totalAmount) }}</template
       ><template #status="{ row }"
-        ><ElTag
+        ><ElDropdown
+          v-if="statusOptions(row).length"
+          trigger="click"
+          :disabled="statusBusy"
+          @command="updateStatus(row, $event)"
+        >
+          <ElButton link type="primary" :disabled="statusBusy"
+            :aria-label="`修改订单 ${row.orderNo} 状态`"
+          >{{ statusNames[row.status] }} ▾</ElButton>
+          <template #dropdown>
+            <ElDropdownMenu>
+              <ElDropdownItem v-for="status in statusOptions(row)" :key="status" :command="status">
+                {{ statusNames[status] }}
+              </ElDropdownItem>
+            </ElDropdownMenu>
+          </template>
+        </ElDropdown><ElTag v-else
           :type="
             row.status === 'cancelled'
               ? 'info'
@@ -140,7 +149,7 @@
 </template>
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
@@ -166,8 +175,50 @@ const auth = useAdminAuthStore(),
   categories = ref([]),
   detailOpen = ref(false),
   detailId = ref(),
-  exporting = ref(false),
-  deleting = ref(false);
+  exporting = ref(false);
+const statusBusy = ref(false);
+function statusOptions(row) {
+  if (!auth.can("orders") || !["admin", "sales", "warehouse"].includes(auth.userRole)) return [];
+  if (row.status === "completed") return [];
+  return Object.keys(statusNames).filter(status =>
+    status !== row.status,
+  );
+}
+async function updateStatus(row, status) {
+  if (statusBusy.value || !statusOptions(row).includes(status)) return;
+  statusBusy.value = true;
+  try {
+    let trackingNo = row.trackingNo || "";
+    if (status === "shipped") {
+      try {
+        const result = await ElMessageBox.prompt(
+          `订单 ${row.orderNo}：填写物流单号后标记为已发货。${row.status === "cancelled" ? "恢复订单将重新扣减库存。" : ""}`, "确认发货",
+          { inputValue: trackingNo, inputPlaceholder: "物流单号", confirmButtonText: "确认发货",
+            cancelButtonText: "取消", inputValidator: value => Boolean(value?.trim()) || "请输入物流单号",
+            closeOnClickModal: false },
+        );
+        trackingNo = result.value.trim();
+      } catch { return; }
+    } else if (!(await confirm(
+      `订单 ${row.orderNo}：${statusNames[row.status]} → ${statusNames[status]}。` +
+      (status === "cancelled" ? "取消后将返还订单商品库存；恢复订单会重新扣库。" :
+        row.status === "cancelled" ? "恢复订单将重新扣减库存，确认恢复？" : "确认修改？"),
+      "修改订单状态",
+    ))) return;
+    await save(`orders/${row.id}`, {
+      status, trackingNo, version: row.version,
+      ...(!auth.isWarehouse ? { shippingFee: row.shippingFee, paymentLink: row.paymentLink } : {}),
+    });
+    clear();
+    await list.load();
+    ElMessage.success(`订单 ${row.orderNo} 已更新为${statusNames[status]}`);
+  } catch (error) {
+    notifyError(error);
+    if (error.status === 409) await list.load();
+  } finally {
+    statusBusy.value = false;
+  }
+}
 const canEditDetails = computed(() =>
     ["admin", "sales"].includes(auth.userRole),
   ),
@@ -248,36 +299,6 @@ function changeStatus(status) {
 function open(id) {
   detailId.value = id;
   detailOpen.value = true;
-}
-async function remove() {
-  if (
-    deleting.value ||
-    !(await confirm(
-      `将删除 ${selected.value.length} 个订单，现有删除规则会处理库存回补。确认继续？`,
-      "删除订单",
-    ))
-  )
-    return;
-  deleting.value = true;
-  try {
-    await save(
-      "orders",
-      {
-        orderIds: selected.value.map((o) => o.id),
-        versions: Object.fromEntries(
-          selected.value.map((o) => [o.id, o.version]),
-        ),
-      },
-      "DELETE",
-    );
-    clear();
-    list.load();
-    ElMessage.success("订单已删除");
-  } catch (e) {
-    notifyError(e);
-  } finally {
-    deleting.value = false;
-  }
 }
 async function exportOrders(type) {
   if (exporting.value) return;

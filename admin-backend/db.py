@@ -2341,6 +2341,13 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
     return get_order_by_id(order_id)  # type: ignore[return-value]
 
 
+def validate_admin_order_transition(previous, next_status):
+    if next_status not in ORDER_STATUSES:
+        raise ValueError('订单状态无效')
+    if previous == 'completed' and next_status != 'completed':
+        raise ValueError('已完成订单不能变更状态或取消')
+
+
 def update_order_status(
     order_id: int, status: str, tracking_no: str = "", payment_link: str = "", shipping_fee: Any = 0
 ) -> dict[str, Any] | None:
@@ -2350,9 +2357,12 @@ def update_order_status(
             previous = cur.fetchone()
             if not previous:
                 return None
-            inventory_policy.validate_transition(previous['status'], status)
-            if previous['status'] in inventory_policy.OPEN_STATUSES and status == 'cancelled':
+            validate_admin_order_transition(previous['status'], status)
+            if previous['status'] != 'cancelled' and status == 'cancelled':
                 inventory_policy.return_order_stock(cur, [order_id])
+            elif previous['status'] == 'cancelled' and status != 'cancelled':
+                cur.execute("SELECT product_id,COALESCE(size_code,'') AS size_code,SUM(quantity) AS quantity FROM order_items WHERE order_id=%s GROUP BY product_id,COALESCE(size_code,'')", (order_id,))
+                inventory_policy.adjust_stock(cur, {(r['product_id'], r['size_code']): -int(r['quantity']) for r in cur.fetchall()})
             shipping_fee_decimal = _safe_decimal(shipping_fee)
             cur.execute("SELECT COALESCE(SUM(total_price), 0) AS subtotal FROM order_items WHERE order_id = %s", (order_id,))
             subtotal_row = cur.fetchone()
