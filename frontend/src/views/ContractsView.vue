@@ -250,6 +250,7 @@ import DataTable from "../components/DataTable.vue";
 import ProductPicker from "../components/ProductPicker.vue";
 import ImageUploader from "../components/ImageUploader.vue";
 import { imageUrl } from "../utils/imageUrl";
+import { compareProductCategories } from "../utils/catalogOrder";
 import {
   api,
   save,
@@ -263,6 +264,7 @@ import {
 } from "../composables/workbench";
 const standardSizes = ["S", "M", "L", "XL", "XXL"];
 const editingId = ref(null);
+const productInfo = reactive({});
 const list = useList("contracts", { keyword: "" }),
   keyword = ref(list.query.keyword),
   open = ref(false),
@@ -339,6 +341,7 @@ async function add(row) {
     const result = await api("products/" + row.id);
     const p = result.product;
     if (!p?.sizePrices?.length) throw Error("该商品没有尺码，请先完善商品资料");
+    productInfo[p.id] = p;
     if (form.items.some((i) => i.productId === p.id)) return;
     form.items.push({
       productId: p.id,
@@ -360,6 +363,7 @@ async function add(row) {
       ),
       quantities: Object.fromEntries(standardSizes.map((s) => [s, 0])),
     });
+    form.items.sort((a, b) => compareProductCategories(productInfo[a.productId], productInfo[b.productId]));
   } catch (e) {
     notifyError(e);
   }
@@ -445,6 +449,7 @@ async function editContract() {
     const draft = JSON.parse(JSON.stringify(source));
     for (const item of draft.items) {
       const p = (await api(`products/${item.productId}`)).product;
+      productInfo[p.id] = p;
       item.actualSizes = p.sizePrices.map((s) => s.sizeCode);
       if (item.displayQuantities) {
         item.quantities = { ...item.displayQuantities };
@@ -478,6 +483,7 @@ async function editContract() {
       item.displayQuantities = null;
       item.sizes = [...standardSizes];
     }
+    draft.items.sort((a, b) => compareProductCategories(productInfo[a.productId], productInfo[b.productId]));
     Object.assign(form, draft, { requestId: crypto.randomUUID() });
     editingId.value = source.id;
     detail.value = null;

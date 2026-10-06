@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 
 import { API_BASE, request } from '../api'
 import { useAdminAuthStore } from './auth'
+import { compareProductCategories } from '../utils/catalogOrder'
 
 function authHeaders(token) {
   return { Authorization: `Bearer ${token}` }
@@ -298,7 +299,7 @@ export const useAdminStore = defineStore('admin-data', {
           this.products.push(product)
         }
       }
-      this.products.sort((left, right) => Number(left.id || 0) - Number(right.id || 0))
+      this.products.sort((left, right) => compareProductCategories(left, right) || Number(left.id || 0) - Number(right.id || 0))
       this.loadDashboard().catch(() => {})
       return savedProducts
     },

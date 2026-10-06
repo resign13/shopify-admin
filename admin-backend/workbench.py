@@ -9,6 +9,7 @@ from flask import g, jsonify, request, make_response
 from psycopg.types.json import Jsonb
 import db
 import inventory_policy
+import catalog_order
 
 SHANGHAI = timezone(timedelta(hours=8))
 
@@ -73,6 +74,8 @@ def _style_catalog_parts(args, style_code: str | None = None):
           p.main_image_url,
           p.stock AS product_stock,
           pc.category_key,
+          pc.id AS category_id,
+          pc.sort_order AS category_sort_order,
           COALESCE(NULLIF(pt.name,''),NULLIF(pte.name,''),p.product_code,p.sku,'') AS name
         FROM products p
         JOIN product_categories pc ON pc.id=p.category_id
@@ -260,7 +263,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
       WITH {catalog_cte},
       color_catalog AS (
         SELECT pc.id, pc.style_code, pc.product_code, pc.sku, pc.color_name, pc.color_hex,
-               pc.main_image_url, pc.name, COUNT(psp.id) AS size_count,
+               pc.main_image_url, pc.name, pc.category_id, pc.category_sort_order, COUNT(psp.id) AS size_count,
                COUNT(*) FILTER (WHERE psp.stock=0) AS empty_size_count,
                COALESCE(SUM(psp.stock),0) AS stock,
                COALESCE(SUM(GREATEST(psp.stock,0)),0) AS available_stock,
@@ -272,7 +275,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
         FROM product_catalog pc
         LEFT JOIN product_size_prices psp ON psp.product_id=pc.id
         {product_filter}
-        GROUP BY pc.id,pc.style_code,pc.product_code,pc.sku,pc.color_name,pc.color_hex,pc.main_image_url,pc.name
+        GROUP BY pc.id,pc.style_code,pc.product_code,pc.sku,pc.color_name,pc.color_hex,pc.main_image_url,pc.name,pc.category_id,pc.category_sort_order
       ),
       window_sales AS (
         SELECT pc.id, SUM(i.quantity) AS units, SUM(i.total_price) AS amount,
@@ -299,7 +302,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
       FROM color_catalog c
       LEFT JOIN window_sales w ON w.id=c.id
       LEFT JOIN velocity_sales v ON v.id=c.id
-      ORDER BY c.id
+      ORDER BY c.category_sort_order,c.category_id,c.id
     """
     params = [*catalog_params, *product_params, *window_params, *velocity_params, velocity_days, velocity_days]
     rows = db._fetch_all(sql, tuple(params))
@@ -364,7 +367,7 @@ def _style_size_rows(args, style_code: str, product_id: int | None = None):
       LEFT JOIN window_sales w ON w.product_id=p.id AND w.size_code=s.size_code
       LEFT JOIN velocity_sales v ON v.product_id=p.id AND v.size_code=s.size_code
       {product_filter}
-      ORDER BY p.id,s.sort_order,s.id
+      ORDER BY p.category_sort_order,p.category_id,p.id,s.sort_order,s.id
     """
     params = [*catalog_params, *window_params, *velocity_params, velocity_days, velocity_days]
     if product_id is not None:
@@ -547,13 +550,19 @@ def products_page(args, pending=False):
     summary = db._fetch_one('SELECT COUNT(*) AS total,COALESCE(SUM(p.stock),0) AS stock,COALESCE(SUM(' + inventory_policy.available_sql('p') + '),0) AS available_stock' + base, tuple(params))
     sizes = db._fetch_one('SELECT COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS shortage_units,COUNT(*) FILTER(WHERE s.stock<0) AS shortage_sizes,COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inbound),0) AS inbound,COALESCE(SUM(s.pending_inspection),0) AS inspection,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id JOIN product_categories pc ON pc.id=p.category_id WHERE '+where, tuple(params))
     sorts = {'id': 'p.id', 'stock': 'p.stock', 'price': 'p.price', 'updatedAt': 'p.updated_at', 'sku': 'p.sku'}
-    order = sorts.get(args.get('sort'), 'p.updated_at')
+    # Category priority always precedes LIMIT/OFFSET, even for older cached
+    # table sorts. The explicit category mode retains the former intra-category
+    # default (latest update first) and never reverses the configured categories.
+    sort = args.get('sort', 'category')
+    order = sorts.get(sort, 'p.updated_at')
     direction = 'ASC' if args.get('direction') == 'asc' else 'DESC'
-    if args.get('sort') == 'configured' and args.get('ids'):
+    if sort == 'category':
+        direction = 'DESC'
+    if sort == 'configured' and args.get('ids'):
         order = 'array_position(ARRAY[' + ','.join(str(int(v)) for v in args['ids'].split(',') if v) + ']::bigint[], p.id)'
         direction = 'ASC'
     rows = db._fetch_all(db._product_base_query().replace('p.id,', 'p.id,p.updated_at::text AS version,') +
-                        f' WHERE {where} ORDER BY {order} {direction},p.id DESC LIMIT %s OFFSET %s',
+                        f' WHERE {where} ORDER BY {catalog_order.category_sql()}, {order} {direction},p.id DESC LIMIT %s OFFSET %s',
                         tuple(['zh', *params, size, (page-1)*size]))
     items = db._build_product_result(rows, include_contract_pending=pending)
     for item, row in zip(items, rows):
@@ -576,8 +585,28 @@ def product_detail(product_id, pending=False):
 
 def products_for_export(args):
     where, params = product_where(args, include_inactive=True)
-    rows = db._fetch_all(db._product_base_query()+' WHERE '+where+' ORDER BY p.id',tuple(['zh',*params]))
+    rows = db._fetch_all(db._product_base_query()+' WHERE '+where+' ORDER BY '+catalog_order.category_sql()+', p.id',tuple(['zh',*params]))
     return db._build_product_result(rows,include_contract_pending=True)
+
+
+def category_order_version(items):
+    return hashlib.sha256(json.dumps(sorted((int(c['id']), int(c['sortOrder'])) for c in items)).encode()).hexdigest()
+
+
+def reorder_categories(payload):
+    ids = payload.get('categoryIds')
+    if not isinstance(ids, list) or not ids or any(type(value) is not int or value <= 0 for value in ids) or len(ids) != len(set(ids)):
+        raise ValueError('请提交完整且不重复的分类编号列表')
+    db._fetch_one('SELECT pg_advisory_xact_lock(%s)', (catalog_order.CATEGORY_ORDER_LOCK,))
+    current = db.list_categories()
+    if payload.get('orderVersion') != category_order_version(current):
+        raise Conflict('分类顺序已被其他操作更新，请刷新后重试。')
+    if set(ids) != {c['id'] for c in current}:
+        raise ValueError('分类编号列表与当前有效分类不一致')
+    for index, category_id in enumerate(ids):
+        db._fetch_one('UPDATE product_categories SET sort_order=%s WHERE id=%s RETURNING id', (index, category_id))
+    items = db.list_categories()
+    return {'items': items, 'orderVersion': category_order_version(items)}
 
 
 def receive_inventory(product_id, payload):
@@ -755,6 +784,6 @@ def dashboard(args):
             'recentOrders':filtered_counts['items'][:5],'statusCounts':filtered_counts['statusCounts'],
             'snapshot':{**{k:int(v) for k,v in inventory.items()},'statuses':{r['status']:r['count'] for r in global_counts}},
             'filters':{'countries':[r['country'] for r in db._fetch_all("SELECT DISTINCT country FROM orders WHERE country IS NOT NULL ORDER BY country")],
-                       'styles':[r['style'] for r in db._fetch_all(f"SELECT DISTINCT {_style_code_sql('p')} AS style FROM products p WHERE p.is_active=TRUE ORDER BY style")],
-                       'categories':[dict(r) for r in db._fetch_all("SELECT pc.category_key AS key,COALESCE(NULLIF(pct.label,''),pc.category_key) AS label FROM product_categories pc LEFT JOIN product_category_translations pct ON pct.category_id=pc.id AND pct.lang_code='zh' WHERE pc.is_active=TRUE ORDER BY label")]},
+                       'styles':[r['style'] for r in db._fetch_all(f"SELECT style FROM (SELECT DISTINCT ON ({_style_code_sql('p')}) {_style_code_sql('p')} AS style,pc.sort_order,pc.id AS category_id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE ORDER BY {_style_code_sql('p')},pc.sort_order,pc.id) ranked ORDER BY sort_order,category_id,style")],
+                       'categories':[dict(r) for r in db._fetch_all("SELECT pc.category_key AS key,COALESCE(NULLIF(pct.label,''),pc.category_key) AS label FROM product_categories pc LEFT JOIN product_category_translations pct ON pct.category_id=pc.id AND pct.lang_code='zh' WHERE pc.is_active=TRUE ORDER BY pc.sort_order,pc.id")]},
             'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'updatedAt':datetime.now(timezone.utc).isoformat()}

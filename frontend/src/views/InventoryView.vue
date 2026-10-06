@@ -1,7 +1,7 @@
 <template>
   <PageHeader
     title="库存管理"
-    description="从合同未送、待验货、待入库到现货，清晰掌握每个尺码的到货进度。"
+    description="商品按分类顺序展示，从合同未送、待验货、待入库到现货，清晰掌握尺码到货进度。"
     eyebrow="INVENTORY / 商品与库存"
     ><template v-if="canEdit"
       ><ElButton :loading="exporting" @click="exportFile">导出库存</ElButton
@@ -65,7 +65,7 @@
       :expanded-keys="expandedKeys"
       @expand-change="(_, rows) => (expandedKeys = rows.map((row) => row.id))"
       storage-key="inventory-v2"
-      :rows="list.rows"
+      :rows="orderedRows"
       :columns="columns"
       :total="list.total"
       :page="list.query.page"
@@ -77,7 +77,7 @@
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       ><template #toolbar
-        ><ElButton
+        ><span class="small-note">分类顺序优先，表头排序仅调整同类商品</span><ElButton
           :disabled="list.loading || !list.rows.length"
           @click="toggleAllSizes"
           >{{ allSizesExpanded ? "一键收起" : "一键展开" }}</ElButton
@@ -416,6 +416,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { inventorySizeLabel } from "../utils/inventorySizes";
+import { sortProductsByCategory } from "../utils/catalogOrder";
 import { ElMessage } from "element-plus";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
@@ -434,13 +435,14 @@ import {
 } from "../composables/workbench";
 const auth = useAdminAuthStore(),
   canEdit = computed(() => auth.userRole !== "customer"),
-  list = useList("inventory"),
+  list = useList("inventory", { sort: "category" }),
   categories = ref([]),
   filters = reactive({
     keyword: list.query.keyword || "",
     category: list.query.category || "",
     stock: list.query.stock || "",
   });
+const orderedRows = computed(() => sortProductsByCategory(list.rows || [], categories.value));
 const inventoryTable = ref();
 const expandedKeys = ref([]);
 const allSizesExpanded = computed(

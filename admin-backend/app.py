@@ -1387,6 +1387,8 @@ def serialize_product(product: dict[str, Any], lang: str) -> dict[str, Any]:
         "colorName": product.get("colorName", ""),
         "colorHex": product.get("colorHex", ""),
         "categoryKey": product["categoryKey"],
+        "categoryId": product.get("categoryId"),
+        "categorySortOrder": product.get("categorySortOrder"),
         "categoryLabel": category_label,
         "price": product["price"],
         "formattedPrice": f"${product['price']}",
@@ -2206,7 +2208,14 @@ def update_product_route(product_id: int) -> Any:
 @require_roles("admin", "sales")
 def categories() -> Any:
     items = list_categories()
-    return jsonify({"items": items})
+    return jsonify({"items": items, "orderVersion": workbench.category_order_version(items)})
+
+
+@app.put('/api/admin/categories/order')
+@require_auth
+@require_roles('admin', 'sales')
+def reorder_categories_route():
+    return jsonify(workbench.reorder_categories(request.get_json(silent=True) or {}))
 
 
 @app.post("/api/admin/categories")
@@ -2802,7 +2811,7 @@ def product_family_route(product_id):
     item = workbench.product_detail(product_id)
     if not item:
         return jsonify({'message': '商品不存在'}), 404
-    ids = workbench.db._fetch_all("SELECT id FROM products WHERE is_active=TRUE AND (id=%s OR (color_group<>'' AND color_group=%s)) ORDER BY id", (product_id, item['colorGroup']))
+    ids = workbench.db._fetch_all("SELECT p.id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE AND (p.id=%s OR (p.color_group<>'' AND p.color_group=%s)) ORDER BY pc.sort_order,pc.id,p.id", (product_id, item['colorGroup']))
     return jsonify({'items': [workbench.product_detail(row['id']) for row in ids]})
 
 

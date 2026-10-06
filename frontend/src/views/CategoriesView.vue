@@ -1,9 +1,9 @@
 <template>
   <PageHeader
     title="商品分类"
-    description="维护分类名称与展示顺序，保持商品组织清晰。"
+    description="调整分类顺序后，商城、库存及所有商品选择列表按此顺序展示。"
     eyebrow="CATALOG / 商品与库存"
-    ><ElButton type="primary" @click="edit()">＋ 新建分类</ElButton></PageHeader
+    ><ElButton type="primary" :disabled="reordering || loading" @click="edit()">＋ 新建分类</ElButton></PageHeader
   >
   <section class="panel">
     <div class="filters">
@@ -21,7 +21,7 @@
       :total="filtered.length"
       :page="page"
       :page-size="pageSize"
-      :loading="loading"
+      :loading="loading || reordering"
       :error="error"
       @retry="load"
       @sort-change="sort = $event"
@@ -33,8 +33,10 @@
       ><template #zh="{ row }">{{ row.labels.zh }}</template
       ><template #en="{ row }">{{ row.labels.en }}</template
       ><template #actions="{ row }"
-        ><ElButton link type="primary" @click="edit(row)">编辑</ElButton
-        ><ElButton link type="danger" @click="remove(row)"
+        ><ElButton link :disabled="reordering || loading || categoryIndex(row) === 0" @click="moveCategory(row, -1)">上移</ElButton
+        ><ElButton link :disabled="reordering || loading || categoryIndex(row) === items.length - 1" @click="moveCategory(row, 1)">下移</ElButton
+        ><ElButton link type="primary" :disabled="reordering" @click="edit(row)">编辑</ElButton
+        ><ElButton link type="danger" :disabled="reordering" @click="remove(row)"
           >删除</ElButton
         ></template
       ></DataTable
@@ -105,6 +107,8 @@ const route = useRoute(),
   error = ref(""),
   open = ref(false),
   saving = ref(false),
+  reordering = ref(false),
+  orderVersion = ref(''),
   formRef = ref(),
   saveError = ref(""),
   form = reactive({
@@ -120,7 +124,7 @@ const columns = [
   { prop: "en", label: "英文名称" },
   { prop: "productCount", label: "关联商品", numeric: true, sortable: true },
   { prop: "sortOrder", label: "排序", numeric: true, sortable: true },
-  { prop: "actions", label: "操作", width: 110 },
+  { prop: "actions", label: "操作", width: 220 },
 ];
 const filtered = computed(() =>
   items.value
@@ -152,17 +156,42 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    items.value = (await api("categories")).items;
+    const result = await api("categories");
+    items.value = result.items;
+    orderVersion.value = result.orderVersion;
   } catch (e) {
     error.value = e.message;
   } finally {
     loading.value = false;
   }
 }
+function categoryIndex(row) {
+  return items.value.findIndex((item) => item.id === row.id);
+}
+async function moveCategory(row, offset) {
+  if (reordering.value || loading.value) return;
+  const ids = items.value.map((item) => item.id);
+  const index = categoryIndex(row), other = index + offset;
+  if (index < 0 || other < 0 || other >= ids.length) return;
+  [ids[index], ids[other]] = [ids[other], ids[index]];
+  reordering.value = true;
+  try {
+    const result = await save('categories/order', { categoryIds: ids, orderVersion: orderVersion.value });
+    items.value = result.items;
+    orderVersion.value = result.orderVersion;
+    sort.value = { prop: 'sortOrder', order: 'ascending' };
+    ElMessage.success('分类顺序已更新');
+  } catch (error) {
+    notifyError(error);
+    if (error.status === 409) await load();
+  } finally {
+    reordering.value = false;
+  }
+}
 function edit(row) {
   Object.assign(
     form,
-    { id: null, key: "", sortOrder: 0, labels: { zh: "", en: "" } },
+    { id: null, key: "", sortOrder: Math.max(-1, ...items.value.map((item) => item.sortOrder)) + 1, labels: { zh: "", en: "" } },
     row ? JSON.parse(JSON.stringify(row)) : {},
   );
   saveError.value = "";

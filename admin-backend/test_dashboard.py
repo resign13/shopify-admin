@@ -88,7 +88,7 @@ class DashboardTest(unittest.TestCase):
         order_id = self.order(coat, 4)
         self.line(order_id, self.products[0], 2)
         all_data = self.data('workbench', country='all')
-        self.assertEqual(all_data['filters']['styles'], ['COAT', 'GT-2026', 'UNSOLD'])
+        self.assertEqual(all_data['filters']['styles'], ['GT-2026', 'COAT', 'UNSOLD'])
         self.assertEqual(all_data['metrics']['units'], 12)
         for style, units, amount in [('GT-2026', 8, 199.4), ('GT-2026-1', 6, 139.6), ('COAT', 4, 40)]:
             with self.subTest(style=style):
@@ -193,7 +193,7 @@ class DashboardTest(unittest.TestCase):
         self.order(explicit, 2)
         self.order(legacy, 3)
         styles = self.data('workbench')['filters']['styles']
-        self.assertEqual(styles, ['EXPLICIT', 'GT-2026', 'LEGACY'])
+        self.assertEqual(styles, ['GT-2026', 'EXPLICIT', 'LEGACY'])
         self.assertEqual(self.data('workbench', style='EXPLICIT')['metrics']['units'], 2)
         self.assertEqual(self.data(style='LEGACY')['items'][0]['units'], 3)
         self.assertEqual(self.data('style-detail', styleCode='EXPLICIT')['items'][0]['productId'], explicit['id'])

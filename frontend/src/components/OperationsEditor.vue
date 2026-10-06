@@ -38,7 +38,7 @@
           <section class="panel">
             <div class="panel-title">
               <h2>展示分类</h2>
-              <small>最多 5 个，按顺序展示</small>
+              <small>最多 5 个，顺序在“商品分类”中调整</small>
             </div>
             <div class="filters">
               <ElSelect v-model="categoryDraft" placeholder="选择分类"
@@ -55,6 +55,7 @@
                 "
                 @click="
                   form.displayCategoryKeys.push(categoryDraft);
+                  sortConfigured();
                   categoryDraft = '';
                 "
                 >添加分类</ElButton
@@ -68,16 +69,6 @@
               <span>{{ index + 1 }} · {{ categoryName(key) }}</span>
               <div>
                 <ElButton
-                  link
-                  :disabled="index === 0"
-                  @click="move(form.displayCategoryKeys, index, -1)"
-                  >上移</ElButton
-                ><ElButton
-                  link
-                  :disabled="index === form.displayCategoryKeys.length - 1"
-                  @click="move(form.displayCategoryKeys, index, 1)"
-                  >下移</ElButton
-                ><ElButton
                   link
                   type="danger"
                   @click="form.displayCategoryKeys.splice(index, 1)"
@@ -108,6 +99,7 @@
                 : "列表顺序即活动展示顺序；跨页勾选只作用于明确选中的商品。"
             }}
             本次新增 {{ added }}，移除 {{ removed }}。
+            商品按分类顺序展示，上下移只调整同一分类内的顺序。
           </p>
           <form class="filters" @submit.prevent="apply">
             <ElInput
@@ -169,12 +161,12 @@
             ><template #actions="{ row }"
               ><ElButton
                 link
-                :disabled="ids.indexOf(row.id) === 0"
+                :disabled="!canMoveProduct(row.id, -1)"
                 @click="move(ids, ids.indexOf(row.id), -1)"
                 >上移</ElButton
               ><ElButton
                 link
-                :disabled="ids.indexOf(row.id) === ids.length - 1"
+                :disabled="!canMoveProduct(row.id, 1)"
                 @click="move(ids, ids.indexOf(row.id), 1)"
                 >下移</ElButton
               ><ElButton link type="danger" @click="removeIds([row.id])"
@@ -274,6 +266,7 @@ import {
   shortName,
 } from "../composables/workbench";
 import { imageUrl } from "../utils/imageUrl";
+import { compareProductCategories } from "../utils/catalogOrder";
 const props = defineProps({ mode: { type: String, default: "home" } }),
   isHome = computed(() => props.mode === "home"),
   title = computed(() =>
@@ -301,6 +294,7 @@ const modules = [
   categoryDraft = ref(""),
   busy = reactive({}),
   names = reactive({}),
+  productInfo = reactive({}),
   pickerOpen = ref(false),
   saving = ref(false),
   error = ref(""),
@@ -335,9 +329,19 @@ const columns = [
 function categoryName(key) {
   return categories.value.find((c) => c.key === key)?.labels?.zh || key;
 }
-function populate(value) {
+async function populate(value) {
+  ready.value = false;
+  const productIds = [...new Set(['sectionProductIds', 'collectionProductIds'].flatMap((field) => Object.values(value[field] || {}).flat()))];
+  const chunks = [];
+  for (let start = 0; start < productIds.length; start += 100) chunks.push(productIds.slice(start, start + 100));
+  const pages = await Promise.all(chunks.map((ids) => api('products?' + new URLSearchParams({ ids: ids.join(','), pageSize: 100 }))));
+  for (const page of pages) for (const product of page.items) {
+    productInfo[product.id] = product;
+    names[product.id] = productName(product);
+  }
   Object.assign(form, JSON.parse(JSON.stringify(value)));
-  baseline.value = JSON.parse(JSON.stringify(value));
+  sortConfigured();
+  baseline.value = JSON.parse(JSON.stringify(form));
   ready.value = true;
   error.value = "";
   conflict.value = false;
@@ -354,12 +358,19 @@ async function load() {
       api("catalog-options"),
     ]);
     categories.value = cats.items;
-    populate(config.config);
+    await populate(config.config);
   } catch (e) {
     loadError.value = e.message;
   } finally {
     loading.value = false;
   }
+}
+function sortConfigured() {
+  for (const field of ['sectionProductIds', 'collectionProductIds']) {
+    for (const values of Object.values(form[field] || {})) values.sort((a, b) => compareProductCategories(productInfo[a], productInfo[b]));
+  }
+  const categoryRanks = new Map(categories.value.map((category, index) => [category.key, index]));
+  form.displayCategoryKeys?.sort((a, b) => (categoryRanks.get(a) ?? Infinity) - (categoryRanks.get(b) ?? Infinity));
 }
 let serial = 0;
 async function loadRows() {
@@ -414,6 +425,8 @@ function add(row) {
     return;
   }
   ids.value.push(row.id);
+  productInfo[row.id] = row;
+  sortConfigured();
   names[row.id] = productName(row);
   ElMessage.success("已加入待保存列表");
 }
@@ -427,12 +440,19 @@ async function addMany(rows) {
     return;
   for (const row of fresh) {
     ids.value.push(row.id);
+    productInfo[row.id] = row;
     names[row.id] = productName(row);
   }
+  sortConfigured();
+}
+function canMoveProduct(id, offset) {
+  const index = ids.value.indexOf(id), other = index + offset;
+  return index >= 0 && other >= 0 && other < ids.value.length
+    && compareProductCategories(productInfo[id], productInfo[ids.value[other]]) === 0;
 }
 function move(values, index, offset) {
   const other = index + offset;
-  if (other < 0 || other >= values.length) return;
+  if (other < 0 || other >= values.length || !canMoveProduct(values[index], offset)) return;
   [values[index], values[other]] = [values[other], values[index]];
 }
 async function removeIds(values) {
@@ -449,7 +469,7 @@ function removeSelected() {
   return removeIds(selected.value.map((p) => p.id));
 }
 async function discard() {
-  if (await confirm("放弃本次尚未保存的配置？")) populate(baseline.value);
+  if (await confirm("放弃本次尚未保存的配置？")) await populate(baseline.value);
 }
 async function submit() {
   if (saving.value) return;
@@ -469,7 +489,7 @@ async function submit() {
             version: form.version,
           },
     );
-    populate(result.config);
+    await populate(result.config);
     ElMessage.success("配置已保存");
   } catch (e) {
     error.value = e.message;
@@ -488,7 +508,7 @@ async function readLatest() {
   }
 }
 async function adoptLatest() {
-  if (await confirm("放弃当前草稿，使用线上最新配置？")) populate(latest.value);
+  if (await confirm("放弃当前草稿，使用线上最新配置？")) await populate(latest.value);
 }
 onMounted(load);
 </script>

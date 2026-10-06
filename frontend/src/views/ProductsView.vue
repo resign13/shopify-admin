@@ -1,7 +1,7 @@
 <template>
   <PageHeader
     title="商品管理"
-    description="统一维护商品资料、颜色 SKU 与展示信息。"
+    description="商品按分类顺序分组展示，同分类内保留原有排序；顺序在商品分类中调整。"
     eyebrow="CATALOG / 商品与库存"
     ><ElButton type="primary" @click="router.push('/products/new')"
       >＋ 新建商品</ElButton
@@ -39,7 +39,7 @@
       ref="table"
       :key="list.filterKey"
       storage-key="products"
-      :rows="list.rows"
+      :rows="orderedRows"
       :columns="columns"
       :total="list.total"
       :page="list.query.page"
@@ -53,6 +53,7 @@
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       @selection-change="selected = $event"
     >
+      <template #toolbar><span class="small-note">分类顺序优先，表头排序仅调整同类商品</span></template>
       <template #name="{ row }"
         ><div class="product-cell">
           <ProductImage :src="row.image" :alt="productName(row)" />
@@ -177,13 +178,14 @@
   >
 </template>
 <script setup>
-import { onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
 import ProductImage from "../components/ProductImage.vue";
 import { imageUrl } from "../utils/imageUrl";
+import { sortProductsByCategory } from "../utils/catalogOrder";
 import {
   api,
   save,
@@ -197,7 +199,7 @@ import {
   dateTime,
 } from "../composables/workbench";
 const router = useRouter(),
-  list = useList("products"),
+  list = useList("products", { sort: "category" }),
   categories = ref([]),
   selected = ref([]),
   table = ref(),
@@ -206,6 +208,7 @@ const router = useRouter(),
   batchOpen = ref(false),
   saving = ref(false),
   batch = reactive({ categoryKey: "", featured: "keep" });
+const orderedRows = computed(() => sortProductsByCategory(list.rows || [], categories.value));
 const filters = reactive({
   keyword: list.query.keyword || "",
   category: list.query.category || "",

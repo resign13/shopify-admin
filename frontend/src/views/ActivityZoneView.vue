@@ -140,6 +140,7 @@ import { onMounted, reactive, ref, watch } from 'vue'
 
 import AdminLayout from '../components/AdminLayout.vue'
 import { useAdminStore } from '../stores/admin'
+import { compareProductCategories } from '../utils/catalogOrder'
 
 const admin = useAdminStore()
 const saving = ref(false)
@@ -262,6 +263,7 @@ function selectedProducts(sectionKey) {
   return (form.collectionProductIds[sectionKey] || [])
     .map((id) => admin.products.find((item) => item.id === id))
     .filter(Boolean)
+    .sort(compareProductCategories)
 }
 
 function filteredSelectedProducts(sectionKey) {
@@ -282,6 +284,7 @@ function addProduct(sectionKey) {
   const productId = Number(collectionProductDrafts[sectionKey] || 0)
   if (!productId) return
   form.collectionProductIds[sectionKey] = [...form.collectionProductIds[sectionKey], productId]
+  form.collectionProductIds[sectionKey].sort((a, b) => compareProductCategories(admin.products.find((p) => p.id === a), admin.products.find((p) => p.id === b)))
   collectionProductDrafts[sectionKey] = 0
 }
 
@@ -289,6 +292,7 @@ function moveProduct(sectionKey, index, direction) {
   const next = [...form.collectionProductIds[sectionKey]]
   const targetIndex = index + direction
   if (targetIndex < 0 || targetIndex >= next.length) return
+  if (compareProductCategories(admin.products.find((p) => p.id === next[index]), admin.products.find((p) => p.id === next[targetIndex]))) return
   const [item] = next.splice(index, 1)
   next.splice(targetIndex, 0, item)
   form.collectionProductIds[sectionKey] = next

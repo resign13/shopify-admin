@@ -64,6 +64,7 @@ systemctl restart "$service"
 for attempt in $(seq 1 20); do
   if curl -fsS "http://127.0.0.1:5302/api/health" > /dev/null; then
     systemctl is-active --quiet "$service"
+    .venv/bin/python "$root/scripts/verify-category-order.py" "$backend"
     stock_snapshot > "$backup/inventory-after.json"
     echo "Inventory before release: $(cat "$backup/inventory-before.json")"
     echo "Inventory after release: $(cat "$backup/inventory-after.json")"

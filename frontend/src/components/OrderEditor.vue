@@ -214,6 +214,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { ElDrawer, ElMessage } from "element-plus";
 import ImageUploader from "./ImageUploader.vue";
 import ProductPicker from "./ProductPicker.vue";
+import { compareProductCategories } from "../utils/catalogOrder";
 import {
   api,
   save,
@@ -308,7 +309,7 @@ const matrixRows = computed(() => {
       });
     }
   }
-  return [...grouped.values()];
+  return [...grouped.values()].sort((left, right) => compareProductCategories(products[left.productId], products[right.productId]));
 });
 const matrixSizes = computed(() => {
   const seen = new Set();
@@ -382,7 +383,7 @@ const inventoryImpact = computed(() => {
   }
   for (const row of originalItems.value) rows.get(`${row.productId}:${row.sizeCode}`).before += Number(row.quantity || 0);
   for (const row of form.items) rows.get(`${row.productId}:${row.sizeCode}`).next += Number(row.quantity || 0);
-  return [...rows.values()].map(row => {
+  return [...rows.values()].sort((a, b) => compareProductCategories(products[a.productId], products[b.productId])).map(row => {
     const stock = products[row.productId]?.sizePrices?.find(s => s.sizeCode === row.sizeCode)?.stock;
     const change = (status.value === 'cancelled' ? 0 : row.before) - (form.status === 'cancelled' ? 0 : row.next);
     return {...row, current: stock ?? '待刷新', change: change > 0 ? `+${change}` : change, after: stock == null ? '待刷新' : stock + change};

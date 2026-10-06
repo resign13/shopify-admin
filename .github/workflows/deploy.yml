@@ -28,6 +28,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r admin-backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Catalog ordering UI tests
+        working-directory: frontend
+        run: node --test src/utils/catalogOrder.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:
@@ -36,7 +42,7 @@ jobs:
           PGDATABASE: gingtto_workbench_test
           PGUSER: postgres
           PGPASSWORD: fixture-only-password
-        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts
+        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order
   deploy:
     needs: verify
     runs-on: ubuntu-latest
