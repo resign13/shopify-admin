@@ -91,12 +91,26 @@ let settings = {};
 try {
   settings = JSON.parse(localStorage.getItem(key) || "{}");
 } catch {}
-const visible = ref(settings.visible || props.columns.map((c) => c.prop)),
+const savedVisible = Array.isArray(settings.visible)
+  ? settings.visible
+  : props.columns.map((c) => c.prop);
+const knownColumns = Array.isArray(settings.knownColumns)
+  ? settings.knownColumns
+  : savedVisible;
+const visible = ref([
+  ...new Set([
+    ...savedVisible,
+    ...props.columns
+      .filter((c) => c.defaultVisible && !knownColumns.includes(c.prop))
+      .map((c) => c.prop),
+  ]),
+]),
   table = ref();
 const container = ref(),
   available = ref(1200);
 let observer;
 onMounted(() => {
+  persistSettings();
   observer = new ResizeObserver(
     (entries) => (available.value = entries[0].contentRect.width),
   );
@@ -115,15 +129,15 @@ function columnWidth(column) {
 const shown = computed(() =>
   props.columns.filter((c) => visible.value.includes(c.prop)),
 );
-watch(
-  visible,
-  () => {
-    try {
-      localStorage.setItem(key, JSON.stringify({ visible: visible.value }));
-    } catch {}
-  },
-  { deep: true },
-);
+function persistSettings() {
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      visible: visible.value,
+      knownColumns: [...new Set([...knownColumns, ...props.columns.map((c) => c.prop)])],
+    }));
+  } catch {}
+}
+watch(visible, persistSettings, { deep: true });
 defineExpose({
   clearSelection: () => table.value?.clearSelection(),
   toggleExpansion: (row) => table.value?.toggleRowExpansion(row),

@@ -246,6 +246,7 @@ const filters = reactive({
 const columns = computed(() => [
   { prop: "orderNo", label: "订单号", width: 165 },
   { prop: "userName", label: "业务员", width: 150 },
+  { prop: "contactName", label: "客户", width: 125, defaultVisible: true },
   { prop: "country", label: "国家", width: 90 },
   { prop: "itemCount", label: "件数", numeric: true, width: 60 },
   ...(!auth.isWarehouse
