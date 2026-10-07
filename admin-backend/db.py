@@ -296,6 +296,8 @@ def _apply_schema_migrations(cur: Any) -> None:
                  FROM (SELECT DISTINCT ON (order_id) order_id, actor_id
                        FROM admin_order_requests ORDER BY order_id, created_at) r
                  WHERE o.id = r.order_id AND o.created_by_admin_id IS NULL""")
+    import sales_ownership
+    sales_ownership.migrate(cur)
 
 
 
@@ -1891,6 +1893,9 @@ def _build_user_dict(row: dict[str, Any], *, include_password_hash: bool, compan
         item["permissions"] = effective({"role": item["role"], "permissions": row.get("permissions")})
     if include_password_hash:
         item["passwordHash"] = row["password_hash"]
+    if "linked_admin_user_id" in row:
+        item["linkedAdminId"] = row["linked_admin_user_id"]
+        item["linkedAdminName"] = row.get("linked_admin_name") or ""
     if company_name:
         item["companyName"] = row["company_name"] or ""
     return item
@@ -1985,14 +1990,14 @@ def delete_admin_user(user_id: int) -> bool:
 
 def list_store_users(*, include_password_hash: bool = True) -> list[dict[str, Any]]:
     rows = _fetch_all(
-        "SELECT id, name, company_name, email, password_hash, status, created_at FROM store_users ORDER BY id"
+        "SELECT id, name, company_name, email, password_hash, status, created_at, linked_admin_user_id, (SELECT name FROM admin_users WHERE id=store_users.linked_admin_user_id) AS linked_admin_name FROM store_users ORDER BY id"
     )
     return [_build_user_dict(row, include_password_hash=include_password_hash, company_name=True) for row in rows]
 
 
 def get_store_user_by_id(user_id: int, *, include_password_hash: bool = True) -> dict[str, Any] | None:
     row = _fetch_one(
-        "SELECT id, name, company_name, email, password_hash, status, created_at FROM store_users WHERE id = %s",
+        "SELECT id, name, company_name, email, password_hash, status, created_at, linked_admin_user_id, (SELECT name FROM admin_users WHERE id=store_users.linked_admin_user_id) AS linked_admin_name FROM store_users WHERE id = %s",
         (user_id,),
     )
     return _build_user_dict(row, include_password_hash=include_password_hash, company_name=True) if row else None
@@ -2000,7 +2005,7 @@ def get_store_user_by_id(user_id: int, *, include_password_hash: bool = True) ->
 
 def get_store_user_by_email(email: str, *, include_password_hash: bool = True) -> dict[str, Any] | None:
     row = _fetch_one(
-        "SELECT id, name, company_name, email, password_hash, status, created_at FROM store_users WHERE LOWER(email) = LOWER(%s)",
+        "SELECT id, name, company_name, email, password_hash, status, created_at, linked_admin_user_id, (SELECT name FROM admin_users WHERE id=store_users.linked_admin_user_id) AS linked_admin_name FROM store_users WHERE LOWER(email) = LOWER(%s)",
         (email,),
     )
     return _build_user_dict(row, include_password_hash=include_password_hash, company_name=True) if row else None
@@ -2118,6 +2123,10 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           o.updated_at,
           o.status,
           o.store_user_id,
+          o.owner_admin_id,
+          o.created_by_admin_id,
+          o.order_source,
+          (SELECT name FROM admin_users WHERE id=o.owner_admin_id) AS owner_admin_name,
           su.name AS user_name,
           su.company_name,
           su.email AS user_email,
@@ -2184,6 +2193,10 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                 "createdAt": _iso(row["created_at"]),
                 "updatedAt": _iso(row["updated_at"]),
                 "status": row["status"],
+                "ownerAdminId": row["owner_admin_id"],
+                "ownerAdminName": row["owner_admin_name"] or "未分配",
+                "createdByAdminId": row["created_by_admin_id"],
+                "orderSource": row["order_source"],
                 "userId": int(row["store_user_id"]),
                 "userName": row["user_name"],
                 "companyName": row["company_name"] or "",
@@ -2249,9 +2262,10 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, company_name, email, status
+                SELECT id, name, company_name, email, status, linked_admin_user_id
                 FROM store_users
                 WHERE id = %s
+                FOR SHARE
                 """,
                 (payload["userId"],),
             )
@@ -2307,17 +2321,18 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
             cur.execute(
                 """
                 INSERT INTO orders (
-                  order_no, store_user_id, status, contact_name, phone, country,
+                  order_no, store_user_id, owner_admin_id, status, contact_name, phone, country,
                   shipping_address, note, label_pdf_url, label_image_urls, total_amount, created_at, updated_at
                 )
                 VALUES (
-                  %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
+                  %s, %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
                 )
                 RETURNING id
                 """,
                 (
                     f"TEMP-{secrets.token_hex(6)}",
                     payload["userId"],
+                    user["linked_admin_user_id"],
                     payload["contactName"],
                     payload["phone"],
                     payload.get("country", ""),

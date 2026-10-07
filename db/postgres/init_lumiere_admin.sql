@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS store_users (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   name VARCHAR(120) NOT NULL,
   company_name VARCHAR(255),
+  linked_admin_user_id BIGINT REFERENCES admin_users(id),
   email VARCHAR(255) NOT NULL,
   password_hash TEXT NOT NULL,
   status VARCHAR(20) NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
@@ -170,7 +171,9 @@ CREATE TABLE IF NOT EXISTS orders (
   payment_link TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  created_by_admin_id BIGINT REFERENCES admin_users(id)
+  created_by_admin_id BIGINT REFERENCES admin_users(id),
+  owner_admin_id BIGINT REFERENCES admin_users(id),
+  order_source VARCHAR(20) NOT NULL DEFAULT 'store' CHECK(order_source IN ('store','backend'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_store_user_id

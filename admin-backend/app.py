@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import module_permissions
+import sales_ownership
 
 import os
 import re
@@ -1431,10 +1432,12 @@ def sanitize_admin_user(user: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def sanitize_store_user(user: dict[str, Any]) -> dict[str, Any]:
+def sanitize_store_user(user: dict[str, Any], *, internal: bool = False) -> dict[str, Any]:
     return {
         "id": user["id"],
         "name": user["name"],
+        **({"linkedAdminId": user.get("linkedAdminId"),
+            "linkedAdminName": user.get("linkedAdminName", "")} if internal else {}),
         "companyName": user.get("companyName", ""),
         "email": user["email"],
         "status": user["status"],
@@ -1933,10 +1936,12 @@ def service_get_orders() -> Any:
             target_user_id = int(user_id)
         except ValueError:
             return jsonify({"message": "Invalid userId"}), 400
-        return jsonify({"items": list_orders(user_id=target_user_id)})
+        return jsonify({"items": [sales_ownership.public_order(order) for order in list_orders(user_id=target_user_id)]})
     if 'page' in request.args:
-        return jsonify(workbench.orders_page(request.args))
-    return jsonify({"items": list_orders()})
+        result = workbench.orders_page(request.args)
+        result['items'] = [sales_ownership.public_order(order) for order in result['items']]
+        return jsonify(result)
+    return jsonify({"items": [sales_ownership.public_order(order) for order in list_orders()]})
 
 
 @app.post("/api/internal/orders")
@@ -1975,25 +1980,27 @@ def service_create_order() -> Any:
         return jsonify({"message": str(error)}), 404
     except RuntimeError as error:
         return jsonify({"message": str(error)}), 400
-    return jsonify({"message": "Order submitted to admin system", "order": order}), 201
+    return jsonify({"message": "Order submitted to admin system", "order": sales_ownership.public_order(order)}), 201
 
 
 @app.get("/api/admin/dashboard")
 @require_auth
 @require_roles("admin", "sales")
 def dashboard() -> Any:
+    owner_id = sales_ownership.scope(request.args, g.current_user)
+    args = {**request.args, '_ownerId': owner_id}
     view = request.args.get('view')
     if view == 'workbench':
-        return jsonify(workbench.dashboard(request.args))
+        return jsonify(sales_ownership.personalize(workbench.dashboard(args), owner_id))
     if view == 'style-performance':
-        return jsonify(workbench.style_performance(request.args))
+        return jsonify(sales_ownership.personalize(workbench.style_performance(args), owner_id))
     if view == 'style-detail':
         try:
-            return jsonify(workbench.style_detail(request.args))
+            return jsonify(sales_ownership.personalize(workbench.style_detail(args), owner_id))
         except LookupError as error:
             return jsonify({'message': str(error)}), 404
     if view == 'style-size-detail':
-        return jsonify(workbench.style_size_detail(request.args))
+        return jsonify(sales_ownership.personalize(workbench.style_size_detail(args), owner_id))
     hero_count = len(
         [item for item in get_homepage_config().get("heroBanners", {}).values() if str(item or "").strip()]
     )
@@ -2001,7 +2008,7 @@ def dashboard() -> Any:
     country = request.args.get('country', 'all')
     date_from = request.args.get('dateFrom', '')
     date_to = request.args.get('dateTo', '')
-    all_orders = list_orders()
+    all_orders = list_orders(order_ids=workbench.order_ids({}, owner_id=owner_id))
     filtered_orders = filter_dashboard_orders(
         all_orders,
         style=style,
@@ -2014,9 +2021,9 @@ def dashboard() -> Any:
             "stats": [
                 {"label": "Products", "value": count_products()},
                 {"label": "Hero banners", "value": hero_count},
-                {"label": "Store accounts", "value": count_store_users()},
-                {"label": "Admin accounts", "value": count_admin_users()},
-                {"label": "Orders", "value": count_orders()},
+                {"label": "Store accounts", "value": count_store_users() if owner_id is None else len({order["userId"] for order in all_orders})},
+                {"label": "Admin accounts", "value": count_admin_users() if owner_id is None else 1},
+                {"label": "Orders", "value": len(all_orders)},
             ],
             "filters": build_dashboard_order_filters(all_orders),
             "appliedFilters": {
@@ -2362,7 +2369,7 @@ def update_home_config_route() -> Any:
 def store_users() -> Any:
     if 'page' in request.args:
         return jsonify(workbench.users_page(request.args))
-    return jsonify({"items": [sanitize_store_user(item) for item in list_store_users(include_password_hash=False)]})
+    return jsonify({"items": [sanitize_store_user(item, internal=True) for item in list_store_users(include_password_hash=False)]})
 
 
 @app.post("/api/admin/store-users")
@@ -2386,7 +2393,10 @@ def create_store_user_route() -> Any:
             "status": str(payload.get("status", "active")).strip() or "active",
         }
     )
-    return jsonify({"message": "Store account created", "user": sanitize_store_user(user)}), 201
+    if 'linkedAdminId' in payload:
+        sales_ownership.link_account(user['id'], payload['linkedAdminId'])
+        user = get_store_user_by_id(user['id'], include_password_hash=False)
+    return jsonify({"message": "Store account created", "user": sanitize_store_user(user, internal=True)}), 201
 
 
 @app.put("/api/admin/store-users/<int:user_id>")
@@ -2413,7 +2423,10 @@ def update_store_user_route(user_id: int) -> Any:
             else None,
         },
     )
-    return jsonify({"message": "Store account updated", "user": sanitize_store_user(updated)})  # type: ignore[arg-type]
+    if 'linkedAdminId' in payload:
+        sales_ownership.link_account(user_id, payload['linkedAdminId'])
+        updated = get_store_user_by_id(user_id, include_password_hash=False)
+    return jsonify({"message": "Store account updated", "user": sanitize_store_user(updated, internal=True)})  # type: ignore[arg-type]
 
 
 @app.delete("/api/admin/store-users/<int:user_id>")
@@ -2502,6 +2515,8 @@ def update_admin_user_route(user_id: int) -> Any:
         if not any(u["id"] != user_id and module_permissions.can_administer(u) for u in list_admin_users(include_password_hash=False)):
             return jsonify({"message": "至少保留一名启用且拥有后台账号权限的管理员"}), 400
 
+    if next_role != user.get('role') and workbench.db._fetch_one('SELECT 1 FROM orders WHERE owner_admin_id=%s UNION ALL SELECT 1 FROM store_users WHERE linked_admin_user_id=%s LIMIT 1',(user_id,user_id)):
+        raise ValueError('该账号存在订单归属或商城关联，请保留业务员角色；离职可停用账号')
     updated = update_admin_user(
         user_id,
         {
@@ -2534,6 +2549,8 @@ def delete_admin_user_route(user_id: int) -> Any:
     if module_permissions.can_administer(user) and not any(u["id"] != user_id and module_permissions.can_administer(u) for u in list_admin_users(include_password_hash=False)):
         return jsonify({"message": "至少保留一名启用且拥有后台账号权限的管理员"}), 400
     delete_admin_sessions_for_user(user_id)
+    if workbench.db._fetch_one('SELECT 1 FROM orders WHERE owner_admin_id=%s UNION ALL SELECT 1 FROM store_users WHERE linked_admin_user_id=%s LIMIT 1',(user_id,user_id)):
+        raise ValueError('该账号存在订单归属或商城关联，请停用账号以保留历史业绩')
     if not delete_admin_user(user_id):
         return jsonify({"message": "Admin account not found"}), 404
     return jsonify({"message": "Admin account deleted"})
@@ -2543,7 +2560,7 @@ def delete_admin_user_route(user_id: int) -> Any:
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def orders() -> Any:
-    owner_id = g.current_user['id'] if g.current_user.get('role') == 'sales' else None
+    owner_id = sales_ownership.scope(request.args, g.current_user)
     if 'page' in request.args:
         result = workbench.orders_page(request.args, owner_id=owner_id)
     else:
@@ -2569,10 +2586,10 @@ def export_orders() -> Any:
         if str(item).strip().isdigit()
     }
     if request.args.get('view') == 'workbench':
-        owner_id = g.current_user['id'] if g.current_user.get('role') == 'sales' else None
+        owner_id = sales_ownership.scope(request.args, g.current_user)
         orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id))
     else:
-        orders = filter_orders(list_orders(), time_range=time_range, status=status,
+        orders = filter_orders(list_orders(order_ids=workbench.order_ids({}, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range, status=status,
                                category=category, keyword=keyword)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
@@ -2604,9 +2621,9 @@ def export_orders_by_sheet() -> Any:
         if str(item).strip().isdigit()
     }
     if request.args.get('view') == 'workbench':
-        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args))
+        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)))
     else:
-        orders = filter_orders(list_orders(), time_range=time_range, status=status,
+        orders = filter_orders(list_orders(order_ids=workbench.order_ids({}, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range, status=status,
                                category=category, keyword=keyword)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
@@ -3021,6 +3038,19 @@ def sanitize_customer_inventory(response):
 
 ensure_database_ready()
 
+
+
+
+@app.get('/api/admin/salespeople')
+@require_auth
+@require_roles('admin','sales')
+def salespeople():
+    where = "role='sales'"
+    params = ()
+    if g.current_user.get('role') == 'sales':
+        where += ' AND id=%s'; params = (g.current_user['id'],)
+    items = workbench.db._fetch_all('SELECT id,name,email,status FROM admin_users WHERE '+where+' ORDER BY name,id', params)
+    return jsonify({'items':items})
 
 if __name__ == "__main__":
     app.run(debug=False, use_reloader=False, host="0.0.0.0", port=5002)

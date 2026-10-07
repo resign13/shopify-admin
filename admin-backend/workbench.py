@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 import db
 import inventory_policy
 import catalog_order
+import sales_ownership
 
 SHANGHAI = timezone(timedelta(hours=8))
 
@@ -99,6 +100,8 @@ def _style_sales_join(args, start: date, end: date, *, days: int | None = None):
     if args.get('country') and args.get('country') != 'all':
         clauses.append('o.country=%s')
         params.append(args['country'])
+    owner_clause, owner_params = sales_ownership.clause(args.get('_ownerId'))
+    clauses.append(owner_clause); params.extend(owner_params)
     return ' AND '.join(clauses), params
 
 
@@ -125,6 +128,8 @@ def _style_row(row):
 
 
 def style_performance(args):
+    if args.get('_ownerId') is not None:
+        args = {**dict(args), 'risk':'', 'sort':args.get('sort') if args.get('sort') not in {'stock','estimatedDays'} else 'units'}
     start, end, span = _dashboard_window(args)
     velocity_days = int(args.get('velocityWindow', 7) or 7)
     if velocity_days not in {7, 30}:
@@ -487,8 +492,19 @@ def atomic_admin_call(func, args, kwargs):
             actor = {key: g.current_user.get(key) for key in ('id', 'name', 'role')}
             for key, value in {'actor': json.dumps(actor), 'module': request.path.split('/')[3], 'batch': str(uuid.uuid4())}.items():
                 conn.execute('SELECT set_config(%s,%s,true)', (f'gingtto.{key}', value))
-            if request.path.split('/')[3] == 'admin-users':
+            module = request.path.split('/')[3]
+            # Ownership edits take the identity lock before any order/version
+            # locks. Account linking takes the same lock before customer/order
+            # rows, so linking an unassigned order cannot deadlock its editor.
+            if module == 'admin-users' or (
+                module == 'store-users' and 'linkedAdminId' in (request.get_json(silent=True) or {})
+            ) or (module == 'orders' and (
+                request.path == '/api/admin/orders' and request.method == 'POST'
+                or request.path.endswith('/details')
+            )):
                 conn.execute('SELECT pg_advisory_xact_lock(7192027)')
+            if kwargs.get('order_id') and request.path.startswith('/api/admin/orders/'):
+                sales_ownership.assert_access(kwargs['order_id'], lock=True)
             if not request.path.endswith('/receive'):
                 check_versions(request.get_json(silent=True) or {})
             response = make_response(func(*args, **kwargs))
@@ -513,6 +529,8 @@ def snapshot_admin_call(func, args, kwargs):
         conn.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
         token = db.REQUEST_CONNECTION.set(conn)
         try:
+            if kwargs.get('order_id') and request.path.startswith('/api/admin/orders/'):
+                sales_ownership.assert_access(kwargs['order_id'])
             return func(*args, **kwargs)
         finally:
             db.REQUEST_CONNECTION.reset(token)
@@ -651,8 +669,9 @@ def receive_inventory(product_id, payload):
 
 def order_where(args, status=True, owner_id=None):
     where, params = ['TRUE'], []
-    if owner_id is not None:
-        where.append('o.created_by_admin_id=%s'); params.append(owner_id)
+    if owner_id is None: owner_id = args.get('_ownerId')
+    owner_clause, owner_params = sales_ownership.clause(owner_id)
+    where.append(owner_clause); params.extend(owner_params)
     if status and args.get('status') not in {None, '', 'all'}:
         where.append('o.status=%s'); params.append(args['status'])
     if args.get('keyword'):
@@ -720,7 +739,7 @@ def users_page(args, admin=False):
     total = db._fetch_one(f'SELECT COUNT(*) AS total FROM {table} WHERE {clause}', tuple(params))['total']
     sort = {'name':'name', 'createdAt':'created_at', 'id':'id'}.get(args.get('sort'), 'id')
     direction = 'ASC' if args.get('direction') == 'asc' else 'DESC'
-    fields = 'id,name,email,status,created_at,' + ('role,permissions' if admin else 'company_name')
+    fields = 'id,name,email,status,created_at,' + ('role,permissions' if admin else 'company_name,linked_admin_user_id,(SELECT name FROM admin_users WHERE id=store_users.linked_admin_user_id) AS linked_admin_name')
     rows = db._fetch_all(f'SELECT {fields} FROM {table} WHERE {clause} ORDER BY {sort} {direction},id LIMIT %s OFFSET %s', tuple([*params,size,(page-1)*size]))
     items = [db._build_user_dict(row, include_password_hash=False, company_name=not admin) for row in rows]
     return {'items':items,'total':total,'page':page,'pageSize':size}
@@ -779,8 +798,9 @@ def dashboard(args):
     top=db._fetch_all("SELECT COALESCE(NULLIF(p.product_code,''),i.sku) AS sku,MAX(i.product_name) AS name,SUM(i.quantity) AS units,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY units DESC,sku LIMIT 10',tuple(params))
     top_amount=db._fetch_all("SELECT COALESCE(NULLIF(p.product_code,''),i.sku) AS sku,MAX(i.product_name) AS name,SUM(i.quantity) AS units,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY amount DESC,sku LIMIT 10',tuple(params))
     countries=db._fetch_all("SELECT COALESCE(NULLIF(o.country,''),'未填写') AS country,COUNT(DISTINCT o.id) AS orders,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY orders DESC,country',tuple(params))
-    global_counts=db._fetch_all('SELECT status,COUNT(*) AS count FROM orders GROUP BY status')
-    inventory=db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0))')
+    owner_clause, owner_params = sales_ownership.clause(args.get('_ownerId'))
+    global_counts=db._fetch_all('SELECT status,COUNT(*) AS count FROM orders o WHERE '+owner_clause+' GROUP BY status', tuple(owner_params))
+    inventory={} if args.get('_ownerId') is not None else db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0))')
     filtered_counts=orders_page({**dict(args),'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'page':1,'pageSize':25})
     return {'metrics':metrics,'previous':previous,'trend':points,
             'topProducts':[{**r,'amount':float(r['amount'])} for r in top],
@@ -788,7 +808,7 @@ def dashboard(args):
             'countries':[{**r,'amount':float(r['amount'])} for r in countries],
             'recentOrders':filtered_counts['items'][:5],'statusCounts':filtered_counts['statusCounts'],
             'snapshot':{**{k:int(v) for k,v in inventory.items()},'statuses':{r['status']:r['count'] for r in global_counts}},
-            'filters':{'countries':[r['country'] for r in db._fetch_all("SELECT DISTINCT country FROM orders WHERE country IS NOT NULL ORDER BY country")],
+            'filters':{'countries':[r['country'] for r in db._fetch_all("SELECT DISTINCT country FROM orders o WHERE "+owner_clause+" AND country IS NOT NULL ORDER BY country",tuple(owner_params))],
                        'styles':[r['style'] for r in db._fetch_all(f"SELECT style FROM (SELECT DISTINCT ON ({_style_code_sql('p')}) {_style_code_sql('p')} AS style,pc.sort_order,pc.id AS category_id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE ORDER BY {_style_code_sql('p')},pc.sort_order,pc.id) ranked ORDER BY sort_order,category_id,style")],
                        'categories':[dict(r) for r in db._fetch_all("SELECT pc.category_key AS key,COALESCE(NULLIF(pct.label,''),pc.category_key) AS label FROM product_categories pc LEFT JOIN product_category_translations pct ON pct.category_id=pc.id AND pct.lang_code='zh' WHERE pc.is_active=TRUE ORDER BY pc.sort_order,pc.id")]},
             'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'updatedAt':datetime.now(timezone.utc).isoformat()}

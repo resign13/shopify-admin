@@ -31,6 +31,13 @@
     </section>
     <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving" label-position="top">
       <CustomerTemplates v-if="!id" :profile="form" :customer="customers.find(customer => customer.id === form.userId)" @apply="applyTemplate" @busy="templateBusy = $event" />
+      <ElFormItem v-if="auth.isSuperAdmin" label="归属业务员">
+        <ElSelect v-model="form.ownerAdminId" clearable filterable placeholder="未分配" class="full-width">
+          <ElOption v-for="person in salespeople" :key="person.id" :value="person.id" :label="person.name" :disabled="person.status !== 'active' && person.id !== form.ownerAdminId" />
+        </ElSelect>
+        <small>管理员代建可指定业务员；仅调整归属不影响库存。</small>
+      </ElFormItem>
+      <p v-else class="small-note">归属业务员：{{ auth.user?.name }}（固定为本人）</p>
       <h3>客户与收货信息</h3>
       <ElFormItem
         label="商城客户"
@@ -223,6 +230,7 @@ import CustomerTemplates from "./CustomerTemplates.vue";
 import PdfAttachment from "./PdfAttachment.vue";
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
+import { useAdminAuthStore } from "../stores/auth";
 import { orderProductQuantity } from "../utils/orderQuantities";
 import {
   api,
@@ -241,6 +249,7 @@ const props = defineProps({
   emit = defineEmits(["update:open", "saved"]);
 const form = reactive({
   userId: null,
+  ownerAdminId: null,
   contactName: "",
   phone: "",
   country: "",
@@ -259,6 +268,7 @@ const form = reactive({
   shippingFee: 0,
   items: [],
 });
+const auth = useAdminAuthStore(), salespeople = ref([]);
 const fields = customerFields;
 const originalItems = ref([]);
 const imageUploading = ref(false), pdfUploading = ref(false), templateBusy = ref(false);
@@ -462,6 +472,7 @@ watch(
     latest.value = null;
     try {
       categories.value = (await api("catalog-options")).items;
+      if (auth.isSuperAdmin) salespeople.value = (await api("salespeople")).items;
       if (id) {
         const item = (await api(`orders/${id}`)).order;
         if (current !== serial) return;
@@ -469,6 +480,7 @@ watch(
       } else {
         Object.assign(form, {
           userId: null,
+          ownerAdminId: null,
           contactName: "",
           phone: "",
           country: "",
@@ -620,6 +632,7 @@ async function submit() {
   try {
     const payload = {
       ...form,
+      ownerAdminId: auth.isSuperAdmin ? (form.ownerAdminId || null) : auth.user.id,
       items: items.map(({ productId, sizeCode, quantity, unitPrice }) => ({
         productId,
         sizeCode,

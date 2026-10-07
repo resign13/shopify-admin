@@ -77,7 +77,13 @@
         ><ElInput v-model.trim="form.name" /></ElFormItem
       ><ElFormItem v-if="!admin" label="公司名称"
         ><ElInput v-model.trim="form.companyName" /></ElFormItem
-      ><ElFormItem
+      ><ElFormItem v-if="!admin" label="关联后台业务员">
+        <ElSelect v-model="form.linkedAdminId" clearable filterable placeholder="未关联" class="full-width">
+          <ElOption v-for="person in salespeople" :key="person.id" :value="person.id" :label="`${person.name} · ${person.email}`" :disabled="person.status !== 'active' && person.id !== form.linkedAdminId" />
+        </ElSelect>
+        <p class="small-note">保存关联后，尚未归属的历史商城订单也计入该业务员。已归属订单不随关联关系修改而转移；两端登录和密码保持独立。</p>
+      </ElFormItem>
+      <ElFormItem
         label="登录账号 / 邮箱"
         prop="email"
         :rules="[{ required: true, message: '请填写登录账号' }]"
@@ -160,13 +166,14 @@
 <script setup>
 import { moduleGroups, roleModules } from "../permissions";
 import { useRouter } from "vue-router";
-import { reactive, ref } from "vue";
+import { reactive, ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "./PageHeader.vue";
 import DataTable from "./DataTable.vue";
 import { useAdminAuthStore } from "../stores/auth";
 import {
   save,
+  api,
   useList,
   useDirty,
   notifyError,
@@ -179,6 +186,8 @@ const props = defineProps({ admin: Boolean }),
   router = useRouter(),
   resource = props.admin ? "admin-users" : "store-users",
   list = useList(resource);
+const salespeople = ref([]);
+onMounted(async () => { if (!props.admin) { try { salespeople.value = (await api('salespeople')).items; } catch (e) { notifyError(e); } } });
 const filters = reactive({
     keyword: list.query.keyword || "",
     status: list.query.status || "",
@@ -201,7 +210,7 @@ const columns = [
   { prop: "email", label: "登录账号", width: 200 },
   ...(props.admin
     ? [{ prop: "role", label: "角色" }]
-    : [{ prop: "companyName", label: "公司" }]),
+    : [{ prop: "companyName", label: "公司" }, { prop: "linkedAdminName", label: "关联业务员", width: 150 }]),
   { prop: "status", label: "状态", width: 90 },
   { prop: "createdAt", label: "创建时间", width: 180, sortable: true },
   { prop: "actions", label: "操作", width: 110 },
@@ -219,6 +228,7 @@ function edit(row) {
     status: "active",
     role: "sales",
     companyName: "",
+    linkedAdminId: null,
     ...row,
     password: "",
   });
@@ -252,7 +262,7 @@ async function submit() {
   try {
     await save(
       `${resource}${form.id ? "/" + form.id : ""}`,
-      form,
+      props.admin ? form : { ...form, linkedAdminId: form.linkedAdminId || null },
       form.id ? "PUT" : "POST",
     );
     markClean();

@@ -53,7 +53,10 @@
           :key="c.key"
           :value="c.key"
           :label="c.labels?.zh || c.key" /></ElSelect
-      ><ElButton native-type="submit" type="primary">查询</ElButton
+      ><ElSelect v-if="auth.isSuperAdmin" v-model="filters.salespersonId" clearable placeholder="全部业务员">
+        <ElOption label="未分配" value="unassigned" />
+        <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
+      </ElSelect><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton
       ><ElTag
         v-if="list.query.country"
@@ -94,7 +97,7 @@
           row.orderNo
         }}</ElButton></template
       ><template #userName="{ row }"
-        >{{ row.userName
+        >{{ row.ownerAdminName || "未分配"
         }}<small style="display: block">{{
           row.companyName || row.userEmail
         }}</small></template
@@ -176,6 +179,7 @@ const auth = useAdminAuthStore(),
   selected = ref([]),
   table = ref(),
   categories = ref([]),
+  salespeople = ref([]),
   detailOpen = ref(false),
   detailId = ref(),
   exporting = ref(false);
@@ -243,6 +247,7 @@ function editOrder() {
 const filters = reactive({
     keyword: list.query.keyword || "",
     category: list.query.category || "",
+    salespersonId: list.query.salespersonId || "",
   }),
   dates = ref(
     list.query.dateFrom ? [list.query.dateFrom, list.query.dateTo] : null,
@@ -291,7 +296,7 @@ function apply() {
   });
 }
 function reset() {
-  Object.assign(filters, { keyword: "", category: "" });
+  Object.assign(filters, { keyword: "", category: "", salespersonId: "" });
   dates.value = null;
   list.query.country = "";
   list.query.style = "";
@@ -328,6 +333,7 @@ onMounted(async () => {
   if (route.query.orderId) open(Number(route.query.orderId));
   try {
     categories.value = (await api("catalog-options")).items;
+    if (auth.isSuperAdmin) salespeople.value = (await api("salespeople")).items;
   } catch (e) {
     notifyError(e);
   }

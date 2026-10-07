@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from flask import g
 import db
 import inventory_policy
+import sales_ownership
 
 
 def amount(value, label):
@@ -71,12 +72,21 @@ def save_order(payload, order_id=None):
         if previous:
             if previous['actor_id'] != g.current_user['id'] or previous['payload_hash'] != digest:
                 raise ValueError('提交编号已使用，请先检查订单列表，避免重复建单')
+            sales_ownership.assert_access(previous['order_id'], lock=True)
             existing = db.get_order_by_id(previous['order_id'])
             if not existing:
                 raise ValueError('该请求已创建过订单，订单随后被删除，请重新打开新增订单')
             return {'order': existing, 'replayed': True}
 
     user_id = positive(payload.get('userId'), '客户编号')
+    if g.current_user.get('role') == 'sales':
+        owner_id = g.current_user['id']
+        if payload.get('ownerAdminId') not in (None, '', owner_id):
+            raise ValueError('外贸人员的订单归属固定为本人')
+        if not old:
+            sales_ownership.validate_owner(owner_id)
+    else:
+        owner_id = sales_ownership.validate_owner(payload.get('ownerAdminId', (old or {}).get('owner_admin_id')), previous=(old or {}).get('owner_admin_id'))
     image_urls = order_images(payload, old)
     # Older clients echo labelPdfUrl even when it contains a legacy image/file.
     # Preserve that unchanged value without accepting new non-PDF attachments.
@@ -98,6 +108,7 @@ def save_order(payload, order_id=None):
     if not old and next_status != 'pending_payment':
         raise ValueError('新增订单必须为待付款状态')
     if old:
+        db._fetch_one('UPDATE orders SET owner_admin_id=%s WHERE id=%s RETURNING id', (owner_id, order_id))
         db.validate_admin_order_transition(old["status"], next_status)
     tracking = payload.get('trackingNo', (old or {}).get('tracking_no') or '')
     payment = payload.get('paymentLink', (old or {}).get('payment_link') or '')
@@ -105,7 +116,7 @@ def save_order(payload, order_id=None):
         raise ValueError('物流单号或付款链接无效')
     if next_status == 'shipped' and not tracking.strip():
         raise ValueError('发货必须填写物流单号')
-    user = db._fetch_one('SELECT id,status FROM store_users WHERE id=%s FOR SHARE', (user_id,))
+    user = db._fetch_one('SELECT id,status FROM store_users WHERE id=%s'+('' if old else ' FOR SHARE'), (user_id,))
     if not user or (user['status'] != 'active' and (not old or old['store_user_id'] != user_id)):
         raise ValueError('请选择有效商城客户')
     fields = {}
@@ -164,7 +175,7 @@ def save_order(payload, order_id=None):
     total = amount(sum(row['quantity'] * row['price'] for row in desired.values()) + shipping, '订单总额')
     address = ', '.join(fields[key] for key in ['address', 'apartment', 'city', 'state', 'zip', 'country'] if fields[key])
     if not old:
-        record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount,created_by_admin_id) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s,%s) RETURNING id", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total, g.current_user['id']))
+        record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount,created_by_admin_id,owner_admin_id,order_source) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s,%s,%s,'backend') RETURNING id", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total, g.current_user['id'], owner_id))
         order_id = record['id']
         db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id', (f'LM-{order_id:06d}', order_id))
     db._fetch_one('''UPDATE orders SET store_user_id=%s,contact_name=%s,phone=%s,country=%s,contact_email=%s,

@@ -22,7 +22,7 @@
           <div class="detail-grid">
             <div>
               <span>业务员</span>
-              <p>{{ order.userName }} / {{ order.companyName || "—" }}</p>
+              <p>{{ order.ownerAdminName || "未分配" }} · 商城账号：{{ order.userName }}</p>
             </div>
             <div>
               <span>下单时间（北京时间）</span>
