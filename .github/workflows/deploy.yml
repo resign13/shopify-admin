@@ -1,79 +1,32 @@
-name: Deploy Admin
+name: Encrypted Local Database Sync
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  group: production-admin
+  group: production-database-export
   cancel-in-progress: false
 jobs:
-  verify:
+  export:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: gingtto_workbench_test
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: fixture-only-password
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r admin-backend/requirements.txt
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Catalog ordering UI tests
-        working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js
-      - name: Isolated inventory, permissions, transactions and image tests
-        working-directory: admin-backend
-        env:
-          PGHOST: 127.0.0.1
-          PGPORT: '5432'
-          PGDATABASE: gingtto_workbench_test
-          PGUSER: postgres
-          PGPASSWORD: fixture-only-password
-        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order
-  deploy:
-    needs: verify
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Build frontend
-        working-directory: frontend
-        run: npm ci && npm run build
-      - name: Package release without runtime data or secrets
-        run: |
-          tar --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --exclude=uploads --exclude=data --exclude=__pycache__ -czf release.tar.gz admin-backend scripts frontend/dist db
-      - name: Upload, back up and deploy over verified SSH
+      - run: pip install cryptography
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+      - name: Read-only snapshot and local-key encryption
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
           SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq sshpass
-          umask 077
-          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/deploy-known-hosts"
-          opts=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy-known-hosts" -o ConnectTimeout=30 -o ServerAliveInterval=15)
-          stage=/opt/smawell/incoming/admin-${{ github.run_id }}-${{ github.run_attempt }}
-          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$stage'"
-          sshpass -e scp "${opts[@]}" release.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:$stage/release.tar.gz"
-          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; tar -xzf '$stage/release.tar.gz' -C '$stage'; bash '$stage/scripts/deploy-admin.sh' '$stage'"
+        run: python .github/export-local-db.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-local-db
+          path: database.enc
+          retention-days: 1
+          if-no-files-found: error
