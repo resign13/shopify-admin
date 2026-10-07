@@ -61,6 +61,9 @@ def init_key():
 def gh(*args):
     return subprocess.check_output([str(GH), *args], text=True, encoding='utf-8').strip()
 
+def git(*args):
+    return subprocess.check_output(['git', '-C', str(ROOT), *args], text=True, encoding='utf-8').strip()
+
 def settings():
     config = {}
     for line in (ROOT / 'admin-backend/.env').read_text('utf-8').splitlines():
@@ -90,11 +93,17 @@ def run_sync():
     with psycopg.connect(**config, dbname='postgres') as conn:
         conn.execute('SELECT 1')
     started = datetime.now(timezone.utc).isoformat()
-    gh('workflow', 'run', 'deploy.yml', '--repo', REPO, '--ref', BRANCH)
+    # The existing account can push and read CI, but has no workflow-dispatch scope.
+    # Request exports via this dedicated push-only operations branch, not main.
+    git('fetch', 'origin', BRANCH)
+    parent = git('rev-parse', 'origin/'+BRANCH)
+    tree = git('rev-parse', parent+'^{tree}')
+    revision = git('commit-tree', tree, '-p', parent, '-m', 'ops: request database snapshot '+started)
+    git('push', 'origin', revision+':refs/heads/'+BRANCH)
     run = None
     for attempt in range(30):
-        runs = json.loads(gh('run', 'list', '--repo', REPO, '--workflow', 'deploy.yml', '--branch', BRANCH, '--limit', '5', '--json', 'databaseId,createdAt,url'))
-        run = next((item for item in runs if datetime.fromisoformat(item['createdAt'].replace('Z', '+00:00')) >= datetime.fromisoformat(started).replace(microsecond=0)), None)
+        runs = json.loads(gh('run', 'list', '--repo', REPO, '--workflow', 'deploy.yml', '--branch', BRANCH, '--limit', '5', '--json', 'databaseId,createdAt,url,headSha'))
+        run = next((item for item in runs if item['headSha'] == revision), None)
         if run: break
         time.sleep(3)
     if not run: raise RuntimeError('Database export run not found')

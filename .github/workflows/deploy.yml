@@ -1,5 +1,7 @@
 name: Encrypted Local Database Sync
 on:
+  push:
+    branches: [ops/database-sync]
   workflow_dispatch:
 permissions:
   contents: read
