@@ -35,7 +35,7 @@ def public_inventory(value):
         return [public_inventory(v) for v in value]
     if not isinstance(value, dict):
         return value
-    hidden = {'shortageUnits', 'shortageSizeCount', 'contractPending', 'pendingInspection', 'pendingInbound'}
+    hidden = {'shortageUnits', 'shortageSizeCount', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound'}
     result = {k: public_inventory(v) for k, v in value.items() if k not in hidden}
     if 'zeroSizes' in result:
         result['zeroSizes'] += int(value.get('shortageSizeCount', 0))
@@ -47,6 +47,11 @@ def public_inventory(value):
 
 def migrate(cur):
     cur.execute('SELECT pg_advisory_xact_lock(7192031)')
+    # Independent staging quantity: never redistribute stock or procurement stages.
+    cur.execute('ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS temporary_inbound INTEGER NOT NULL DEFAULT 0')
+    cur.execute("SELECT 1 FROM pg_constraint WHERE conrelid='product_size_prices'::regclass AND conname='product_size_prices_temporary_inbound_check'")
+    if not cur.fetchone():
+        cur.execute('ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_temporary_inbound_check CHECK (temporary_inbound >= 0)')
     # Remove checks on stock only, retaining price and pipeline constraints.
     cur.execute("""SELECT c.conname,t.relname FROM pg_constraint c
       JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace

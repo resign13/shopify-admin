@@ -1,4 +1,4 @@
-"""Customer presets, shared access, snapshots and stock neutrality in a *_test DB."""
+"""Creator-scoped presets, administrator access and stock neutrality in a *_test DB."""
 import copy
 import io
 import unittest
@@ -58,6 +58,52 @@ class CustomerTemplatesTest(unittest.TestCase):
         self.assertEqual([row['action'] for row in logs], ['INSERT', 'UPDATE', 'DELETE'])
         self.assertTrue(all(row['module'] == 'orders' for row in logs))
         self.assertTrue(all('customer_info' not in (row['after_data'] or {}) for row in logs))
+
+    def test_creator_scope_search_counts_details_and_mutations(self):
+        second = db.create_admin_user({'name': 'Second sales', 'email': 'second@fixture.test',
+            'passwordHash': 'fixture', 'role': 'sales', 'status': 'active'})
+        self.tokens['second'] = db.create_admin_session(second['id'])
+        before = self.balances()
+        own = self.create('sales')
+        other = self.create('second')
+        admin = self.create('admin')
+        for role, expected in [('sales', {own['id']}), ('second', {other['id']}),
+                               ('admin', {own['id'], other['id'], admin['id']})]:
+            result = self.call('orders/templates?page=1&pageSize=25&keyword=Northline&creatorId=1&_ownerId=1', role=role).json
+            self.assertEqual(result['total'], len(expected))
+            self.assertEqual({t['id'] for t in result['items']}, expected)
+        for item in [other, admin]:
+            path = f"orders/templates/{item['id']}"
+            self.assertEqual(self.call(path, role='sales').status_code, 404)
+            for version in [item['version'], '999']:
+                self.assertEqual(self.call(path, 'PUT', {**self.payload(), 'version': version}, 'sales').status_code, 404)
+                self.assertEqual(self.call(path, 'DELETE', {'version': version}, 'sales').status_code, 404)
+        self.assertEqual(self.call(f"orders/templates/{own['id']}", 'PUT',
+            {**self.payload(), 'version': own['version'], 'createdByAdminId': second['id']}, 'sales').status_code, 200)
+        self.assertEqual(self.call(f"orders/templates/{own['id']}", role='sales').json['template']['creatorId'], own['creatorId'])
+        self.assertEqual(self.balances(), before)
+
+    def test_orphaned_and_legacy_templates_are_admin_only_without_reassignment(self):
+        item = self.create('sales')
+        db._fetch_one('UPDATE order_customer_templates SET created_by_admin_id=NULL WHERE id=%s RETURNING id', (item['id'],))
+        with db.get_connection() as conn, conn.cursor() as cur:
+            customer_templates.migrate(cur); customer_templates.migrate(cur)
+        self.assertEqual(self.call('orders/templates', role='sales').json['total'], 0)
+        self.assertEqual(self.call(f"orders/templates/{item['id']}", role='sales').status_code, 404)
+        detail = self.call(f"orders/templates/{item['id']}").json['template']
+        self.assertIsNone(detail['creatorId'])
+        self.assertEqual(self.call(f"orders/templates/{item['id']}", 'DELETE', {'version': detail['version']}).status_code, 200)
+
+    def test_own_scope_pagination_and_forged_creator_on_create(self):
+        self.create('admin')
+        for number in range(26):
+            response = self.call('orders/templates', 'POST', {**self.payload(), 'name': f'Own {number}',
+                'createdByAdminId': 1, 'creatorId': 1}, 'sales')
+            self.assertEqual(response.json['template']['creatorId'], 2)
+        first = self.call('orders/templates?page=1&pageSize=25', role='sales').json
+        last = self.call('orders/templates?page=2&pageSize=25', role='sales').json
+        self.assertEqual((first['total'], len(first['items']), len(last['items'])), (26, 25, 1))
+        self.assertFalse({t['id'] for t in first['items']} & {t['id'] for t in last['items']})
 
     def test_versions_concurrent_edit_delete_and_rollback(self):
         item = self.create()

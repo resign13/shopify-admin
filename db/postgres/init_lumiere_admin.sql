@@ -50,6 +50,8 @@ CREATE TABLE IF NOT EXISTS order_customer_templates (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_order_customer_templates_customer ON order_customer_templates(store_user_id);
+CREATE INDEX IF NOT EXISTS idx_order_customer_templates_creator
+    ON order_customer_templates(created_by_admin_id,updated_at DESC,id DESC);
 
 CREATE TABLE IF NOT EXISTS product_categories (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -128,6 +130,7 @@ CREATE TABLE IF NOT EXISTS product_size_prices (
   price NUMERIC(12, 2) NOT NULL CHECK (price >= 0),
   stock INTEGER NOT NULL DEFAULT 0,
   contract_pending INTEGER NOT NULL DEFAULT 0 CHECK (contract_pending >= 0),
+  temporary_inbound INTEGER NOT NULL DEFAULT 0 CHECK (temporary_inbound >= 0),
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE (product_id, size_code)
 );
@@ -201,5 +204,16 @@ CREATE INDEX IF NOT EXISTS idx_order_items_order_id
 CREATE INDEX IF NOT EXISTS idx_order_items_product_id
   ON order_items (product_id);
 
+
+CREATE TABLE IF NOT EXISTS inventory_registration_logs (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  product_id BIGINT NOT NULL,
+  sku TEXT NOT NULL,
+  actor JSONB NOT NULL,
+  changes JSONB NOT NULL CHECK (jsonb_typeof(changes)='array'),
+  occurred_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+CREATE INDEX IF NOT EXISTS idx_inventory_registration_product_time
+  ON inventory_registration_logs (product_id, occurred_at DESC, id DESC);
 
 COMMIT;

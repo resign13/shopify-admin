@@ -92,6 +92,21 @@ def settings():
     # Dedicated local mirror; never use an environment-supplied remote hostname.
     return dict(host='127.0.0.1', port=55439, user=config.get('PGUSER', 'postgres'), password=config.get('PGPASSWORD', ''), connect_timeout=10)
 
+def local_migration_backends():
+    backends = [ROOT / 'admin-backend', ROOT.parent / 'shopify/storefront-backend']
+    registry = PRIVATE / 'local-manual-backends.json'
+    if registry.exists():
+        registered = json.loads(registry.read_text('utf-8-sig'))
+        if not isinstance(registered, list):
+            raise RuntimeError('Invalid local manual backend registry')
+        workspace = ROOT.parent.resolve()
+        for entry in registered:
+            backend = Path(entry).resolve()
+            if not backend.is_relative_to(workspace) or not (backend / 'app.py').is_file():
+                raise RuntimeError('Registered local backend missing or outside workspace: '+str(backend))
+            if backend not in backends: backends.append(backend)
+    return backends
+
 def fingerprint(conn):
     conn.execute("SET TIME ZONE 'UTC'")
     conn.execute('SET search_path TO public')
@@ -163,7 +178,10 @@ def run_sync():
             # local migration must leave the previous usable mirror untouched.
             environment = {**os.environ, 'PGHOST':'127.0.0.1', 'PGPORT':'55439',
                            'PGDATABASE':stage, 'PGUSER':config['user'], 'PGPASSWORD':config['password']}
-            for backend in (ROOT / 'admin-backend', ROOT.parent / 'shopify/storefront-backend'):
+            # Apply active manual-validation worktree migrations before swapping
+            # the mirror so daily sync cannot remove fields required by a running
+            # uncommitted feature, e.g. independent temporary inbound quantities.
+            for backend in local_migration_backends():
                 subprocess.run([os.sys.executable, '-c', 'import app'], cwd=backend, env=environment,
                                check=True, timeout=120, stdout=subprocess.DEVNULL)
             # Storefront login sessions are local JSON, not a PostgreSQL table.

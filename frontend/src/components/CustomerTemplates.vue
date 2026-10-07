@@ -14,7 +14,7 @@
         :label="`${item.name} · ${item.customer.companyName || item.customer.name || '客户已删除'}`"
         :disabled="!item.customerActive" />
     </ElSelect>
-    <small>管理员与外贸共享。仅填入客户资料、备注和附件，商品明细及金额不变。</small>
+    <small>管理员可查看全部模板，其他人员仅可查看自己创建的模板。仅填入客户资料、备注和附件，商品明细及金额不变。</small>
     <ElAlert v-if="optionsError" :title="optionsError" type="error" :closable="false">
       <ElButton text @click="searchOptions()">重试</ElButton>
     </ElAlert>
@@ -22,7 +22,7 @@
 
   <ElDrawer v-model="managerOpen" title="客户模板管理" size="850px" :close-on-click-modal="false"
     :before-close="closeManager">
-    <ElAlert title="管理员与外贸人员共享所有模板；修改或删除模板不会改变已创建的订单。" type="info" :closable="false" />
+    <ElAlert title="管理员可管理全部模板，其他人员仅可管理自己创建的模板；修改或删除模板不会改变已创建的订单。" type="info" :closable="false" />
     <form class="filters section-gap" @submit.prevent="page = 1; loadList()">
       <ElInput v-model="keyword" placeholder="模板名称、联系人、客户、公司或邮箱" clearable />
       <ElButton type="primary" native-type="submit">查询</ElButton>
@@ -39,6 +39,7 @@
       </template></ElTableColumn>
       <ElTableColumn prop="contactName" label="联系人" width="100" />
       <ElTableColumn prop="country" label="国家" width="100" />
+      <ElTableColumn prop="creatorName" label="创建人" width="100" />
       <ElTableColumn label="操作" :width="managerOnly ? 100 : 190"><template #default="{ row }">
         <ElButton v-if="!managerOnly" link type="primary" :disabled="!row.customerActive || applying"
           @click="applySelected(row.id)">填入订单</ElButton>
@@ -176,7 +177,7 @@ async function saveTemplate() {
       name: draft.name, profile: customerProfile(draft.profile), ...(draft.id ? { version: draft.version } : {}),
     }, draft.id ? 'PUT' : 'POST');
     markClean(); editOpen.value = false;
-    ElMessage.success('客户模板已保存，管理员与外贸均可使用');
+    ElMessage.success('客户模板已保存，仅创建者及管理员可使用');
     if (managerOpen.value) await loadList();
     if (!props.managerOnly) await searchOptions();
   } catch (error) { editError.value = error.message; conflict.value = error.status === 409; }

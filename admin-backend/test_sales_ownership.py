@@ -126,6 +126,7 @@ class SalesOwnershipTest(unittest.TestCase):
             self.assertEqual(data['scope']['ownerId'], self.a)
             self.assertNotIn('stock', json.dumps(data))
             self.assertNotIn('estimatedDays', json.dumps(data))
+            self.assertNotIn('temporaryInbound', json.dumps(data))
             if view == 'style-performance': self.assertEqual(data['summary']['units'], 3)
         legacy = self.call('dashboard?' + query, role='sales')
         self.assertEqual(legacy.status_code, 200)
@@ -135,6 +136,14 @@ class SalesOwnershipTest(unittest.TestCase):
         global_data = self.call('dashboard?view=workbench&dateFrom=2026-09-18&dateTo=2026-09-18').json
         self.assertEqual(global_data['metrics']['units'], 6)
         self.assertIn('stock', global_data['snapshot'])
+        self.assertIn('temporaryInbound', global_data['snapshot'])
+
+    def test_personal_inventory_filter_recursively_hides_new_temporary_quantity(self):
+        sample = {'summary': {'stock': 4, 'temporaryInbound': 8},
+                  'items': [{'sizePrices': [{'temporaryInbound': 3, 'units': 2}]}]}
+        result = sales_ownership.personalize(sample, self.a)
+        self.assertNotIn('temporaryInbound', json.dumps(result))
+        self.assertEqual(result['items'][0]['sizePrices'][0]['units'], 2)
 
     def test_owner_identity_protection_and_disabled_history(self):
         self.scoped_fixture()

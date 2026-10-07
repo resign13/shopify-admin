@@ -1,7 +1,7 @@
-"""Shared customer presets. Saving a preset never creates an order or moves stock."""
+"""Creator-scoped customer presets; administrators can manage all presets."""
 from urllib.parse import urlsplit
 from psycopg.types.json import Jsonb
-from flask import g
+from flask import g, abort
 import db
 import workbench
 from order_management import positive, order_images
@@ -22,6 +22,8 @@ def migrate(cur):
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
         CREATE INDEX IF NOT EXISTS idx_order_customer_templates_customer
           ON order_customer_templates(store_user_id);
+        CREATE INDEX IF NOT EXISTS idx_order_customer_templates_creator
+          ON order_customer_templates(created_by_admin_id,updated_at DESC,id DESC);
     ''')
 
 
@@ -75,8 +77,16 @@ def serialize(row, detail=False):
     return result
 
 
+def scope():
+    user = g.current_user
+    if user.get('role') == 'admin':
+        return 'TRUE', ()
+    return 't.created_by_admin_id=%s', (user['id'],)
+
+
 def detail(template_id):
-    row = db._fetch_one(BASE_QUERY + ' WHERE t.id=%s', (template_id,))
+    clause, params = scope()
+    row = db._fetch_one(BASE_QUERY + ' WHERE t.id=%s AND ' + clause, (template_id, *params))
     return serialize(row, True) if row else None
 
 
@@ -84,18 +94,22 @@ def listing(args):
     page, size = workbench.paging(args)
     keyword = '%' + str(args.get('keyword', '')).strip() + '%'
     where = " WHERE concat_ws(' ',t.name,u.name,u.company_name,u.email,t.customer_info->>'contactName') ILIKE %s"
-    total = db._fetch_one('SELECT COUNT(*) AS total FROM order_customer_templates t LEFT JOIN store_users u ON u.id=t.store_user_id' + where, (keyword,))['total']
+    clause, scope_params = scope()
+    where += ' AND ' + clause
+    params = (keyword, *scope_params)
+    total = db._fetch_one('SELECT COUNT(*) AS total FROM order_customer_templates t LEFT JOIN store_users u ON u.id=t.store_user_id' + where, params)['total']
     rows = db._fetch_all(BASE_QUERY + where + ' ORDER BY t.updated_at DESC,t.id DESC LIMIT %s OFFSET %s',
-                         (keyword, size, (page - 1) * size))
+                         (*params, size, (page - 1) * size))
     return {'items': [serialize(row) for row in rows], 'total': total, 'page': page, 'pageSize': size}
 
 
 def locked(template_id, payload):
     if not isinstance(payload, dict):
         raise ValueError('客户模板格式无效')
-    row = db._fetch_one('SELECT * FROM order_customer_templates WHERE id=%s FOR UPDATE', (template_id,))
+    clause, params = scope()
+    row = db._fetch_one('SELECT t.* FROM order_customer_templates t WHERE t.id=%s AND ' + clause + ' FOR UPDATE', (template_id, *params))
     if not row:
-        raise ValueError('客户模板不存在')
+        abort(404, description='客户模板不存在')
     if not payload.get('version'):
         raise ValueError('缺少客户模板版本，请重新打开模板')
     if str(payload['version']) != str(row['revision']):

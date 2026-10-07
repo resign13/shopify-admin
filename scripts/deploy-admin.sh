@@ -25,7 +25,10 @@ stock_snapshot() {
     'cancelledOrders',(SELECT count(*) FROM orders WHERE status='cancelled'),
     'negativeSizes',(SELECT count(*) FROM product_size_prices WHERE stock<0),
     'productBalances',(SELECT md5(string_agg(id::text||':'||stock::text,',' ORDER BY id)) FROM products),
-    'sizeBalances',(SELECT md5(string_agg(id::text||':'||stock::text,',' ORDER BY id)) FROM product_size_prices));"
+    'sizeBalances',(SELECT md5(string_agg(id::text||':'||stock::text,',' ORDER BY id)) FROM product_size_prices),
+    'pipelineBalances',(SELECT md5(string_agg(id::text||':'||contract_pending::text||':'||pending_inspection::text||':'||pending_inbound::text||':'||COALESCE(to_jsonb(s)->>'temporary_inbound','0'),',' ORDER BY id)) FROM product_size_prices s),
+    'accountLinks',(SELECT md5(string_agg(id::text||':'||COALESCE(to_jsonb(u)->>'linked_admin_user_id','0'),',' ORDER BY id)) FROM store_users u),
+    'templateCreators',(SELECT md5(string_agg(id::text||':'||COALESCE(created_by_admin_id::text,'0'),',' ORDER BY id)) FROM order_customer_templates));"
 }
 stock_snapshot > "$backup/inventory-before.json"
 rollback() {
@@ -33,6 +36,22 @@ rollback() {
   trap - ERR
   # Never restart a legacy balance-resetting backend after negative balances exist.
   systemctl stop "$service" || true
+  ownership=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='owner_admin_id')" 2>/dev/null) || ownership=unknown
+  if [ "$ownership" != f ]; then
+    if ! tar -xOf "$backup/code.tar.gz" "$backend/workbench.py" | grep 'sales_ownership.assert_access' > /dev/null || ! tar -xOf "$backup/code.tar.gz" "$backend/customer_templates.py" | grep 'def scope' > /dev/null; then
+      echo "Legacy rollback blocked: salesperson and template scope compatibility required. Current code/database retained; backup: $backup."
+      systemctl restart "$service" || true
+      exit "$status"
+    fi
+  fi
+  temporary=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='product_size_prices' AND column_name='temporary_inbound')" 2>/dev/null) || temporary=unknown
+  if [ "$temporary" != f ]; then
+    if ! tar -xOf "$backup/code.tar.gz" "$backend/db.py" | grep 'existing_temporary' > /dev/null; then
+      echo "Legacy rollback blocked: temporary inventory compatibility required. Keeping current code and database; backup retained at $backup."
+      systemctl restart "$service" || true
+      exit "$status"
+    fi
+  fi
   negative=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM products WHERE stock<0) OR EXISTS(SELECT 1 FROM product_size_prices WHERE stock<0)" 2>/dev/null) || negative=unknown
   if ! tar -xOf "$backup/code.tar.gz" "$backend/db.py" | grep 'inventory_policy.migrate(cur)' > /dev/null; then
     if [ "$negative" != f ]; then
@@ -65,6 +84,11 @@ for attempt in $(seq 1 20); do
   if curl -fsS "http://127.0.0.1:5302/api/health" > /dev/null; then
     systemctl is-active --quiet "$service"
     .venv/bin/python "$root/scripts/verify-category-order.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-temporary-inbound.py" "$backend"
+    # Approved permission upgrade is explicit, audited and one-time. Existing
+    # account links and all other module grants are preserved.
+    .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply
+    .venv/bin/python "$root/scripts/verify-sales-access.py" "$backend"
     stock_snapshot > "$backup/inventory-after.json"
     echo "Inventory before release: $(cat "$backup/inventory-before.json")"
     echo "Inventory after release: $(cat "$backup/inventory-after.json")"
