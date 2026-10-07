@@ -26,7 +26,7 @@ with psycopg.connect(host=settings.get('PGHOST','127.0.0.1'),port=settings.get('
  conn.execute("SET TIME ZONE 'UTC'")
  snapshot=conn.execute('SELECT pg_export_snapshot()').fetchone()[0]
  tables=[r[0] for r in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")]
- fingerprints={t:list(conn.execute(SQL("SELECT count(*),md5(COALESCE(string_agg(to_jsonb(t)::text,E'\\n' ORDER BY to_jsonb(t)::text),'')) FROM {} t").format(Identifier(t))).fetchone()) for t in tables}
+ fingerprints={t:list(conn.execute(SQL('SELECT count(*),md5(COALESCE(string_agg(to_jsonb(t)::text,E\'\\n\' ORDER BY to_jsonb(t)::text COLLATE "C"),\'\')) FROM {} t').format(Identifier(t))).fetchone()) for t in tables}
  sql=subprocess.check_output(['pg_dump','--snapshot='+snapshot,'--no-owner','--no-acl','--inserts','--rows-per-insert=100','smawell_admin'],env=environment,text=True)
  print(json.dumps({'sql':sql,'sha256':hashlib.sha256(sql.encode()).hexdigest(),'tables':fingerprints}))
 '''
