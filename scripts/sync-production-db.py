@@ -75,6 +75,7 @@ def settings():
 
 def fingerprint(conn):
     conn.execute("SET TIME ZONE 'UTC'")
+    conn.execute('SET search_path TO public')
     tables = [row[0] for row in conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")]
     return {table: list(conn.execute(SQL("SELECT count(*),md5(COALESCE(string_agg(to_jsonb(t)::text,E'\\n' ORDER BY to_jsonb(t)::text),'')) FROM {} t").format(Identifier(table))).fetchone()) for table in tables}
 
