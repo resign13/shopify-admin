@@ -2777,6 +2777,63 @@ def edit_admin_order(order_id):
     return jsonify(save_order(request.get_json(silent=True) or {}, order_id))
 
 
+@app.get('/api/admin/orders/templates')
+@require_auth
+@require_roles('admin', 'sales')
+def customer_template_list():
+    import customer_templates
+    return jsonify(customer_templates.listing(request.args))
+
+
+@app.get('/api/admin/orders/templates/<int:template_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def customer_template_detail(template_id):
+    import customer_templates
+    item = customer_templates.detail(template_id)
+    return (jsonify({'template': item}) if item else
+            (jsonify({'message': '客户模板不存在'}), 404))
+
+
+@app.post('/api/admin/orders/templates')
+@require_auth
+@require_roles('admin', 'sales')
+def customer_template_create():
+    import customer_templates
+    return jsonify({'template': customer_templates.save(request.get_json(silent=True) or {})})
+
+
+@app.put('/api/admin/orders/templates/<int:template_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def customer_template_update(template_id):
+    import customer_templates
+    return jsonify({'template': customer_templates.save(request.get_json(silent=True) or {}, template_id)})
+
+
+@app.delete('/api/admin/orders/templates/<int:template_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def customer_template_delete(template_id):
+    import customer_templates
+    customer_templates.delete(template_id, request.get_json(silent=True) or {})
+    return jsonify({'ok': True})
+
+
+@app.post('/api/admin/orders/templates/attachments')
+@require_auth
+@require_roles('admin', 'sales')
+def customer_template_pdf_upload():
+    files = request.files.getlist('files')
+    if len(files) != 1 or not files[0].filename or not files[0].filename.lower().endswith('.pdf'):
+        return jsonify({'message': '请选择一个 PDF 附件'}), 400
+    raw = files[0].read(32 * 1024 * 1024 + 1)
+    if len(raw) > 32 * 1024 * 1024 or not raw.startswith(b'%PDF-'):
+        return jsonify({'message': '请选择不超过 32 MB 的有效 PDF 文件'}), 400
+    files[0].stream.seek(0)
+    return jsonify({'urls': [save_file_locally(files[0])]})
+
+
 @app.get('/api/admin/catalog-options')
 @require_auth
 @require_roles('admin','sales','warehouse','customer')

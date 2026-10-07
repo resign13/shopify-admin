@@ -392,6 +392,8 @@ def style_size_detail(args, style_code: str | None = None, product_id: int | Non
 def migrate(cur):
     import contracts
     contracts.migrate(cur)
+    import customer_templates
+    customer_templates.migrate(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admin_order_requests (
           request_id UUID PRIMARY KEY, actor_id BIGINT NOT NULL, payload_hash TEXT NOT NULL,
@@ -429,8 +431,8 @@ def migrate(cur):
           IF COALESCE(old_data->>'password_hash','') IS DISTINCT FROM COALESCE(new_data->>'password_hash','') AND TG_OP <> 'DELETE' THEN
             new_data := new_data || '{"passwordChanged":true}'::jsonb;
           END IF;
-          old_data := old_data - ARRAY['password_hash','token','payment_link','contact_email','phone','shipping_address','address_line1','postal_code'];
-          new_data := new_data - ARRAY['password_hash','token','payment_link','contact_email','phone','shipping_address','address_line1','postal_code'];
+          old_data := old_data - ARRAY['password_hash','token','payment_link','contact_email','phone','shipping_address','address_line1','postal_code','customer_info'];
+          new_data := new_data - ARRAY['password_hash','token','payment_link','contact_email','phone','shipping_address','address_line1','postal_code','customer_info'];
           INSERT INTO admin_audit_logs(actor,module,action,entity_table,object_id,batch_id,before_data,after_data)
           VALUES(a::jsonb,current_setting('gingtto.module',true),TG_OP,TG_TABLE_NAME,obj,
             current_setting('gingtto.batch',true),old_data,new_data);
@@ -439,7 +441,7 @@ def migrate(cur):
     """)
     for table in ['products', 'product_size_prices', 'product_translations', 'product_images',
                   'product_sizes', 'orders', 'order_items', 'homepage_configs', 'product_categories',
-                  'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts']:
+                  'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts', 'order_customer_templates']:
         cur.execute(f'DROP TRIGGER IF EXISTS admin_audit ON {table}')
         cur.execute(f'CREATE TRIGGER admin_audit AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION capture_admin_audit()')
 
@@ -455,6 +457,9 @@ def version(table, object_id):
 
 def check_versions(payload):
     path = request.path.split('/')
+    # Customer presets use their own revision checks, not an order ID/version.
+    if len(path) > 4 and path[3:5] == ['orders', 'templates']:
+        return
     module = 'home-config' if path[3] == 'activity-config' else path[3]
     if module not in {'products', 'inventory', 'orders', 'home-config'}:
         return

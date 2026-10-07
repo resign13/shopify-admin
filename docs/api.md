@@ -216,3 +216,27 @@
 - 当状态改为 `shipped` 时，必须同时传入 `trackingNo`
 - 改为 `completed` 时可继续保留原有物流单号
 - 订单返回字段包含 `trackingNo / paymentLink / shippedAt / completedAt / items[] / totalAmount`
+
+## 10. 共享客户模板
+
+- `GET /api/admin/orders/templates?page=1&pageSize=25&keyword=...`：分页搜索（25/50/100）。
+- `GET /api/admin/orders/templates/:id`：读取最新资料。
+- `POST /api/admin/orders/templates`：创建，格式为 `{name, profile}`。
+- `PUT /api/admin/orders/templates/:id`：更新，格式为 `{name, profile, version}`。
+- `DELETE /api/admin/orders/templates/:id`：删除，必须提交 `{version}`。
+- `POST /api/admin/orders/templates/attachments`：multipart `files` 上传一个 PDF，最大 32 MB，检查文件头。
+
+需要 `orders` 模块权限，且角色为管理员或外贸。两者共享全部模板，仓库及客户角色不开放。
+模板版本冲突返回 409，缺失版本或无效资料返回 400；修改及删除记录到订单模块操作日志。
+
+`profile` 仅包含 `userId`、`contactName`、`phone`、`country`、`contactValue`、`address`、
+`apartment`、`city`、`state`、`zip`、`note`、`labelImageUrls`（最多 9 张图片）、`labelPdfUrl`（一个 PDF）。
+模板名称及有效商城账号必填，其余资料可提前分次保存，正式下单继续执行原有必填校验。
+备注最大 5000 字符，其余文本最大 500 字符，附件 URL 最大 2048 字符。
+商品、数量、价格、运费、付款链接、物流、状态、订单版本和幂等编号不进入模板。
+
+模板在订单管理页“客户模板”独立维护，也可在新增订单中“保存当前资料为模板”。
+选择模板读取最新版本，再将客户资料、备注和附件复制入订单草稿；覆盖已填写资料前确认。
+订单保存的是独立快照，后续修改/删除模板不修改历史订单或删除上传文件；模板操作不扣/退库存。
+停用或已删除商城账号的模板仍可管理，但新建订单禁止套用，需重新选择有效客户。
+模板新增表的迁移可重复执行，不调整现有订单和库存；本功能仅涉及后台，商城 API 不暴露模板。

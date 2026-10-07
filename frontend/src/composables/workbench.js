@@ -216,10 +216,10 @@ export function useDirty(value) {
   return { dirty, markClean, canLeave };
 }
 
-export function uploadImage(file, onProgress = () => {}) {
+export function uploadImage(file, onProgress = () => {}, endpoint = 'uploads') {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_BASE}/api/admin/uploads`);
+    xhr.open("POST", `${API_BASE}/api/admin/${endpoint}`);
     xhr.setRequestHeader(
       "Authorization",
       `Bearer ${useAdminAuthStore().token}`,
@@ -228,7 +228,7 @@ export function uploadImage(file, onProgress = () => {}) {
       if (e.lengthComputable)
         onProgress(Math.round((e.loaded / e.total) * 100));
     };
-    xhr.onerror = () => reject(new Error("图片上传失败，请重试"));
+    xhr.onerror = () => reject(new Error("附件上传失败，请重试"));
     xhr.onload = () => {
       let data;
       try {
@@ -236,8 +236,8 @@ export function uploadImage(file, onProgress = () => {}) {
       } catch {
         data = {};
       }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data.urls?.[0]);
-      else reject(new Error(data.message || "图片上传失败"));
+      if (xhr.status >= 200 && xhr.status < 300 && data.urls?.[0]) resolve(data.urls[0]);
+      else reject(new Error(data.message || "附件上传失败"));
     };
     const body = new FormData();
     body.append("files", file);

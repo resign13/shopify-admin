@@ -30,6 +30,7 @@
       ><ElButton @click="adoptLatest">放弃草稿，使用最新资料</ElButton>
     </section>
     <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving" label-position="top">
+      <CustomerTemplates v-if="!id" :profile="form" :customer="customers.find(customer => customer.id === form.userId)" @apply="applyTemplate" @busy="templateBusy = $event" />
       <h3>客户与收货信息</h3>
       <ElFormItem
         label="商城客户"
@@ -115,6 +116,9 @@
               </small>
             </div></template
         ></ElTableColumn
+        ><ElTableColumn label="总件数" width="85" align="right"
+          ><template #default="{ row }">{{ orderProductQuantity(form.items, row.productId) }} 件</template
+        ></ElTableColumn
         ><ElTableColumn label="小计" width="105" align="right"
           ><template #default="{ row }">{{ money(matrixRowSubtotal(row)) }}</template
         ></ElTableColumn
@@ -181,8 +185,9 @@
         ><ImageUploader
           v-model="form.labelImageUrls"
           :max="9"
-          @busy="uploading = $event"
+          @busy="imageUploading = $event"
       /></ElFormItem>
+      <ElFormItem label="PDF 附件"><PdfAttachment v-model="form.labelPdfUrl" @busy="pdfUploading = $event" /></ElFormItem>
       <ElAlert
         v-if="id && dirty"
         :title="`保存前核对：商品 ${originalCount} → ${units} 件；总额 ${money(originalTotal)} → ${money(subtotal + Number(form.shippingFee || 0))}`"
@@ -214,7 +219,11 @@ import { computed, reactive, ref, watch } from "vue";
 import { ElDrawer, ElMessage } from "element-plus";
 import ImageUploader from "./ImageUploader.vue";
 import ProductPicker from "./ProductPicker.vue";
+import CustomerTemplates from "./CustomerTemplates.vue";
+import PdfAttachment from "./PdfAttachment.vue";
+import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
+import { orderProductQuantity } from "../utils/orderQuantities";
 import {
   api,
   save,
@@ -243,25 +252,17 @@ const form = reactive({
   zip: "",
   note: "",
   labelImageUrls: [],
+  labelPdfUrl: "",
   status: "pending_payment",
   trackingNo: "",
   paymentLink: "",
   shippingFee: 0,
   items: [],
 });
-const fields = [
-  { key: "contactName", label: "收货人", required: true },
-  { key: "phone", label: "联系电话", required: true },
-  { key: "country", label: "国家", required: true },
-  { key: "contactValue", label: "联系邮箱" },
-  { key: "address", label: "详细地址", required: true },
-  { key: "apartment", label: "公寓 / 房间" },
-  { key: "city", label: "城市" },
-  { key: "state", label: "州 / 省" },
-  { key: "zip", label: "邮编" },
-];
+const fields = customerFields;
 const originalItems = ref([]);
-const uploading = ref(false);
+const imageUploading = ref(false), pdfUploading = ref(false), templateBusy = ref(false);
+const uploading = computed(() => imageUploading.value || pdfUploading.value || templateBusy.value);
 const isImage = (url) =>
   /\.(jpg|jpeg|png|webp|gif|avif|bmp)(?:[?#]|$)/i.test(url);
 const ready = ref(false),
@@ -427,6 +428,7 @@ async function populate(item) {
     {
       address: item.address || item.shippingAddress || "",
       labelImageUrls: (item.labelImageUrls || []).filter(isImage),
+      labelPdfUrl: (item.labelImageUrls || []).find(url => /\.pdf(?:[?#]|$)/i.test(url)) || '',
       items: item.items.map((row) => ({ ...row })),
     },
   );
@@ -454,7 +456,7 @@ watch(
     const current = ++serial;
     loading.value = true;
     ready.value = false;
-    uploading.value = false;
+    imageUploading.value = false; pdfUploading.value = false; templateBusy.value = false;
     error.value = "";
     conflict.value = false;
     latest.value = null;
@@ -478,6 +480,7 @@ watch(
           zip: "",
           note: "",
           labelImageUrls: [],
+          labelPdfUrl: "",
           status: "pending_payment",
           trackingNo: "",
           paymentLink: "",
@@ -504,6 +507,16 @@ function sizeOptions(row) {
   return sizes.some((s) => s.sizeCode === row.sizeCode)
     ? sizes
     : [...sizes, { sizeCode: row.sizeCode }];
+}
+async function applyTemplate(item) {
+  if (props.id || saving.value || imageUploading.value || pdfUploading.value) return;
+  const current = customerProfile(form);
+  const hasCustomerInfo = current.userId || current.labelImageUrls.length || Object.values(current).some(value => typeof value === 'string' && value.trim());
+  if (hasCustomerInfo && !(await confirm('填入模板将替换当前客户资料、备注及附件，商品明细和金额保持不变。是否继续？'))) return;
+  applyCustomerProfile(form, item.profile);
+  if (!customers.value.some(customer => customer.id === item.customer.id)) customers.value.unshift({ ...item.customer });
+  formRef.value?.clearValidate();
+  ElMessage.success(`已填入客户模板：${item.name}`);
 }
 function addProduct(product) {
   if (!product.sizePrices?.length) {

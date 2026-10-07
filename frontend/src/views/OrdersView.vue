@@ -5,6 +5,7 @@
     eyebrow="ORDERS / 订单业务"
     ><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
       >＋ 新增订单</ElButton
+    ><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
     ><ElDropdown v-if="canExportOrders" @command="exportOrders"
       ><ElButton :loading="exporting">导出订单 ▾</ElButton
       ><template #dropdown
@@ -146,6 +147,7 @@
   </section>
   <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" />
   <OrderEditor v-model:open="editorOpen" @saved="orderSaved" />
+  <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
 </template>
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -156,6 +158,7 @@ import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderEditor from "../components/OrderEditor.vue";
+import CustomerTemplates from "../components/CustomerTemplates.vue";
 import {
   api,
   save,
@@ -177,6 +180,7 @@ const auth = useAdminAuthStore(),
   detailId = ref(),
   exporting = ref(false);
 const statusBusy = ref(false);
+const templatesOpen = ref(false);
 function statusOptions(row) {
   if (!auth.can("orders") || !["admin", "sales", "warehouse"].includes(auth.userRole)) return [];
   if (row.status === "completed") return [];

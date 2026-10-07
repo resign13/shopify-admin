@@ -78,6 +78,20 @@ def save_order(payload, order_id=None):
 
     user_id = positive(payload.get('userId'), '客户编号')
     image_urls = order_images(payload, old)
+    # Older clients echo labelPdfUrl even when it contains a legacy image/file.
+    # Preserve that unchanged value without accepting new non-PDF attachments.
+    legacy_pdf_echo = (old and payload.get('labelPdfUrl') == old.get('label_pdf_url')
+                       and old.get('label_pdf_url')
+                       and not urlsplit(old['label_pdf_url']).path.lower().endswith('.pdf'))
+    if 'labelPdfUrl' in payload and not legacy_pdf_echo:
+        from customer_templates import pdf_url
+        pdf = pdf_url(payload['labelPdfUrl'])
+        # Presets may provide one PDF as well as images. Omitted fields preserve
+        # legacy attachments, and older non-PDF files always survive edits.
+        current_urls = image_urls if image_urls is not None else db._parse_label_image_urls(old or {})
+        image_urls = [url for url in current_urls if not urlsplit(url).path.lower().endswith('.pdf')]
+        if pdf:
+            image_urls.append(pdf)
     next_status = payload.get('status', old['status'] if old else 'pending_payment')
     if not isinstance(next_status, str) or next_status not in {'pending_payment', 'allocated', 'paid', 'shipped', 'completed', 'cancelled'}:
         raise ValueError('订单状态无效')

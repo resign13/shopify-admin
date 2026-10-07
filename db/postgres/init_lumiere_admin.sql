@@ -38,6 +38,18 @@ CREATE TABLE IF NOT EXISTS store_users (
 CREATE UNIQUE INDEX IF NOT EXISTS uq_store_users_email_lower
   ON store_users (LOWER(email));
 
+CREATE TABLE IF NOT EXISTS order_customer_templates (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  name VARCHAR(120) NOT NULL CHECK(length(btrim(name)) > 0),
+  store_user_id BIGINT REFERENCES store_users(id) ON DELETE SET NULL,
+  created_by_admin_id BIGINT REFERENCES admin_users(id) ON DELETE SET NULL,
+  customer_info JSONB NOT NULL DEFAULT '{}'::jsonb,
+  revision BIGINT NOT NULL DEFAULT 1 CHECK(revision > 0),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_order_customer_templates_customer ON order_customer_templates(store_user_id);
+
 CREATE TABLE IF NOT EXISTS product_categories (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   category_key VARCHAR(80) NOT NULL UNIQUE,
