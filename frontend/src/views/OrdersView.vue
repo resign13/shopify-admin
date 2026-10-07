@@ -39,7 +39,9 @@
       <ElInput
         v-model="filters.keyword"
         clearable
-        placeholder="订单号、账号、公司、物流单号"
+        placeholder="订单号、账号、公司、物流单号、商品款号"
+        aria-label="订单查询关键词"
+        style="width: 300px; max-width: 100%"
       /><ElDatePicker
         v-model="dates"
         type="daterange"

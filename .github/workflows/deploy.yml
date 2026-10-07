@@ -42,7 +42,7 @@ jobs:
           PGDATABASE: gingtto_workbench_test
           PGUSER: postgres
           PGPASSWORD: fixture-only-password
-        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order test_sales_ownership test_sales_dashboard_access test_temporary_inbound test_inventory_operations
+        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order test_sales_ownership test_sales_dashboard_access test_temporary_inbound test_inventory_operations test_order_search
   deploy:
     needs: verify
     runs-on: ubuntu-latest

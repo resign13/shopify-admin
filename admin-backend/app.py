@@ -2616,9 +2616,6 @@ def orders() -> Any:
 @require_roles("admin", "sales", "warehouse")
 def export_orders() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
-    status = str(request.args.get("status", "all")).strip() or "all"
-    category = str(request.args.get("category", "all")).strip() or "all"
-    keyword = str(request.args.get("keyword", "")).strip()
     include_images = parse_bool(request.args.get("includeImages", "1"))
     order_ids_raw = str(request.args.get("orderIds", "")).strip()
     selected_order_ids = {
@@ -2630,8 +2627,9 @@ def export_orders() -> Any:
         owner_id = sales_ownership.scope(request.args, g.current_user)
         orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id))
     else:
-        orders = filter_orders(list_orders(order_ids=workbench.order_ids({}, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range, status=status,
-                               category=category, keyword=keyword)
+        # Compatibility exports use the same keyword/style/category/owner query
+        # as the order list; only their legacy relative time range is additional.
+        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     if g.current_user.get("role") == "warehouse":
@@ -2651,9 +2649,6 @@ def export_orders() -> Any:
 @require_roles("admin", "sales", "warehouse")
 def export_orders_by_sheet() -> Any:
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
-    status = str(request.args.get("status", "all")).strip() or "all"
-    category = str(request.args.get("category", "all")).strip() or "all"
-    keyword = str(request.args.get("keyword", "")).strip()
     include_images = parse_bool(request.args.get("includeImages", "1"))
     order_ids_raw = str(request.args.get("orderIds", "")).strip()
     selected_order_ids = {
@@ -2664,8 +2659,7 @@ def export_orders_by_sheet() -> Any:
     if request.args.get('view') == 'workbench':
         orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)))
     else:
-        orders = filter_orders(list_orders(order_ids=workbench.order_ids({}, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range, status=status,
-                               category=category, keyword=keyword)
+        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     if g.current_user.get("role") == "warehouse":

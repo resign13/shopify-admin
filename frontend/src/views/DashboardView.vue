@@ -30,21 +30,20 @@
           :key="item"
           :label="item"
           :value="item" /></ElSelect
-      ><ElSelect v-model="style" clearable filterable placeholder="全部款号"
+      ><ElSelect v-model="style" clearable filterable placeholder="全部款号" aria-label="款号筛选"
         ><ElOption
           v-for="item in data?.filters.styles"
           :key="item"
           :label="item"
           :value="item" /></ElSelect
-      ><ElButton type="primary" :loading="loading" @click="load(true)"
+      ><ElSelect v-if="auth.isSuperAdmin" v-model="salespersonId" clearable filterable placeholder="全公司业务员" aria-label="业务员筛选">
+        <ElOption label="未分配订单" value="unassigned" />
+        <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
+      </ElSelect><ElButton type="primary" :loading="loading" @click="load(true)"
         >查询</ElButton
       >
     </div>
-    <ElSelect v-if="auth.isSuperAdmin" v-model="salespersonId" clearable filterable placeholder="全公司业务员" class="section-gap" aria-label="业务员筛选">
-      <ElOption label="未分配订单" value="unassigned" />
-      <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
-    </ElSelect>
-    <p v-else class="small-note">我的经营数据 · {{ auth.user?.name }}</p>
+    <p v-if="!auth.isSuperAdmin" class="small-note">我的经营数据 · {{ auth.user?.name }}</p>
     <p class="small-note filter-scope">
       统计范围：{{ appliedRange }} · {{ appliedGlobal.country || "全部国家" }} ·
       {{ appliedGlobal.style || "全部款号"

@@ -89,6 +89,7 @@ for attempt in $(seq 1 20); do
     # account links and all other module grants are preserved.
     .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply
     .venv/bin/python "$root/scripts/verify-sales-access.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-order-search.py"
     stock_snapshot > "$backup/inventory-after.json"
     echo "Inventory before release: $(cat "$backup/inventory-before.json")"
     echo "Inventory after release: $(cat "$backup/inventory-after.json")"
