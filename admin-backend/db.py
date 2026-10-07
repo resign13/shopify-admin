@@ -388,7 +388,7 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
     )
     size_price_rows = _fetch_all(
         """
-        SELECT product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, sort_order
+        SELECT product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, sort_order
         FROM product_size_prices
         WHERE product_id = ANY(%s)
         ORDER BY product_id, sort_order, id
@@ -424,6 +424,7 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
             size_price["contractPending"] = int(row["contract_pending"] or 0)
             size_price["pendingInbound"] = int(row["pending_inbound"] or 0)
             size_price["pendingInspection"] = int(row["pending_inspection"] or 0)
+            size_price["temporaryInbound"] = int(row["temporary_inbound"])
         size_prices[int(row["product_id"])].append(size_price)
     return names, summaries, descriptions, galleries, sizes, size_prices
 
@@ -797,7 +798,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     # values attached to existing real size codes instead of resetting them.
     cur.execute(
         """
-        SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection
+        SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound
         FROM product_size_prices
         WHERE product_id = %s
         FOR UPDATE
@@ -808,6 +809,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     existing_contract_pending = {str(row["size_code"]): int(row["contract_pending"] or 0) for row in existing_size_rows}
     existing_inbound = {str(row["size_code"]): int(row["pending_inbound"] or 0) for row in existing_size_rows}
     existing_inspection = {str(row["size_code"]): int(row["pending_inspection"] or 0) for row in existing_size_rows}
+    existing_temporary = {str(row["size_code"]): int(row["temporary_inbound"]) for row in existing_size_rows}
     normalized_size_prices = _normalize_size_prices(payload.get("sizePrices"), payload.get("sizes", []))
     next_size_codes = {item["sizeCode"] for item in normalized_size_prices}
     cur.execute("SELECT DISTINCT i.size_code FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.product_id=%s AND o.status IN ('pending_payment','allocated','paid')", (product_id,))
@@ -817,7 +819,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     removed_pending = [
         size_code
         for size_code, amount in existing_contract_pending.items()
-        if size_code not in next_size_codes and (amount > 0 or existing_inbound.get(size_code,0) > 0 or existing_inspection.get(size_code,0) > 0)
+        if size_code not in next_size_codes and (amount > 0 or existing_inbound.get(size_code,0) > 0 or existing_inspection.get(size_code,0) > 0 or existing_temporary.get(size_code,0) > 0)
     ]
     if removed_pending:
         raise ValueError(
@@ -861,8 +863,8 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
         cur.execute(
             """
             INSERT INTO product_size_prices
-              (product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, sort_order)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+              (product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 product_id,
@@ -872,6 +874,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
                 contract_pending,
                 existing_inbound.get(item["sizeCode"], 0),
                 existing_inspection.get(item["sizeCode"], 0),
+                existing_temporary.get(item["sizeCode"], 0),
                 item["sortOrder"],
             ),
         )
@@ -1061,6 +1064,7 @@ def update_product_inventory(
     contract_pending_by_size: dict[str, Any] | None = None,
     pending_inbound_by_size: dict[str, Any] | None = None,
     pending_inspection_by_size: dict[str, Any] | None = None,
+    temporary_inbound_by_size: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     normalized: dict[str, int] = {}
     for size_code, stock_value in (size_stocks or {}).items():
@@ -1081,7 +1085,8 @@ def update_product_inventory(
 
     normalized_inbound = {str(size): _parse_non_negative_int(value, f"pending inbound for {size}") for size, value in (pending_inbound_by_size or {}).items()}
     inspection = {str(k): _parse_non_negative_int(v,"待验货") for k,v in (pending_inspection_by_size or {}).items()}
-    if not normalized and not normalized_contract_pending and not normalized_inbound and not inspection:
+    temporary = {str(k): _parse_non_negative_int(v, "临时待入库") for k,v in (temporary_inbound_by_size or {}).items()}
+    if not normalized and not normalized_contract_pending and not normalized_inbound and not inspection and not temporary:
         raise ValueError("Missing field: sizeStocks")
 
     with get_connection() as conn:
@@ -1092,7 +1097,7 @@ def update_product_inventory(
 
             cur.execute(
                 """
-                SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection
+                SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound
                 FROM product_size_prices
                 WHERE product_id = %s
                 ORDER BY sort_order, id
@@ -1106,7 +1111,7 @@ def update_product_inventory(
 
             existing_sizes = [str(row["size_code"]) for row in rows]
             unknown_sizes = [
-                size for size in set(normalized) | set(normalized_contract_pending) | set(normalized_inbound) | set(inspection) if size not in existing_sizes
+                size for size in set(normalized) | set(normalized_contract_pending) | set(normalized_inbound) | set(inspection) | set(temporary) if size not in existing_sizes
             ]
             if unknown_sizes:
                 raise ValueError(f"Unknown sizes: {', '.join(unknown_sizes)}")
@@ -1118,7 +1123,7 @@ def update_product_inventory(
                 for values,key in [(normalized_contract_pending,'contractPending'),(normalized_inbound,'pendingInbound'),(inspection,'pendingInspection')]:
                     if size_code in values: updates[key]=values[size_code]
                 pending, inspect, inbound = inventory_stages(row, updates)
-                cur.execute("UPDATE product_size_prices SET stock=%s,contract_pending=%s,pending_inspection=%s,pending_inbound=%s WHERE product_id=%s AND size_code=%s", (stock,pending,inspect,inbound,product_id,size_code))
+                cur.execute("UPDATE product_size_prices SET stock=%s,contract_pending=%s,pending_inspection=%s,pending_inbound=%s,temporary_inbound=%s WHERE product_id=%s AND size_code=%s", (stock,pending,inspect,inbound,temporary.get(size_code,row['temporary_inbound']),product_id,size_code))
 
             cur.execute(
                 "SELECT COALESCE(SUM(stock), 0) AS total_stock FROM product_size_prices WHERE product_id = %s",
@@ -1167,7 +1172,7 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                        COALESCE(NULLIF(pt.name, ''), NULLIF(pte.name, ''), p.product_code, p.sku, '') AS title,
                        psp.size_code,
                        psp.stock,
-                       psp.contract_pending, psp.pending_inbound, psp.pending_inspection
+                       psp.contract_pending, psp.pending_inbound, psp.pending_inspection, psp.temporary_inbound
                     FROM product_size_prices psp
                     JOIN products p ON p.id = psp.product_id
                     JOIN product_categories pc ON pc.id = p.category_id
@@ -1223,6 +1228,13 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 inbound_changed=next_inbound != int(row['originalPendingInbound'])
                 assignments: list[str] = []
                 params: list[Any] = []
+                if 'temporaryInbound' in row and row['temporaryInbound'] != row['originalTemporaryInbound']:
+                    next_temporary = _parse_non_negative_int(row['temporaryInbound'], '临时待入库')
+                    original_temporary = _parse_non_negative_int(row['originalTemporaryInbound'], '原始临时待入库')
+                    if int(current['temporary_inbound']) not in (original_temporary, next_temporary):
+                        raise ValueError(f"临时待入库数量冲突：{product_id} / {size_code}")
+                    if int(current['temporary_inbound']) != next_temporary:
+                        assignments.append('temporary_inbound = %s'); params.append(next_temporary)
                 if stock_changed and current_stock != next_stock:
                     assignments.append("stock = %s")
                     params.append(next_stock)
@@ -1281,7 +1293,7 @@ def delete_product(product_id: int) -> dict[str, Any] | None:
                 if order_row and int(order_row["total"]) > 0:
                     has_related_orders = True
 
-                cur.execute('SELECT 1 FROM product_size_prices WHERE product_id=%s AND (stock<0 OR contract_pending>0 OR pending_inspection>0 OR pending_inbound>0) LIMIT 1', (product_id,))
+                cur.execute('SELECT 1 FROM product_size_prices WHERE product_id=%s AND (stock<0 OR contract_pending>0 OR pending_inspection>0 OR pending_inbound>0 OR temporary_inbound>0) LIMIT 1', (product_id,))
                 if cur.fetchone():
                     has_related_orders = True
                 if has_related_orders:

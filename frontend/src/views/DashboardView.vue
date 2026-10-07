@@ -292,6 +292,7 @@
                 number(stylePerformance.summary?.pendingInbound)
               }}</strong>
             </div>
+            <div><span>临时待入库</span><strong>{{ number(stylePerformance.summary?.temporaryInbound) }}</strong></div>
           </div>
           <ElEmpty
             v-if="!stylePerformance.items.length"
@@ -616,6 +617,7 @@
         <div>
           <span>零库存尺码</span><strong>{{ data.snapshot.empty }}</strong>
         </div>
+        <div><span>临时待入库</span><strong>{{ number(data.snapshot.temporaryInbound) }}</strong></div>
       </div>
     </section>
     <section class="panel">
@@ -711,6 +713,7 @@ const inventoryMetrics = [
   { key: "contractPending", label: "合同未送" },
   { key: "pendingInspection", label: "待验货" },
   { key: "pendingInbound", label: "待入库" },
+  { key: "temporaryInbound", label: "临时待入库" },
 ];
 const appliedRange = computed(
   () =>
