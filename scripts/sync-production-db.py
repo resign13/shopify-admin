@@ -131,7 +131,10 @@ def run_sync():
             with psycopg.connect(**config, dbname=stage) as staged:
                 staged.execute(sql, prepare=False)
                 actual = fingerprint(staged)
-                if actual != payload['tables']: raise RuntimeError('Restored snapshot fingerprint mismatch')
+                if actual != payload['tables']:
+                    mismatches = {table:{'expected':payload['tables'].get(table),'actual':actual.get(table)} for table in set(actual)|set(payload['tables']) if actual.get(table)!=payload['tables'].get(table)}
+                    (folder / 'fingerprint-mismatch.json').write_text(json.dumps(mismatches,indent=2),encoding='utf-8')
+                    raise RuntimeError('Restored snapshot fingerprint mismatch: '+json.dumps(mismatches))
                 # Production sessions stay production-only; business records stay intact.
                 for table in ('admin_sessions', 'store_sessions'):
                     if table in actual: staged.execute(SQL('DELETE FROM {}').format(Identifier(table)))
