@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import secrets
 import sys
 import mimetypes
+import unicodedata
 from base64 import b64encode
 from io import BytesIO
 from datetime import UTC, datetime, timedelta
@@ -525,6 +526,7 @@ def estimate_text_row_height(
     min_height: float = 24.0,
     line_height: float = 18.0,
     max_height: float = 120.0,
+    wide_characters: bool = False,
 ) -> float:
     text = str(value or "").strip()
     if not text:
@@ -536,7 +538,8 @@ def estimate_text_row_height(
         if not line:
             visual_lines += 1
             continue
-        visual_lines += max(1, (len(line) + line_width - 1) // line_width)
+        length = sum(2 if unicodedata.east_asian_width(char) in {'W', 'F'} else 1 for char in line) if wide_characters else len(line)
+        visual_lines += max(1, (length + line_width - 1) // line_width)
 
     return min(max_height, max(min_height, visual_lines * line_height))
 
@@ -778,17 +781,55 @@ def reset_invoice_summary_merges(
         worksheet.merge_cells(start_row=row, start_column=3, end_row=row, end_column=4)
 
 
+def invoice_body_font(worksheet: Any, *, bold: bool = False) -> Font:
+    """Use the template's address typography for readable invoice notes."""
+    font = copy(worksheet['A2'].font)
+    font.name = 'Arial'
+    font.size = float(font.size or 11)
+    font.bold = bold
+    return font
+
+
 def rebuild_invoice_fixed_footer(worksheet: Any, *, footer_start_row: int) -> None:
     """Recreate the template footer after dynamic item rows."""
     remarks_row = footer_start_row
     packing_row = footer_start_row + 1
     partial_row = footer_start_row + 2
-    shipment_row = footer_start_row + 3
-    payment_row = footer_start_row + 4
-    bank_title_row = footer_start_row + 5
-    bank_row = footer_start_row + 6
-    seller_name_row = footer_start_row + 9
-    seller_label_row = footer_start_row + 10
+    transhipment_row = footer_start_row + 3
+    partial_text = str(worksheet[f'A{partial_row}'].value or '').strip()
+    partial_parts = re.split(r'\s*(?=3\.\s*Transhipment\s*:)', partial_text, maxsplit=1, flags=re.IGNORECASE)
+    standalone_transhipment = re.match(r'3\.', str(worksheet[f'A{transhipment_row}'].value or '').strip())
+    if not standalone_transhipment:
+        insert_invoice_rows(worksheet, transhipment_row, 1)
+    shipment_row = footer_start_row + 4
+    payment_row = footer_start_row + 5
+    bank_title_row = footer_start_row + 6
+    bank_row = footer_start_row + 7
+    seller_name_row = footer_start_row + 10
+    seller_label_row = footer_start_row + 11
+
+    # Capture all template content before unmerging/rebuilding the layout. This
+    # preserves customized terms, banking instructions and buyer formulas.
+    term_values = {
+        remarks_row: worksheet[f'A{remarks_row}'].value or 'REMARKS:',
+        packing_row: worksheet[f'A{packing_row}'].value or '1. Packing: Single package in Carton',
+        partial_row: partial_parts[0] or '2.Partial shipments: ALLOWED',
+        transhipment_row: (worksheet[f'A{transhipment_row}'].value if standalone_transhipment else
+                          partial_parts[1] if len(partial_parts) > 1 else '3.Transhipment: ALLOWED'),
+        shipment_row: worksheet[f'A{shipment_row}'].value or '4.Time of shipment: In  Jun. 2026',
+        payment_row: worksheet[f'A{payment_row}'].value or '5. Terms of payment: 100% payment for T/T sample.',
+        bank_title_row: worksheet[f'A{bank_title_row}'].value or '6.Beneficiary bank information:',
+    }
+    bank_text = worksheet[f'A{bank_row}'].value
+    seller_name = worksheet[f'A{seller_name_row}'].value or worksheet[f'B{seller_name_row}'].value or 'QUANZHOU CHENSHENG Trading Co., Ltd.'
+    buyer_name = worksheet[f'G{seller_name_row}'].value or worksheet[f'I{seller_name_row}'].value or '=B6'
+    seller_label = worksheet[f'A{seller_label_row}'].value or worksheet[f'B{seller_label_row}'].value or 'SELLER'
+    buyer_label = worksheet[f'G{seller_label_row}'].value or worksheet[f'I{seller_label_row}'].value or 'BUYER'
+    signature_borders = {
+        'A': copy(worksheet[f'A{seller_name_row}'].border),
+        'G': copy(worksheet[f'G{seller_name_row}'].border if worksheet[f'G{seller_name_row}'].border.bottom.style
+                  else worksheet[f'I{seller_name_row}'].border),
+    }
 
     for merged_range in list(worksheet.merged_cells.ranges):
         overlaps_footer = not (merged_range.max_row < remarks_row or merged_range.min_row > seller_label_row)
@@ -796,54 +837,46 @@ def rebuild_invoice_fixed_footer(worksheet: Any, *, footer_start_row: int) -> No
         if overlaps_footer and overlaps_table_columns:
             worksheet.unmerge_cells(str(merged_range))
 
-    worksheet.merge_cells(start_row=bank_row, start_column=1, end_row=bank_row, end_column=10)
-    worksheet.merge_cells(start_row=seller_name_row, start_column=9, end_row=seller_name_row, end_column=10)
-    worksheet.merge_cells(start_row=seller_label_row, start_column=9, end_row=seller_label_row, end_column=10)
+    for row in range(remarks_row, seller_label_row + 1):
+        for column in range(1, 11):
+            worksheet.cell(row, column).value = None
 
-    # Values are normally shifted from the template by insert_rows(); keep those
-    # exact template strings.  The fallback values only protect a damaged/empty
-    # template, while the row heights/merges below fix the squeezed layout.
-    fallback_values = {
-        remarks_row: "REMARKS:",
-        packing_row: "1. Packing: Single package in Carton",
-        partial_row: "2.Partial shipments: ALLOWED       3.Transhipment: ALLOWED",
-        shipment_row: "4.Time of shipment: In  Jun. 2026",
-        payment_row: "5. Terms of payment: 100% payment for T/T sample.",
-        bank_title_row: "6.Beneficiary bank information:",
-    }
+    for row, value in term_values.items():
+        worksheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=10)
+        cell = worksheet[f'A{row}']
+        cell.value = re.sub(r'[\r\n]+', ' ', str(value)).strip()
+        cell.font = invoice_body_font(worksheet, bold=row == remarks_row)
+        cell.alignment = Alignment(horizontal='left', vertical='center', wrap_text=False)
 
-    for row, value in fallback_values.items():
-        if worksheet[f"A{row}"].value in (None, ""):
-            worksheet[f"A{row}"] = value
-        worksheet[f"A{row}"].font = Font(name="Arial", size=8, bold=True)
-        worksheet[f"A{row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
-
-    if worksheet[f"B{seller_name_row}"].value in (None, ""):
-        worksheet[f"B{seller_name_row}"] = "QUANZHOU CHENSHENG Trading Co., Ltd."
-    if worksheet[f"I{seller_name_row}"].value in (None, ""):
-        worksheet[f"I{seller_name_row}"] = "=B6"
-    if worksheet[f"B{seller_label_row}"].value in (None, ""):
-        worksheet[f"B{seller_label_row}"] = "SELLER"
-    if worksheet[f"I{seller_label_row}"].value in (None, ""):
-        worksheet[f"I{seller_label_row}"] = "BUYER"
-    for cell_ref in (f"B{seller_name_row}", f"I{seller_name_row}", f"B{seller_label_row}", f"I{seller_label_row}"):
-        worksheet[cell_ref].font = Font(name="Arial", size=8, bold=True)
-        worksheet[cell_ref].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for row, left, right in [(seller_name_row, seller_name, buyer_name), (seller_label_row, seller_label, buyer_label)]:
+        if row == seller_name_row:
+            for column, border in signature_borders.items():
+                worksheet[f'{column}{row}'].border = border
+        worksheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=5)
+        worksheet.merge_cells(start_row=row, start_column=7, end_row=row, end_column=10)
+        for column, value in [('A', left), ('G', right)]:
+            cell = worksheet[f'{column}{row}']
+            cell.value = value
+            cell.font = invoice_body_font(worksheet, bold=row == seller_label_row)
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=False)
 
     for row in range(remarks_row, bank_title_row + 1):
         worksheet.row_dimensions[row].height = 25
     worksheet.row_dimensions[bank_row].height = 175
-    worksheet.row_dimensions[footer_start_row + 7].height = 15.35
     worksheet.row_dimensions[footer_start_row + 8].height = 15.35
-    worksheet.row_dimensions[seller_name_row].height = 15.35
+    worksheet.row_dimensions[footer_start_row + 9].height = 15.35
+    worksheet.row_dimensions[seller_name_row].height = 25
     worksheet.row_dimensions[seller_label_row].height = 24
 
+    worksheet.merge_cells(start_row=bank_row, start_column=1, end_row=bank_row, end_column=10)
     bank_cell = worksheet[f"A{bank_row}"]
-    bank_cell.font = Font(name="Arial", size=8, bold=True)
+    bank_cell.value = bank_text
+    bank_cell.font = invoice_body_font(worksheet)
     bank_cell.fill = PatternFill(fill_type="solid", fgColor="DDEBF0")
     bank_cell.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     for column in range(1, 11):
         worksheet.cell(bank_row, column).fill = copy(bank_cell.fill)
+    worksheet.print_area = f'A1:J{seller_label_row}'
 
 
 def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
@@ -931,6 +964,8 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         worksheet[f"H{row}"] = f"=SUM(C{row}:G{row})"
         worksheet[f"I{row}"] = float(item.get("unitPrice") or 0)
         worksheet[f"J{row}"] = f"=H{row}*I{row}"
+        worksheet[f"I{row}"].font = copy(worksheet[f"J{row}"].font)
+        worksheet[f"I{row}"].number_format = worksheet[f"J{row}"].number_format
 
         for column, quantity in (item.get("sizes") or {}).items():
             worksheet[f"{column}{row}"] = quantity
@@ -972,20 +1007,24 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     for row in (product_total_row, shipping_row, total_row):
         for column in range(1, 11):
             worksheet.cell(row, column).alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    worksheet[f"C{shipping_row}"].font = Font(name="Arial", size=8, bold=True)
-    worksheet[f"C{shipping_row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    worksheet[f"C{shipping_row}"].font = invoice_body_font(worksheet)
+    worksheet[f"C{shipping_row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
     for cell_ref in (f"J{product_total_row}", f"J{shipping_row}", f"J{total_row}", f"C{deposit_row}", f"C{balance_row}"):
         worksheet[cell_ref].number_format = '$#,##0.00'
 
     # Show order-specific remarks directly below totals, before the fixed terms.
     if has_attachments:
         append_row = remarks_row
+        worksheet.merge_cells(start_row=append_row, start_column=1, end_row=append_row, end_column=10)
         worksheet[f"A{append_row}"] = f"订单备注 / 附件图片（{len(attachment_images)} 张） / ORDER NOTE / ATTACHMENTS"
-        worksheet[f"A{append_row}"].font = Font(bold=True)
+        worksheet[f"A{append_row}"].font = invoice_body_font(worksheet, bold=True)
+        worksheet[f"A{append_row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=False)
+        worksheet.row_dimensions[append_row].height = 25
         worksheet[f"A{append_row + 1}"] = "\n".join(
             [part for part in [f"Note: {note_text}" if note_text else "", "Attachments: " + ", ".join(attachment_files) if attachment_files else ""] if part]
         )
         worksheet[f"A{append_row + 1}"].alignment = Alignment(wrap_text=True, vertical="top")
+        worksheet[f"A{append_row + 1}"].font = invoice_body_font(worksheet)
         worksheet.merge_cells(start_row=append_row + 1, start_column=1, end_row=append_row + 1, end_column=10)
         worksheet.row_dimensions[append_row + 1].height = estimate_text_row_height(
             worksheet[f"A{append_row + 1}"].value,
@@ -993,6 +1032,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
             min_height=26,
             line_height=18,
             max_height=409,
+            wide_characters=True,
         )
 
         from order_matrix_export import add_attachment_strip
