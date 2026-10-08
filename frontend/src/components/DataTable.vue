@@ -20,6 +20,7 @@
   >
   <ElTable
     ref="table"
+    :class="{ 'selection-large': largeSelection }"
     v-loading="loading"
     :data="rows"
     row-key="id"
@@ -38,7 +39,7 @@
       v-if="selectable"
       type="selection"
       :reserve-selection="true"
-      width="40"
+      :width="largeSelection ? 64 : 40"
     />
     <ElTableColumn
       v-for="column in shown"
@@ -81,6 +82,7 @@ const props = defineProps({
   loading: Boolean,
   error: String,
   selectable: Boolean,
+  largeSelection: Boolean,
   expandable: Boolean,
   expandedKeys: Array,
   storageKey: String,
@@ -120,7 +122,7 @@ onBeforeUnmount(() => observer?.disconnect());
 function columnWidth(column) {
   const base = shown.value.reduce((sum, c) => sum + (c.width || 100), 0);
   const width =
-    available.value - (props.selectable ? 40 : 0) - (props.expandable ? 38 : 0);
+    available.value - (props.selectable ? (props.largeSelection ? 64 : 40) : 0) - (props.expandable ? 38 : 0);
   return Math.max(
     52,
     Math.floor((column.width || 100) * Math.min(1, width / base)),
@@ -140,6 +142,36 @@ function persistSettings() {
 watch(visible, persistSettings, { deep: true });
 defineExpose({
   clearSelection: () => table.value?.clearSelection(),
+  selectCurrentPage: () => props.rows.forEach((row) => table.value?.toggleRowSelection(row, true)),
   toggleExpansion: (row) => table.value?.toggleRowExpansion(row),
 });
 </script>
+
+<style scoped>
+.selection-large :deep(.el-table-column--selection .cell) {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0;
+}
+.selection-large :deep(.el-table-column--selection .el-checkbox) {
+  --el-checkbox-input-height: 22px;
+  --el-checkbox-input-width: 22px;
+  width: 44px;
+  height: 44px;
+  margin: 0;
+  justify-content: center;
+}
+.selection-large :deep(.el-table-column--selection .el-checkbox__inner) {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+}
+.selection-large :deep(.el-table-column--selection .el-checkbox__inner::after) {
+  width: 6px;
+  height: 11px;
+}
+.selection-large :deep(.el-table-column--selection .is-indeterminate .el-checkbox__inner::before) {
+  width: 12px;
+}
+</style>

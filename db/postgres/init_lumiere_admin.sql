@@ -131,6 +131,7 @@ CREATE TABLE IF NOT EXISTS product_size_prices (
   stock INTEGER NOT NULL DEFAULT 0,
   contract_pending INTEGER NOT NULL DEFAULT 0 CHECK (contract_pending >= 0),
   temporary_inbound INTEGER NOT NULL DEFAULT 0 CHECK (temporary_inbound >= 0),
+  defective_pending INTEGER NOT NULL DEFAULT 0 CHECK (defective_pending >= 0),
   sort_order INTEGER NOT NULL DEFAULT 0,
   UNIQUE (product_id, size_code)
 );
