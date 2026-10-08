@@ -35,7 +35,7 @@ def public_inventory(value):
         return [public_inventory(v) for v in value]
     if not isinstance(value, dict):
         return value
-    hidden = {'shortageUnits', 'shortageSizeCount', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound'}
+    hidden = {'shortageUnits', 'shortageSizeCount', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending'}
     result = {k: public_inventory(v) for k, v in value.items() if k not in hidden}
     if 'zeroSizes' in result:
         result['zeroSizes'] += int(value.get('shortageSizeCount', 0))
@@ -52,6 +52,17 @@ def migrate(cur):
     cur.execute("SELECT 1 FROM pg_constraint WHERE conrelid='product_size_prices'::regclass AND conname='product_size_prices_temporary_inbound_check'")
     if not cur.fetchone():
         cur.execute('ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_temporary_inbound_check CHECK (temporary_inbound >= 0)')
+    cur.execute('ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS defective_pending INTEGER NOT NULL DEFAULT 0')
+    cur.execute("SELECT 1 FROM pg_constraint WHERE conrelid='product_size_prices'::regclass AND conname='product_size_prices_defective_pending_check'")
+    if not cur.fetchone():
+        cur.execute('ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_defective_pending_check CHECK (defective_pending >= 0)')
+    # A fresh storefront-only schema may not have inspection yet. The admin
+    # migration adds it before this shared migration, then installs the reserve.
+    cur.execute("SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='product_size_prices' AND column_name='pending_inspection'")
+    if cur.fetchone():
+        cur.execute("SELECT 1 FROM pg_constraint WHERE conrelid='product_size_prices'::regclass AND conname='product_size_prices_defective_reservation_check'")
+        if not cur.fetchone():
+            cur.execute('ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_defective_reservation_check CHECK (defective_pending <= pending_inspection)')
     # Remove checks on stock only, retaining price and pipeline constraints.
     cur.execute("""SELECT c.conname,t.relname FROM pg_constraint c
       JOIN pg_class t ON t.oid=c.conrelid JOIN pg_namespace n ON n.oid=t.relnamespace

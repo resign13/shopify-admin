@@ -183,7 +183,9 @@ class TemporaryInboundTest(unittest.TestCase):
         self.assertTrue(self.upload('confirm', raw, preview['fileHash']).json['alreadyProcessed'])
         for version, columns in [('inventory-v3', 16), ('inventory-v2', 14), ('inventory-v1', 12)]:
             def legacy(sheet):
-                sheet.delete_cols(columns + 1, 18 - columns)
+                sheet.delete_cols(columns + 1, sheet.max_column - columns)
+                for column, label in enumerate(application.INVENTORY_HEADER_VERSIONS[version], 1):
+                    sheet.cell(1, column, label)
                 for row in range(2, sheet.max_row + 1): sheet.cell(row, 1, version)
                 sheet['H2'] = int(sheet['H2'].value) + 1
             old = self.workbook(legacy)

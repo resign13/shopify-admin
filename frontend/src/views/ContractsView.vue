@@ -94,7 +94,7 @@
         class="section-gap"
         type="info"
         :closable="false"
-        :title="editingId ? '保存后按本次增减数量同步合同未送；当前库存不变。' : '确认创建后，以下数量将累加到对应商品的合同未送；当前库存和待入库数量保持不变。'"
+        :title="editingId ? '保存后按本次增减数量同步合同未送；当前库存不变。' : '确认创建后，以下数量将累加到对应商品的合同未送；当前库存和合格数量保持不变。'"
       />
     </template>
     <ElAlert

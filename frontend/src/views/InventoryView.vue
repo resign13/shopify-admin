@@ -35,7 +35,10 @@
       ><strong>{{ list.summary.pendingInspection || 0 }}</strong>
     </div>
     <div v-if="canEdit" class="metric">
-      <span>待入库合计</span
+      <span>待打回次品</span><strong>{{ list.summary.defectivePending || 0 }}</strong>
+    </div>
+    <div v-if="canEdit" class="metric">
+      <span>合格合计</span
       ><strong>{{ list.summary.pendingInbound || 0 }}</strong>
     </div>
     <div class="metric">
@@ -65,6 +68,9 @@
     <DataTable
       ref="inventoryTable"
       expandable
+      :selectable="canEdit"
+      large-selection
+      @selection-change="selectedRows = $event"
       :expanded-keys="expandedKeys"
       @expand-change="(_, rows) => (expandedKeys = rows.map((row) => row.id))"
       storage-key="inventory-v2"
@@ -80,7 +86,13 @@
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       ><template #toolbar
-        ><span class="small-note">分类顺序优先，表头排序仅调整同类商品</span><ElButton
+        ><template v-if="canEdit"><span class="small-note">已勾选 {{ selectedRows.length }} 个商品</span>
+          <ElButton :disabled="list.loading || !list.rows.length || receiving || preparingBatch" @click="inventoryTable.selectCurrentPage()">全部勾选</ElButton>
+          <ElButton :disabled="!selectedRows.length || receiving || preparingBatch" @click="clearSelection">清空勾选</ElButton>
+          <ElButton type="primary" :disabled="!selectedRows.length || list.loading || receiving || preparingBatch" @click="prepareSelectedReceipt('normal')">一键入库</ElButton>
+          <ElButton type="danger" :disabled="!selectedRows.length || list.loading || receiving || preparingBatch" @click="prepareSelectedReceipt('defective')">一键打回</ElButton>
+          <ElButton type="success" :disabled="!selectedRows.length || list.loading || receiving || preparingBatch" @click="prepareSelectedReceipt('temporary')">临时入库</ElButton>
+        </template><ElButton
           :disabled="list.loading || !list.rows.length"
           @click="toggleAllSizes"
           >{{ allSizesExpanded ? "一键收起" : "一键展开" }}</ElButton
@@ -128,7 +140,7 @@
                 </div>
                 <div class="stock-line inbound">
                   <span>待验货</span><b>{{ size.pendingInspection || 0 }}</b
-                  ><span>待入库</span><b>{{ size.pendingInbound }}</b>
+                  ></div><div class="stock-line"><span>次品</span><b>{{ size.defectivePending || 0 }}</b></div><div class="stock-line"><span>合格</span><b>{{ size.pendingInbound }}</b>
                 </div><div class="stock-line temporary"><span>临时待入库</span><b>{{ size.temporaryInbound || 0 }}</b></div></template
               >
             </div>
@@ -140,6 +152,7 @@
       ><template #inspection="{ row }">{{
         total(row, "pendingInspection")
       }}</template
+      ><template #defective="{ row }"><ElTag :type="total(row, 'defectivePending') ? 'danger' : 'info'">{{ total(row, "defectivePending") }}</ElTag></template
       ><template #inbound="{ row }"
         ><ElTag :type="total(row, 'pendingInbound') ? 'warning' : 'info'">{{
           total(row, "pendingInbound")
@@ -147,13 +160,6 @@
       ><template #temporary="{ row }"><ElTag :type="total(row, 'temporaryInbound') ? 'success' : 'info'">{{ total(row, 'temporaryInbound') }}</ElTag></template
       ><template #actions="{ row }"
         ><ElButton link type="primary" @click="edit(row)">登记数量</ElButton
-        ><ElButton
-          link
-          type="primary"
-          :disabled="!total(row, 'pendingInbound')"
-          @click="prepareReceipt(row)"
-          >一键入库</ElButton
-        ><ElButton link type="success" :disabled="!total(row, 'temporaryInbound')" @click="prepareReceipt(row, 'temporary')">临时入库</ElButton
         ></template
       ></DataTable
     >
@@ -161,13 +167,13 @@
   <ElDrawer
     v-model="editing"
     title="登记库存与到货进度"
-    size="min(960px, 96vw)"
+    size="min(1140px, 96vw)"
     :before-close="close"
     ><template v-if="product"
       ><h3>{{ productName(product) }}</h3>
       <p class="small-note">{{ product.sku }} · {{ product.colorName }}</p>
       <ElAlert
-        title="增加待验货会等量减少合同未送；增加待入库会等量减少待验货。临时待入库独立登记，两种入库入口仅处理各自数量。"
+        title="增加待验货等量减少合同未送；增加合格等量减少待验货。次品仅暂存并预留待验货，一键打回后减少待验货、增加合同未送；临时待入库独立登记。"
         type="info"
         :closable="false"
       /><ElTable :data="draft"
@@ -204,19 +210,23 @@
         ><ElTableColumn label="待验货" min-width="155"
           ><template #default="{ row }">
             <ElInputNumber
-              v-model="row.pendingInspection"
+              :model-value="row.pendingInspection"
               :min="0"
               :precision="0"
               controls-position="right"
-              @change="(value, old) => moveStage(row, 'inspection', value, old)"
+              @update:model-value="(value) => moveStage(row, 'inspection', value)"
             />
             <small style="display: block">原值 {{ row.originalInspection }} · 变化 {{delta(row.pendingInspection,row.originalInspection)}}</small>
           </template></ElTableColumn
-        ><ElTableColumn label="待入库" min-width="155"
+        ><ElTableColumn label="次品" min-width="155"><template #default="{ row }">
+            <ElInputNumber v-model="row.defectivePending" :min="0" :max="2147483647" :precision="0" controls-position="right" :aria-label="`次品 ${row.sizeCode}`" />
+            <small style="display:block">原值 {{ row.originalDefective }} · 变化 {{ delta(row.defectivePending, row.originalDefective) }}</small>
+          </template></ElTableColumn
+        ><ElTableColumn label="合格" min-width="155"
           ><template #default="{ row }"
             ><ElInputNumber
-              v-model="row.pendingInbound"
-              @change="(value, old) => moveStage(row, 'inbound', value, old)"
+              :model-value="row.pendingInbound"
+              @update:model-value="(value) => moveStage(row, 'inbound', value)"
               :min="0"
               :precision="0"
               controls-position="right"
@@ -226,7 +236,7 @@
             ></template
           ></ElTableColumn
         ><ElTableColumn label="临时待入库" min-width="155"><template #default="{ row }">
-            <ElInputNumber v-model="row.temporaryInbound" :min="0" :max="2147483647" :precision="0" :controls="false" :aria-label="`临时待入库 ${row.sizeCode}`" />
+            <ElInputNumber v-model="row.temporaryInbound" :min="0" :max="2147483647" :precision="0" controls-position="right" :aria-label="`临时待入库 ${row.sizeCode}`" />
             <small style="display:block">原值 {{ row.originalTemporary }} · 变化 {{ delta(row.temporaryInbound, row.originalTemporary) }}</small>
           </template></ElTableColumn
         ></ElTable
@@ -239,7 +249,7 @@
         <h3>线上最新数量</h3>
         <p v-for="s in latest.sizePrices" :key="s.sizeCode">
           {{ inventorySizeLabel(s.sizeCode) }}：库存 {{ s.stock }} / 合同未送
-          {{ s.contractPending }} / 待验货 {{ s.pendingInspection }} / 待入库
+          {{ s.contractPending }} / 待验货 {{ s.pendingInspection }} / 次品 {{ s.defectivePending || 0 }} / 合格
           {{ s.pendingInbound }}
           / 临时待入库 {{ s.temporaryInbound || 0 }}
         </p>
@@ -248,7 +258,7 @@
       <section class="inventory-history">
         <div class="panel-title">
           <strong>登记操作记录</strong>
-          <span class="small-note">每次成功保存记为一次操作 · 最新记录在前 · 每页 10 条</span>
+          <span class="small-note">每次成功保存或打回记为一次操作 · 最新记录在前 · 每页 10 条</span>
         </div>
         <ElAlert v-if="operationHistory.error" :title="operationHistory.error" type="error" :closable="false">
           <ElButton link type="primary" @click="loadOperations">重新加载记录</ElButton>
@@ -260,6 +270,7 @@
           </template></ElTableColumn>
           <ElTableColumn label="登记数量 / 变化明细" min-width="400"><template #default="{ row }">
             <div v-for="change in row.changes" :key="change.sizeCode" class="history-size">
+              <ElTag v-if="change.operation === 'defective_return'" type="danger">次品打回</ElTag>
               <strong>{{ inventorySizeLabel(change.sizeCode) }}</strong>
               <span v-for="field in change.fields" :key="field.field" class="history-field">
                 {{ inventoryFieldLabels[field.field] || field.field }} {{ field.before }} → {{ field.after }}
@@ -323,7 +334,7 @@
         ><ElRadioButton value="stock">库存变化</ElRadioButton
         ><ElRadioButton value="pending">合同未送变化</ElRadioButton
         ><ElRadioButton value="inspection">待验货变化</ElRadioButton
-        ><ElRadioButton value="inbound">待入库变化</ElRadioButton
+        ><ElRadioButton value="inbound">合格变化</ElRadioButton
         ><ElRadioButton value="temporary">临时待入库变化</ElRadioButton
         ><ElRadioButton value="errors">错误</ElRadioButton></ElRadioGroup
       ><ElTable
@@ -367,7 +378,7 @@
               >{{ row.originalPendingInspection }} →
               {{ row.pendingInspection }}</template
             ></ElTableColumn
-          ><ElTableColumn label="待入库"
+          ><ElTableColumn label="合格"
             ><template #default="{ row }"
               ><span :class="{ positive: row.pendingInboundChanged }"
                 >{{ row.originalPendingInbound ?? "保持" }} →
@@ -403,42 +414,45 @@
   >
   <ElDialog
     v-model="receiptOpen"
-    :title="receiptSource === 'temporary' ? '确认临时入库' : '确认一键入库'"
-    width="680px"
+    :title="receiptTitle"
+    width="860px"
     :close-on-click-modal="false"
     :before-close="closeReceipt"
     ><template v-if="receipt"
       ><p>
-        本次将为 <strong>{{ productName(receipt) }}</strong> 入库
-        <strong>{{ total(receipt, receiptField) }}</strong> 件，来源为<strong>{{ receiptSource === 'temporary' ? '独立临时待入库' : '采购待入库' }}</strong>。
+        本次将为 <strong>{{ productName(receipt) }}</strong> {{ receiptSource === 'defective' ? '打回' : '入库' }}
+        <strong>{{ total(receipt, receiptField) }}</strong> 件，来源为<strong>{{ receiptSource === 'defective' ? '已保存次品' : receiptSource === 'temporary' ? '独立临时待入库' : '采购合格' }}</strong>。
       </p>
+      <p v-if="receiptBatch" class="small-note">已勾选 {{ receiptBatch.selectedProducts }} 个商品，可处理 {{ receiptBatch.processableProducts }} 个，无数量 {{ receiptBatch.selectedProducts - receiptBatch.processableProducts }} 个将跳过。全部勾选仅选当前页；本次仅执行预览中的所选商品。</p>
       <ElAlert
-        :title="receiptSource === 'temporary' ? '现货增加、临时待入库清零；合同未送、待验货和采购待入库保持不变，各尺码整笔提交。' : '现货增加、采购待入库清零；合同未送、待验货和临时待入库保持不变，各尺码整笔提交。'"
+        :title="receiptExplanation"
         type="info"
-        :closable="false" /><ElTable
+        :closable="false" /><ElAlert v-if="receiptBatch" title="全部所选商品在同一事务中提交；版本冲突或任一商品处理失败，整批不生效。" type="info" :closable="false"/><ElTable
         :data="receipt.sizePrices.filter((s) => s[receiptField] > 0)"
-        ><ElTableColumn
+        ><ElTableColumn v-if="receiptBatch" prop="sku" label="颜色 SKU" min-width="140"/><ElTableColumn
           prop="sizeCode"
           :formatter="(row) => inventorySizeLabel(row.sizeCode)"
           label="尺码"
         /><ElTableColumn
           :prop="receiptField"
-          label="本次入库"
+          :label="receiptSource === 'defective' ? '本次打回' : '本次入库'"
           align="right"
         /><ElTableColumn label="现货"
           ><template #default="{ row }"
-            >{{ row.stock }} → {{ row.stock + row[receiptField] }}</template
+            >{{ row.stock }} → {{ receiptSource === 'defective' ? row.stock : row.stock + row[receiptField] }}</template
           ></ElTableColumn
         ><ElTableColumn label="合同未送"
           ><template #default="{ row }"
-            >{{ row.contractPending }} → {{ row.contractPending }}</template
+            >{{ row.contractPending }} → {{ receiptSource === 'defective' ? defectiveReturnPreview(row).contractAfter : row.contractPending }}</template
           ></ElTableColumn
+        ><ElTableColumn v-if="receiptSource === 'defective'" label="待验货"><template #default="{ row }">{{ row.pendingInspection }} → {{ defectiveReturnPreview(row).inspectionAfter }}</template></ElTableColumn
+        ><ElTableColumn v-if="receiptSource === 'defective'" label="次品"><template #default="{ row }">{{ row.defectivePending }} → 0</template></ElTableColumn
         ></ElTable
       ><ElAlert
         v-if="receiptError"
         :title="receiptError"
         type="error"
-        :closable="false" /><ElButton v-if="receiptConflict" link type="primary" @click="prepareReceipt(receipt, receiptSource)">读取最新数量并重新确认</ElButton></template
+        :closable="false" /><ElButton v-if="receiptConflict" link type="primary" @click="receiptBatch ? prepareSelectedReceipt(receiptSource, receiptBatch.items.map(p => p.id)) : prepareReceipt(receipt, receiptSource)">读取最新数量并重新确认</ElButton></template
     ><template #footer
       ><ElButton :disabled="receiving" @click="receiptOpen = false"
         >取消</ElButton
@@ -447,14 +461,15 @@
         :loading="receiving"
         :disabled="!receipt || !total(receipt, receiptField) || receiptConflict"
         @click="receive"
-        >确认入库</ElButton
+        >{{ receiptSource === 'defective' ? '确认打回' : '确认入库' }}</ElButton
       ></template
     ></ElDialog
   >
 </template>
 <script setup>
-import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { inventorySizeLabel } from "../utils/inventorySizes";
+import { registrationError, moveProcurementStage, defectiveReturnPreview } from "../utils/inventoryStages";
 import { sortProductsByCategory } from "../utils/catalogOrder";
 import { ElMessage } from "element-plus";
 import { useAdminAuthStore } from "../stores/auth";
@@ -485,6 +500,12 @@ const auth = useAdminAuthStore(),
   });
 const orderedRows = computed(() => sortProductsByCategory(list.rows || [], categories.value));
 const inventoryTable = ref();
+const selectedRows = ref([]);
+function clearSelection() {
+  selectedRows.value = [];
+  inventoryTable.value?.clearSelection();
+}
+watch(() => [list.query.keyword, list.query.category, list.query.stock], clearSelection);
 const expandedKeys = ref([]);
 const allSizesExpanded = computed(
   () =>
@@ -519,9 +540,10 @@ const columns = computed(() => [
         { prop: "shortageUnits", label: "欠货件数", width: 100, numeric: true },
         { prop: "pending", label: "合同未送", width: 100, numeric: true },
         { prop: "inspection", label: "待验货", width: 100, numeric: true },
-        { prop: "inbound", label: "待入库", width: 100, numeric: true },
+        { prop: "defective", label: "次品", width: 100, numeric: true, defaultVisible: true },
+        { prop: "inbound", label: "合格", width: 100, numeric: true },
         { prop: "temporary", label: "临时待入库", width: 110, numeric: true, defaultVisible: true },
-        { prop: "actions", label: "操作", width: 250 },
+        { prop: "actions", label: "操作", width: 110 },
       ]
     : []),
 ]);
@@ -535,7 +557,7 @@ const editing = ref(false),
   input = ref(),
   exporting = ref(false);
 const { dirty, markClean, canLeave } = useDirty(() => draft.value);
-const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '待入库', temporaryInbound: '临时待入库' };
+const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '合格', defectivePending: '次品', temporaryInbound: '临时待入库' };
 const operationHistory = reactive({ items: [], total: 0, page: 1, loading: false, error: '' });
 let operationController, operationSerial = 0;
 async function loadOperations() {
@@ -578,6 +600,8 @@ function populate(item) {
     originalPending: s.contractPending,
     originalInbound: s.pendingInbound,
     originalInspection: s.pendingInspection || 0,
+    defectivePending: s.defectivePending || 0,
+    originalDefective: s.defectivePending || 0,
     temporaryInbound: s.temporaryInbound || 0,
     originalTemporary: s.temporaryInbound || 0,
   }));
@@ -612,38 +636,33 @@ async function reset() {
     list.apply(filters);
   }
 }
-function moveStage(row, stage, value, old) {
-  if (!Number.isInteger(value) || !Number.isInteger(old)) return;
-  const delta = value - old;
-  const source =
-    stage === "inspection" ? "contractPending" : "pendingInspection";
-  if (row[source] - delta < 0) {
-    row[stage === "inspection" ? "pendingInspection" : "pendingInbound"] = old;
-    error.value = "本次转移超过上一阶段可用数量";
+async function moveStage(row, stage, value) {
+  const target = stage === "inspection" ? "pendingInspection" : "pendingInbound";
+  const source = stage === "inspection" ? "contractPending" : "pendingInspection";
+  const old = row[target];
+  // InputNumber updates the model while typing, before its change event. Use
+  // the last accepted model value, not the component's potentially stale value.
+  if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
+    error.value = "阶段数量须为范围内的非负整数";
     return;
   }
-  row[source] -= delta;
-  error.value = "";
+  if (value === old) return;
+  const candidate = { ...row, [target]: value };
+  const message = moveProcurementStage(candidate, stage, value, old);
+  row[target] = value;
+  if (message) {
+    // Flush the attempted value so reverting also resets the input display.
+    await nextTick();
+    row[target] = old;
+  } else {
+    row[source] = candidate[source];
+  }
+  error.value = message;
 }
 async function submit() {
   if (saving.value) return;
-  if (
-    draft.value.some(
-      (s) =>
-        !Number.isInteger(s.stock) ||
-        s.stock < -2147483648 || s.stock > 2147483647 ||
-        !Number.isInteger(s.contractPending) ||
-        s.contractPending < 0 ||
-        !Number.isInteger(s.pendingInbound) ||
-        s.pendingInbound < 0 ||
-        !Number.isInteger(s.pendingInspection) ||
-        s.pendingInspection < 0 ||
-        !Number.isInteger(s.temporaryInbound) || s.temporaryInbound < 0 || s.temporaryInbound > 2147483647,
-    )
-  ) {
-    error.value = "现货须为范围内的整数，其他阶段须为非负整数，转移数量不能超过上一阶段";
-    return;
-  }
+  error.value = registrationError(draft.value);
+  if (error.value) return;
   saving.value = true;
   error.value = "";
   try {
@@ -669,6 +688,7 @@ async function submit() {
           .filter((s) => s.pendingInbound !== s.originalInbound)
           .map((s) => [s.sizeCode, s.pendingInbound]),
       ),
+      defectivePendingBySize: Object.fromEntries(draft.value.filter((s) => s.defectivePending !== s.originalDefective).map((s) => [s.sizeCode, s.defectivePending])),
       temporaryInboundBySize: Object.fromEntries(draft.value.filter((s) => s.temporaryInbound !== s.originalTemporary).map((s) => [s.sizeCode, s.temporaryInbound])),
     });
     markClean();
@@ -796,15 +816,28 @@ function closeImport(done) {
   if (typeof done === "function") done();
 }
 const receipt = ref(),
+  receiptBatch = ref(null),
+  preparingBatch = ref(false),
   receiptOpen = ref(false),
   receiving = ref(false),
   receiptError = ref(""),
   receiptRequest = ref(""),
   receiptSource = ref('normal'),
   receiptConflict = ref(false);
-const receiptField = computed(() => receiptSource.value === 'temporary' ? 'temporaryInbound' : 'pendingInbound');
+const receiptField = computed(() => receiptSource.value === 'defective' ? 'defectivePending' : receiptSource.value === 'temporary' ? 'temporaryInbound' : 'pendingInbound');
+const receiptTitle = computed(() => (receiptBatch.value ? '批量' : '') + (receiptSource.value === 'defective' ? '确认次品一键打回' : receiptSource.value === 'temporary' ? '确认临时入库' : '确认一键入库'));
+const receiptExplanation = computed(() => receiptSource.value === 'defective'
+  ? '仅处理已保存次品：等量减少待验货、增加合同未送并清零次品。现货、合格和临时待入库不变；打回不做反向撤销，各尺码整笔提交。'
+  : receiptSource.value === 'temporary' ? '现货增加、临时待入库清零；合同未送、待验货、次品和合格保持不变，各尺码整笔提交。' : '现货增加、合格清零；合同未送、待验货、次品和临时待入库保持不变，各尺码整笔提交。');
 async function prepareReceipt(row, source = 'normal') {
+  if (receiving.value || saving.value) return;
+  if (editing.value) {
+    if (!(await canLeave())) return;
+    markClean();
+    editing.value = false;
+  }
   try {
+    receiptBatch.value = null;
     receipt.value = (await api(`inventory/${row.id}`)).product;
     receiptSource.value = source;
     receiptConflict.value = false;
@@ -818,20 +851,48 @@ async function prepareReceipt(row, source = 'normal') {
 function closeReceipt(done) {
   if (!receiving.value) done();
 }
+async function prepareSelectedReceipt(source, ids = selectedRows.value.map(p => p.id)) {
+  if (receiving.value || saving.value || preparingBatch.value || !ids.length) return;
+  if (editing.value) {
+    if (!(await canLeave())) return;
+    markClean();
+    editing.value = false;
+  }
+  preparingBatch.value = true;
+  try {
+    const preview = await api(`inventory/batch/preview?${new URLSearchParams({ ids: ids.join(','), source })}`);
+    const field = source === 'defective' ? 'defectivePending' : source === 'temporary' ? 'temporaryInbound' : 'pendingInbound';
+    receiptBatch.value = preview;
+    receipt.value = {
+      name: { zh: `${preview.selectedProducts} 个已勾选商品` },
+      sizePrices: preview.items.flatMap(p => p.sizePrices.filter(s => s[field] > 0).map(s => ({ ...s, sku: p.sku, productId: p.id }))),
+    };
+    receiptSource.value = source;
+    receiptRequest.value = crypto.randomUUID();
+    receiptConflict.value = false;
+    receiptError.value = preview.units ? '' : '所选商品没有已保存的可处理数量';
+    receiptOpen.value = true;
+  } catch (e) {
+    notifyError(e);
+  } finally {
+    preparingBatch.value = false;
+  }
+}
 async function receive() {
   if (receiving.value) return;
   receiving.value = true;
   receiptError.value = "";
   try {
     const result = await save(
-      `inventory/${receipt.value.id}/${receiptSource.value === 'temporary' ? 'temporary/' : ''}receive`,
-      { version: receipt.value.version, requestId: receiptRequest.value },
+      `inventory/${receiptBatch.value ? 'batch' : receipt.value.id}/${receiptSource.value === 'defective' ? 'defective/return' : receiptSource.value === 'temporary' ? 'temporary/receive' : 'receive'}`,
+      receiptBatch.value ? { items: receiptBatch.value.items.map(p => ({ productId: p.id, version: p.version })), requestId: receiptRequest.value } : { version: receipt.value.version, requestId: receiptRequest.value },
       "POST",
     );
     receiptOpen.value = false;
     ElMessage.success(
-      `入库完成：${result.receivedSizes} 个尺码，共 ${result.receivedUnits} 件`,
+      receiptBatch.value ? `${receiptSource.value === 'defective' ? '打回' : '入库'}完成：${result.processedProducts} 个商品，共 ${result.units} 件，跳过 ${result.skippedProductIds.length} 个无数量商品` : receiptSource.value === 'defective' ? `打回完成：${result.returnedSizes} 个尺码，共 ${result.returnedUnits} 件` : `入库完成：${result.receivedSizes} 个尺码，共 ${result.receivedUnits} 件`,
     );
+    if (receiptBatch.value) clearSelection();
     list.load();
   } catch (e) {
     receiptError.value = e.message;

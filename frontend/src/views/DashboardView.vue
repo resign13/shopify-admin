@@ -294,11 +294,12 @@
               }}</strong>
             </div>
             <div v-if="!personalScope">
-              <span>待入库</span
+              <span>合格</span
               ><strong>{{
                 number(stylePerformance.summary?.pendingInbound)
               }}</strong>
             </div>
+            <div v-if="!personalScope"><span>待打回次品</span><strong>{{ number(stylePerformance.summary?.defectivePending) }}</strong></div>
             <div v-if="!personalScope"><span>临时待入库</span><strong>{{ number(stylePerformance.summary?.temporaryInbound) }}</strong></div>
           </div>
           <ElEmpty
@@ -618,12 +619,13 @@
           }}</strong>
         </div>
         <div>
-          <span>待入库</span
+          <span>合格</span
           ><strong>{{ (data.snapshot.inbound || 0).toLocaleString() }}</strong>
         </div>
         <div>
           <span>零库存尺码</span><strong>{{ data.snapshot.empty }}</strong>
         </div>
+        <div v-if="!personalScope"><span>待打回次品</span><strong>{{ number(data.snapshot.defectivePending) }}</strong></div>
         <div v-if="!personalScope"><span>临时待入库</span><strong>{{ number(data.snapshot.temporaryInbound) }}</strong></div>
       </div>
     </section>
@@ -725,7 +727,8 @@ const allInventoryMetrics = [
   { key: "shortageUnits", label: "欠货件数" },
   { key: "contractPending", label: "合同未送" },
   { key: "pendingInspection", label: "待验货" },
-  { key: "pendingInbound", label: "待入库" },
+  { key: "defectivePending", label: "次品" },
+  { key: "pendingInbound", label: "合格" },
   { key: "temporaryInbound", label: "临时待入库" },
 ];
 const inventoryMetrics = computed(() => personalScope.value ? [] : allInventoryMetrics);

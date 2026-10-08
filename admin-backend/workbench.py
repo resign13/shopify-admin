@@ -47,7 +47,7 @@ def _dashboard_window(args, default_days: int = 30):
 
 def _style_catalog_parts(args, style_code: str | None = None):
     style_sql = _style_code_sql('p')
-    where, params = ['(p.is_active = TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0)))'], []
+    where, params = ['(p.is_active = TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))'], []
     if args.get('style') not in {None, '', 'all'}:
         where.append(f"({style_sql}=%s OR COALESCE(NULLIF(p.product_code,''),p.sku)=%s)")
         params.extend([args['style']] * 2)
@@ -108,7 +108,7 @@ def _style_sales_join(args, start: date, end: date, *, days: int | None = None):
 def _style_row(row):
     result = dict(row)
     for key in ('units', 'velocityUnits', 'orders', 'customers', 'stock', 'contractPending',
-                'pendingInspection', 'pendingInbound', 'temporaryInbound', 'colorSkuCount', 'sizeCount', 'emptySizeCount', 'availableStock', 'shortageUnits', 'shortageSizeCount'):
+                'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending', 'colorSkuCount', 'sizeCount', 'emptySizeCount', 'availableStock', 'shortageUnits', 'shortageSizeCount'):
         if key in result:
             result[key] = int(result[key] or 0)
     for key in ('amount', 'averageDailyUnits'):
@@ -155,7 +155,8 @@ def style_performance(args):
                COALESCE(SUM(psp.contract_pending),0) AS contract_pending,
                COALESCE(SUM(psp.pending_inspection),0) AS pending_inspection,
                COALESCE(SUM(psp.pending_inbound),0) AS pending_inbound,
-               COALESCE(SUM(psp.temporary_inbound),0) AS temporary_inbound
+               COALESCE(SUM(psp.temporary_inbound),0) AS temporary_inbound,
+               COALESCE(SUM(psp.defective_pending),0) AS defective_pending
         FROM product_catalog pc
         LEFT JOIN product_size_prices psp ON psp.product_id=pc.id
         GROUP BY pc.style_code
@@ -180,7 +181,7 @@ def style_performance(args):
       ),
       metrics AS (
         SELECT c.style_code, c.name, c.color_sku_count, c.size_count, c.empty_size_count,
-               c.stock, c.available_stock, c.shortage_units, c.shortage_size_count, c.contract_pending, c.pending_inspection, c.pending_inbound, c.temporary_inbound,
+               c.stock, c.available_stock, c.shortage_units, c.shortage_size_count, c.contract_pending, c.pending_inspection, c.pending_inbound, c.temporary_inbound, c.defective_pending,
                COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount,
                COALESCE(w.orders,0) AS orders, COALESCE(w.customers,0) AS customers,
                COALESCE(v.units,0) AS velocity_units, w.last_sold_at,
@@ -194,7 +195,7 @@ def style_performance(args):
       SELECT style_code AS "styleCode", name, units, amount, orders, customers,
              velocity_units AS "velocityUnits", average_daily_units AS "averageDailyUnits",
              estimated_days AS "estimatedDays", stock, available_stock AS "availableStock", shortage_units AS "shortageUnits", shortage_size_count AS "shortageSizeCount", contract_pending AS "contractPending",
-             pending_inspection AS "pendingInspection", pending_inbound AS "pendingInbound", temporary_inbound AS "temporaryInbound",
+             pending_inspection AS "pendingInspection", pending_inbound AS "pendingInbound", temporary_inbound AS "temporaryInbound", defective_pending AS "defectivePending",
              color_sku_count AS "colorSkuCount", size_count AS "sizeCount",
              empty_size_count AS "emptySizeCount", last_sold_at AS "lastSoldAt",
              CASE WHEN shortage_units>0 THEN 'backordered'
@@ -218,7 +219,7 @@ def style_performance(args):
         f"SELECT COUNT(*) AS total, COALESCE(SUM(units),0) AS units, COALESCE(SUM(amount),0) AS amount, "
         f'COALESCE(SUM("availableStock"),0) AS available_stock, COALESCE(SUM("shortageUnits"),0) AS shortage_units, COALESCE(SUM("shortageSizeCount"),0) AS shortage_size_count, COALESCE(SUM(stock),0) AS stock, COALESCE(SUM("contractPending"),0) AS contract_pending, '
         f'COALESCE(SUM("pendingInspection"),0) AS pending_inspection, '
-        f'COALESCE(SUM("pendingInbound"),0) AS pending_inbound, COALESCE(SUM("temporaryInbound"),0) AS temporary_inbound FROM ({metrics_sql}) q{risk_filter}',
+        f'COALESCE(SUM("pendingInbound"),0) AS pending_inbound, COALESCE(SUM("temporaryInbound"),0) AS temporary_inbound, COALESCE(SUM("defectivePending"),0) AS defective_pending FROM ({metrics_sql}) q{risk_filter}',
         tuple([*base_params, *risk_params]),
     )
     sort_map = {
@@ -249,6 +250,7 @@ def style_performance(args):
             'pendingInspection': int(summary['pending_inspection'] or 0),
             'pendingInbound': int(summary['pending_inbound'] or 0),
             'temporaryInbound': int(summary['temporary_inbound'] or 0),
+            'defectivePending': int(summary['defective_pending'] or 0),
         },
         'salesWindow': {'dateFrom': start.isoformat(), 'dateTo': end.isoformat(), 'days': span},
         'velocityWindow': {'days': velocity_days, 'dateFrom': (end - timedelta(days=velocity_days - 1)).isoformat(), 'dateTo': end.isoformat()},
@@ -279,7 +281,8 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
                COALESCE(SUM(psp.contract_pending),0) AS contract_pending,
                COALESCE(SUM(psp.pending_inspection),0) AS pending_inspection,
                COALESCE(SUM(psp.pending_inbound),0) AS pending_inbound,
-               COALESCE(SUM(psp.temporary_inbound),0) AS temporary_inbound
+               COALESCE(SUM(psp.temporary_inbound),0) AS temporary_inbound,
+               COALESCE(SUM(psp.defective_pending),0) AS defective_pending
         FROM product_catalog pc
         LEFT JOIN product_size_prices psp ON psp.product_id=pc.id
         {product_filter}
@@ -301,7 +304,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
       SELECT c.id AS "productId", c.product_code AS "productCode", c.sku, c.color_name AS "colorName",
              c.color_hex AS "colorHex", c.main_image_url AS image, c.name, c.size_count AS "sizeCount",
              c.empty_size_count AS "emptySizeCount", c.stock, c.available_stock AS "availableStock", c.shortage_units AS "shortageUnits", c.shortage_size_count AS "shortageSizeCount", c.contract_pending AS "contractPending",
-             c.pending_inspection AS "pendingInspection", c.pending_inbound AS "pendingInbound", c.temporary_inbound AS "temporaryInbound",
+             c.pending_inspection AS "pendingInspection", c.pending_inbound AS "pendingInbound", c.temporary_inbound AS "temporaryInbound", c.defective_pending AS "defectivePending",
              COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount, COALESCE(w.orders,0) AS orders,
              COALESCE(v.units,0) AS "velocityUnits", w.last_sold_at AS "lastSoldAt",
              ROUND(COALESCE(v.units,0)::numeric / %s, 2) AS "averageDailyUnits",
@@ -364,7 +367,7 @@ def _style_size_rows(args, style_code: str, product_id: int | None = None):
       )
       SELECT p.id AS "productId", p.product_code AS "productCode", p.color_name AS "colorName",
              s.size_code AS "sizeCode", s.stock, GREATEST(s.stock,0) AS "availableStock", GREATEST(-s.stock::bigint,0) AS "shortageUnits", (s.stock<0)::int AS "shortageSizeCount", s.contract_pending AS "contractPending",
-             s.pending_inspection AS "pendingInspection", s.pending_inbound AS "pendingInbound", s.temporary_inbound AS "temporaryInbound",
+             s.pending_inspection AS "pendingInspection", s.pending_inbound AS "pendingInbound", s.temporary_inbound AS "temporaryInbound", s.defective_pending AS "defectivePending",
              COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount,
              COALESCE(v.units,0) AS "velocityUnits",
              ROUND(COALESCE(v.units,0)::numeric / %s, 2) AS "averageDailyUnits",
@@ -521,7 +524,7 @@ def atomic_admin_call(func, args, kwargs):
                 conn.execute('SELECT pg_advisory_xact_lock(7192027)')
             if kwargs.get('order_id') and request.path.startswith('/api/admin/orders/'):
                 sales_ownership.assert_access(kwargs['order_id'], lock=True)
-            if not request.path.endswith('/receive'):
+            if not request.path.endswith('/receive') and not (request.path.startswith('/api/admin/inventory/') and request.path.endswith('/defective/return')):
                 check_versions(request.get_json(silent=True) or {})
             response = make_response(func(*args, **kwargs))
             if response.status_code >= 400:
@@ -560,7 +563,7 @@ def paging(args):
 
 
 def product_where(args, include_inactive=False):
-    conditions, params = ['(p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0)))' if include_inactive else 'p.is_active=TRUE'], []
+    conditions, params = ['(p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))' if include_inactive else 'p.is_active=TRUE'], []
     if args.get('category') and args['category'] != 'all':
         conditions.append('pc.category_key=%s'); params.append(args['category'])
     if args.get('keyword'):
@@ -587,7 +590,7 @@ def products_page(args, pending=False):
     where, params = product_where(args, include_inactive=pending)
     base = ' FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE ' + where
     summary = db._fetch_one('SELECT COUNT(*) AS total,COALESCE(SUM(p.stock),0) AS stock,COALESCE(SUM(' + inventory_policy.available_sql('p') + '),0) AS available_stock' + base, tuple(params))
-    sizes = db._fetch_one('SELECT COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS shortage_units,COUNT(*) FILTER(WHERE s.stock<0) AS shortage_sizes,COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inbound),0) AS inbound,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id JOIN product_categories pc ON pc.id=p.category_id WHERE '+where, tuple(params))
+    sizes = db._fetch_one('SELECT COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS shortage_units,COUNT(*) FILTER(WHERE s.stock<0) AS shortage_sizes,COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inbound),0) AS inbound,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COALESCE(SUM(s.defective_pending),0) AS "defectivePending",COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id JOIN product_categories pc ON pc.id=p.category_id WHERE '+where, tuple(params))
     sorts = {'id': 'p.id', 'stock': 'p.stock', 'price': 'p.price', 'updatedAt': 'p.updated_at', 'sku': 'p.sku'}
     # Category priority always precedes LIMIT/OFFSET, even for older cached
     # table sorts. The explicit category mode retains the former intra-category
@@ -612,6 +615,7 @@ def products_page(args, pending=False):
         totals['pendingInbound'] = int(sizes['inbound'])
         totals['pendingInspection'] = int(sizes['inspection'])
         totals['temporaryInbound'] = int(sizes['temporaryInbound'])
+        totals['defectivePending'] = int(sizes['defectivePending'])
     return {'items': items, 'total': summary['total'], 'page': page, 'pageSize': size, 'summary': totals}
 
 
@@ -665,7 +669,7 @@ def receive_inventory(product_id, payload, *, source='normal'):
         if existing['actor_id'] != actor_id or existing['request_hash'] != request_hash:
             raise ValueError('此入库请求编号已用于其他操作')
         return {**existing['result'], 'replayed':True}
-    check_versions(payload)
+    check_versions({'versions': {str(product_id): payload['version']}})
     item = db._fetch_one('SELECT id FROM products WHERE id=%s FOR UPDATE',(product_id,))
     if not item:
         raise ValueError('商品不存在')
@@ -693,10 +697,125 @@ def receive_inventory(product_id, payload, *, source='normal'):
     return result
 
 
-INVENTORY_REGISTRATION_FIELDS = ('stock', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound')
+def return_defective_inventory(product_id, payload):
+    """Saved rejects only: atomically return inspection to contract without stock movement."""
+    request_id = str(uuid.UUID(str(payload.get('requestId', ''))))
+    if not payload.get('version'):
+        raise ValueError('请重新读取商品后再打回')
+    actor_id = g.current_user['id']
+    fingerprint = {'productId': product_id, 'version': payload['version'], 'source': 'defective-return'}
+    request_hash = hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()
+    db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (request_id,))
+    existing = db._fetch_one('SELECT * FROM inventory_receipts WHERE request_id=%s', (request_id,))
+    if existing:
+        if existing['actor_id'] != actor_id or existing['request_hash'] != request_hash:
+            raise ValueError('此请求编号已用于其他操作')
+        return {**existing['result'], 'replayed': True}
+    check_versions({'versions': {str(product_id): payload['version']}})
+    if not db._fetch_one('SELECT id FROM products WHERE id=%s FOR UPDATE', (product_id,)):
+        raise ValueError('商品不存在')
+    rows = db._fetch_all('SELECT size_code,contract_pending,pending_inspection,defective_pending FROM product_size_prices WHERE product_id=%s ORDER BY size_code FOR UPDATE', (product_id,))
+    if not any(row['defective_pending'] for row in rows):
+        raise ValueError('没有待打回的次品')
+    before = db.get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
+    known_sizes = set(before['sizes'])
+    for row in rows:
+        if row['size_code'] not in known_sizes: raise ValueError('次品尺码无效')
+        db.validate_defective_reservation(row['defective_pending'], row['pending_inspection'], row['size_code'])
+        inventory_policy.parse_stock(row['contract_pending'] + row['defective_pending'], '打回后的合同未送')
+    changes = []
+    for row in rows:
+        amount = row['defective_pending']
+        if not amount: continue
+        db._fetch_one('UPDATE product_size_prices SET contract_pending=contract_pending+defective_pending,pending_inspection=pending_inspection-defective_pending,defective_pending=0 WHERE product_id=%s AND size_code=%s RETURNING id', (product_id, row['size_code']))
+        changes.append({'sizeCode': row['size_code'], 'quantity': amount,
+                        'inspectionBefore': row['pending_inspection'], 'inspectionAfter': row['pending_inspection']-amount,
+                        'contractBefore': row['contract_pending'], 'contractAfter': row['contract_pending']+amount,
+                        'defectiveBefore': amount, 'defectiveAfter': 0})
+    db._fetch_one('UPDATE products SET updated_at=clock_timestamp() WHERE id=%s RETURNING id', (product_id,))
+    after = db.get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
+    record_inventory_registration(before, after, operation='defective_return')
+    result = {'returnedUnits': sum(row['quantity'] for row in changes), 'returnedSizes': len(changes),
+              'changes': changes, 'productId': product_id, 'source': 'defective-return'}
+    db._fetch_one('INSERT INTO inventory_receipts(request_id,actor_id,product_id,request_hash,result) VALUES(%s,%s,%s,%s,%s) RETURNING request_id', (request_id, actor_id, product_id, request_hash, Jsonb(result)))
+    return result
 
 
-def record_inventory_registration(before, after):
+INVENTORY_BATCH_SOURCES = {'normal': 'pendingInbound', 'temporary': 'temporaryInbound', 'defective': 'defectivePending'}
+
+
+def inventory_batch_ids(ids):
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 500 or any(type(i) is not int or i <= 0 for i in ids) or len(set(ids)) != len(ids):
+        raise ValueError('请选择 1 至 500 个不重复的商品')
+    return sorted(ids)
+
+
+def inventory_batch_preview(args):
+    source = args.get('source', 'normal')
+    if source not in INVENTORY_BATCH_SOURCES: raise ValueError('库存操作来源无效')
+    try: ids = inventory_batch_ids([int(i) for i in args.get('ids', '').split(',')])
+    except (TypeError, ValueError): raise ValueError('请选择有效且不重复的商品')
+    items = []
+    for product_id in ids:
+        item = product_detail(product_id, pending=True)
+        if item is None: raise ValueError('所选商品已不存在，请刷新后重新勾选')
+        items.append(item)
+    field = INVENTORY_BATCH_SOURCES[source]
+    return {'items': items, 'source': source, 'selectedProducts': len(items),
+            'processableProducts': sum(any(s.get(field, 0) for s in p['sizePrices']) for p in items),
+            'units': sum(s.get(field, 0) for p in items for s in p['sizePrices'])}
+
+
+def process_inventory_batch(payload, *, source):
+    """One selected snapshot, one transaction; receipts and SKU logs roll back together."""
+    if source not in INVENTORY_BATCH_SOURCES: raise ValueError('库存操作来源无效')
+    if not isinstance(payload, dict): raise ValueError('批量操作格式错误')
+    request_id = str(uuid.UUID(str(payload.get('requestId', ''))))
+    items = payload.get('items')
+    if not isinstance(items, list) or any(not isinstance(p, dict) for p in items): raise ValueError('请选择商品')
+    ids = inventory_batch_ids([p.get('productId') for p in items])
+    if any(not isinstance(p.get('version'), str) or not p['version'] for p in items): raise ValueError('请重新预览商品版本')
+    versions = {str(p['productId']): p['version'] for p in items}
+    fingerprint = {'source': 'batch-' + source, 'versions': versions}
+    request_hash = hashlib.sha256(json.dumps(fingerprint, sort_keys=True).encode()).hexdigest()
+    actor_id = g.current_user['id']
+    db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (request_id,))
+    existing = db._fetch_one('SELECT * FROM inventory_receipts WHERE request_id=%s', (request_id,))
+    if existing:
+        if existing['actor_id'] != actor_id or existing['request_hash'] != request_hash:
+            raise ValueError('此批量请求编号已用于其他操作')
+        return {**existing['result'], 'replayed': True}
+    # Lock every child request before products, matching single-SKU receipt order.
+    child_ids = {i: str(uuid.uuid5(uuid.UUID(request_id), f'{source}:{i}')) for i in ids}
+    for child_id in sorted(child_ids.values()):
+        db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', (child_id,))
+    check_versions({'versions': versions})  # sorted product locks, including zero-quantity SKUs
+    results, skipped = [], []
+    field = INVENTORY_BATCH_SOURCES[source]
+    for product_id in ids:
+        product = db.get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
+        if not product: raise ValueError('所选商品不存在')
+        if not any(s.get(field, 0) for s in product['sizePrices']):
+            skipped.append(product_id)
+            continue
+        body = {'version': versions[str(product_id)], 'requestId': child_ids[product_id]}
+        result = return_defective_inventory(product_id, body) if source == 'defective' else receive_inventory(product_id, body, source=source)
+        results.append(result)
+    if not results: raise ValueError('所选商品没有已保存的可处理数量')
+    unit_key = 'returnedUnits' if source == 'defective' else 'receivedUnits'
+    size_key = 'returnedSizes' if source == 'defective' else 'receivedSizes'
+    result = {'source': source, 'selectedProducts': len(ids), 'processedProducts': len(results),
+              'skippedProductIds': skipped, 'units': sum(r[unit_key] for r in results),
+              'sizes': sum(r[size_key] for r in results), 'results': results}
+    db._fetch_one('INSERT INTO inventory_receipts(request_id,actor_id,product_id,request_hash,result) VALUES(%s,%s,%s,%s,%s) RETURNING request_id',
+                  (request_id, actor_id, ids[0], request_hash, Jsonb(result)))
+    return result
+
+
+INVENTORY_REGISTRATION_FIELDS = ('stock', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending')
+
+
+def record_inventory_registration(before, after, *, operation='registration'):
     """One successful registration save, committed atomically with stock and audit."""
     previous = {s['sizeCode']: s for s in before['sizePrices']}
     changes = []
@@ -706,7 +825,10 @@ def record_inventory_registration(before, after):
                    'delta': int(size.get(key) or 0) - int(old.get(key) or 0)}
                   for key in INVENTORY_REGISTRATION_FIELDS
                   if int(old.get(key) or 0) != int(size.get(key) or 0)]
-        if fields: changes.append({'sizeCode': size['sizeCode'], 'fields': fields})
+        if fields:
+            change = {'sizeCode': size['sizeCode'], 'fields': fields}
+            if operation != 'registration': change['operation'] = operation
+            changes.append(change)
     actor = {key: g.current_user.get(key) for key in ('id', 'name', 'role')}
     db._fetch_one('INSERT INTO inventory_registration_logs(product_id,sku,actor,changes) VALUES(%s,%s,%s,%s) RETURNING id',
                   (after['id'], after.get('sku') or '', Jsonb(actor), Jsonb(changes)))
@@ -864,7 +986,7 @@ def dashboard(args):
     countries=db._fetch_all("SELECT COALESCE(NULLIF(o.country,''),'未填写') AS country,COUNT(DISTINCT o.id) AS orders,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY orders DESC,country',tuple(params))
     owner_clause, owner_params = sales_ownership.clause(args.get('_ownerId'))
     global_counts=db._fetch_all('SELECT status,COUNT(*) AS count FROM orders o WHERE '+owner_clause+' GROUP BY status', tuple(owner_params))
-    inventory={} if args.get('_ownerId') is not None else db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0))')
+    inventory={} if args.get('_ownerId') is not None else db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COALESCE(SUM(s.defective_pending),0) AS "defectivePending",COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0))')
     filtered_counts=orders_page({**dict(args),'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'page':1,'pageSize':25})
     return {'metrics':metrics,'previous':previous,'trend':points,
             'topProducts':[{**r,'amount':float(r['amount'])} for r in top],

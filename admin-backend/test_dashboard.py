@@ -140,7 +140,7 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual((last['page'], len(last['items'])), (2, 3))
         self.assertEqual(first['summary'], last['summary'])
         self.assertEqual(first['summary'], {'styleCount': 13, 'units': 6, 'amount': 179.4, 'stock': 156,
-                                           'availableStock': 156, 'shortageUnits': 0, 'shortageSizeCount': 0,
+                                       'availableStock': 156, 'shortageUnits': 0, 'shortageSizeCount': 0, 'defectivePending': 0,
                                            'contractPending': 63, 'pendingInspection': 27, 'pendingInbound': 18, 'temporaryInbound': 0})
         self.assertEqual(len({row['styleCode'] for row in first['items'] + last['items']}), 13)
         empty = self.data(keyword='does-not-exist', page=999)

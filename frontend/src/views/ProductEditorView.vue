@@ -110,7 +110,7 @@
         <section id="sizes" class="panel editor-section">
           <div class="panel-title">
             <h2>真实尺码、价格与库存</h2>
-            <small>合同未送与待入库在库存模块独立登记</small>
+            <small>合同未送与合格在库存模块独立登记</small>
           </div>
           <div class="filters">
             <ElInput
