@@ -3049,6 +3049,15 @@ def order_detail_route(order_id):
     return jsonify({'order': item})
 
 
+@app.get('/api/admin/orders/<int:order_id>/operations')
+@require_auth
+@require_roles('admin', 'sales', 'warehouse')
+def order_operations_route(order_id):
+    import order_operations
+    result = order_operations.page(order_id, request.args, hide_amounts=g.current_user.get('role') == 'warehouse')
+    return jsonify(result) if result is not None else (jsonify({'message': '订单不存在'}), 404)
+
+
 @app.get('/api/admin/audit-logs')
 @require_auth
 @require_roles('admin')
