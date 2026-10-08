@@ -167,16 +167,9 @@
           </p>
           <ElButton @click="useLatest">放弃草稿并使用最新数据</ElButton>
         </div>
-        <RouterLink
-          v-if="auth.can('audit-logs')"
-          :to="{
-            path: '/audit-logs',
-            query: { module: 'orders', objectId: order.id },
-          }"
-          class="small-note"
-          >查看此订单操作日志 →</RouterLink
-        ></template
-      ></template
+        </template
+      ><OrderOperations :order-id="order.id" :open="open" :revision="order.version" />
+      </template
     ><template #footer>
       <ElButton
         v-if="!editing && !warehouseStatusOnly"
@@ -213,9 +206,9 @@
 </template>
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
-import { RouterLink } from "vue-router";
 import { ElMessage } from "element-plus";
 import OrderEditor from "./OrderEditor.vue";
+import OrderOperations from "./OrderOperations.vue";
 import ProductImage from "./ProductImage.vue";
 import { imageUrl } from "../utils/imageUrl";
 import { useAdminAuthStore } from "../stores/auth";

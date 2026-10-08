@@ -433,6 +433,9 @@ def migrate(cur):
         );
         CREATE INDEX IF NOT EXISTS idx_admin_audit_time ON admin_audit_logs (occurred_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_admin_audit_object ON admin_audit_logs (module, object_id);
+        CREATE INDEX IF NOT EXISTS idx_admin_audit_order_operations
+          ON admin_audit_logs (object_id, batch_id, occurred_at DESC, id DESC)
+          WHERE entity_table IN ('orders', 'order_items');
         CREATE INDEX IF NOT EXISTS idx_orders_created_id ON orders (created_at DESC, id DESC);
         CREATE INDEX IF NOT EXISTS idx_products_updated_id ON products (updated_at DESC, id DESC);
         CREATE OR REPLACE FUNCTION capture_admin_audit() RETURNS trigger LANGUAGE plpgsql AS $$
