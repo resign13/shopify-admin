@@ -33,6 +33,8 @@ def allows_request(user, path, method):
         return True
     module = path.split('/')[3]
     operations = {'home-config', 'activity-zone/apply', 'activity-zone/manage'}
+    if module == 'order-notifications':
+        return user.get('role') in {'admin','sales','warehouse'} and 'orders' in granted
     if module == 'salespeople':
         return bool(granted & {'dashboard','orders','store-accounts'})
     if module == 'catalog-options':

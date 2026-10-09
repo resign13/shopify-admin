@@ -15,7 +15,7 @@ import db
 import workbench
 
 
-def seed():
+def _seed():
     with db.get_connection() as conn:
         conn.execute('TRUNCATE inventory_registration_logs,purchase_contracts,admin_order_requests,admin_audit_logs,inventory_receipts,inventory_import_receipts,admin_users,store_users,products,product_categories,orders,homepage_configs,banners RESTART IDENTITY CASCADE')
     tokens={}
@@ -42,6 +42,12 @@ def seed():
         for product,quantity in [(products[0],2),(products[1],1)]:
             db._fetch_one('INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',(order['id'],product['id'],product['name']['zh'],product['sku'],'M',quantity,29.9,round(29.9*quantity,2)))
     return tokens,products
+
+
+def seed():
+    # Historical fixtures do not create live notification events.
+    with patch.dict(os.environ, {'ORDER_NOTIFICATION_MAINTENANCE':'1'}):
+        return _seed()
 
 
 class WorkbenchTest(unittest.TestCase):
