@@ -169,77 +169,89 @@
     title="登记库存与到货进度"
     size="min(1140px, 96vw)"
     :before-close="close"
+    class="inventory-registration"
     ><template v-if="product"
-      ><h3>{{ productName(product) }}</h3>
-      <p class="small-note">{{ product.sku }} · {{ product.colorName }}</p>
-      <ElAlert
-        title="待验货允许按原合同数量累计超量15%（向下取整），合同未送扣至0；超量单独记录，打回不返还额度。增加合格扣待验货；次品预留待验货，打回优先处理超量次品，普通次品返合同；临时待入库独立登记。"
-        type="info"
-        :closable="false"
-      /><ElTable :data="draft"
+      ><div class="registration-product">
+        <ProductImage :src="product.image" :alt="productName(product)" />
+        <div class="registration-product__content">
+          <h3>{{ productName(product) }}</h3>
+          <div class="registration-product__meta"><span class="registration-sku">{{ product.sku }}</span><span>{{ product.colorName }}</span><span>{{ draft.length }} 个尺码</span></div>
+        </div>
+      </div>
+      <div class="registration-guide">
+        <span>填写调整后的数量，<strong>保存后生效</strong>；入库与打回需另行执行。</span>
+        <ElPopover trigger="click" placement="bottom-end" :width="320">
+          <template #reference><ElButton text class="registration-rule-trigger">规则说明 <ElIcon><InfoFilled /></ElIcon></ElButton></template>
+          <div class="registration-rules">
+            <strong>库存登记规则</strong>
+            <ul>
+              <li><b>待验货：</b>增加时先扣合同未送；超量按原合同总数累计 15%，按尺码向下取整。点击尺码下的“验货额度”查看明细。</li>
+              <li><b>次品：</b>仅暂存并预留待验货；打回优先处理超量次品，普通次品返合同，已使用超量额度不返还。</li>
+              <li><b>合格：</b>增加时扣减可转移的待验货；入库时增加现货并清零合格。</li>
+              <li><b>临时待入库：</b>独立登记与入库，不影响采购阶段。</li>
+            </ul>
+          </div>
+        </ElPopover>
+      </div>
+      <ElTable :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
         ><ElTableColumn
           prop="sizeCode"
-          :formatter="(row) => inventorySizeLabel(row.sizeCode)"
           label="真实尺码"
-          width="105"
-        /><ElTableColumn label="现货余额" min-width="155"
+          width="108"
+          fixed="left"
+        ><template #default="{ row }"><div class="registration-size"><strong>{{ inventorySizeLabel(row.sizeCode) }}</strong><InventoryInspectionAllowance :row="row" /></div></template></ElTableColumn
+        ><ElTableColumn label="现货余额" min-width="155" align="center"
           ><template #default="{ row }"
-            ><ElInputNumber
+            ><div class="registration-quantity"><ElInputNumber
               v-model="row.stock"
               :min="-2147483648"
               :max="2147483647"
               :precision="0"
               controls-position="right"
-            /><small style="display: block"
-              >原值 {{ row.originalStock }} · 变化
-              {{ delta(row.stock, row.originalStock) }}</small
-            ></template
+              :aria-label="`现货余额 ${row.sizeCode}`"
+            /><InventoryQuantityChange :value="row.stock" :original="row.originalStock" /></div></template
           ></ElTableColumn
-        ><ElTableColumn label="合同未送" min-width="155"
+        ><ElTableColumn label="合同未送" min-width="155" align="center"
           ><template #default="{ row }"
-            ><ElInputNumber
+            ><div class="registration-quantity"><ElInputNumber
               v-model="row.contractPending"
               :min="0"
               :precision="0"
               controls-position="right"
-            /><small style="display: block"
-              >原值 {{ row.originalPending }} · 变化
-              {{ delta(row.contractPending, row.originalPending) }}</small
-            ></template
+              :aria-label="`合同未送 ${row.sizeCode}`"
+            /><InventoryQuantityChange :value="row.contractPending" :original="row.originalPending" /></div></template
           ></ElTableColumn
-        ><ElTableColumn label="待验货" min-width="155"
-          ><template #default="{ row }">
+        ><ElTableColumn label="待验货" min-width="155" align="center"
+          ><template #default="{ row }"><div class="registration-quantity">
             <ElInputNumber
               :model-value="row.pendingInspection"
               :min="0"
               :precision="0"
               controls-position="right"
+              :aria-label="`待验货 ${row.sizeCode}`"
               @update:model-value="(value) => moveStage(row, 'inspection', value)"
             />
-            <small style="display: block">原值 {{ row.originalInspection }} · 变化 {{delta(row.pendingInspection,row.originalInspection)}}</small>
-            <small class="overdelivery-note">原合同 {{ row.originalContractQuantity || 0 }} · 15%额度 {{ row.overdeliveryLimit || 0 }}<br>累计已用 {{ row.overdeliveryUsed || 0 }} · 剩余 {{ row.overdeliveryRemaining || 0 }}<br>待验货中超量 {{ row.overdeliveryInspection || 0 }}</small>
-          </template></ElTableColumn
-        ><ElTableColumn label="次品" min-width="155"><template #default="{ row }">
+            <InventoryQuantityChange :value="row.pendingInspection" :original="row.originalInspection" />
+          </div></template></ElTableColumn
+        ><ElTableColumn label="次品" min-width="155" align="center"><template #default="{ row }"><div class="registration-quantity">
             <ElInputNumber v-model="row.defectivePending" :min="0" :max="2147483647" :precision="0" controls-position="right" :aria-label="`次品 ${row.sizeCode}`" />
-            <small style="display:block">原值 {{ row.originalDefective }} · 变化 {{ delta(row.defectivePending, row.originalDefective) }}</small>
-          </template></ElTableColumn
-        ><ElTableColumn label="合格" min-width="155"
+            <InventoryQuantityChange :value="row.defectivePending" :original="row.originalDefective" />
+          </div></template></ElTableColumn
+        ><ElTableColumn label="合格" min-width="155" align="center"
           ><template #default="{ row }"
-            ><ElInputNumber
+            ><div class="registration-quantity"><ElInputNumber
               :model-value="row.pendingInbound"
               @update:model-value="(value) => moveStage(row, 'inbound', value)"
               :min="0"
               :precision="0"
               controls-position="right"
-            /><small style="display: block"
-              >原值 {{ row.originalInbound }} · 变化
-              {{ delta(row.pendingInbound, row.originalInbound) }}</small
-            ></template
+              :aria-label="`合格 ${row.sizeCode}`"
+            /><InventoryQuantityChange :value="row.pendingInbound" :original="row.originalInbound" /></div></template
           ></ElTableColumn
-        ><ElTableColumn label="临时待入库" min-width="155"><template #default="{ row }">
+        ><ElTableColumn label="临时待入库" min-width="155" align="center"><template #default="{ row }"><div class="registration-quantity">
             <ElInputNumber v-model="row.temporaryInbound" :min="0" :max="2147483647" :precision="0" controls-position="right" :aria-label="`临时待入库 ${row.sizeCode}`" />
-            <small style="display:block">原值 {{ row.originalTemporary }} · 变化 {{ delta(row.temporaryInbound, row.originalTemporary) }}</small>
-          </template></ElTableColumn
+            <InventoryQuantityChange :value="row.temporaryInbound" :original="row.originalTemporary" />
+          </div></template></ElTableColumn
         ></ElTable
       ><ElAlert v-if="error" :title="error" type="error" :closable="false"
         ><ElButton v-if="conflict" text @click="readLatest"
@@ -284,14 +296,14 @@
         <ElPagination v-model:current-page="operationHistory.page" :page-size="10" :total="operationHistory.total" layout="total,prev,pager,next" class="section-gap" />
       </section></template
     ><template #footer
-      ><ElButton :disabled="saving" @click="close()">取消</ElButton
+      ><div class="registration-footer"><span class="registration-save-note">{{ changedSizeCount ? `已调整 ${changedSizeCount} 个尺码，尚未保存` : '尚未修改数量' }}</span><div class="registration-footer__actions"><ElButton :disabled="saving" @click="close()">取消</ElButton
       ><ElButton
         type="primary"
         :disabled="!dirty"
         :loading="saving"
         @click="submit"
         >保存修改</ElButton
-      ></template
+      ></div></div></template
     ></ElDrawer
   >
   <ElDrawer
@@ -477,6 +489,10 @@ import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
 import ProductImage from "../components/ProductImage.vue";
+import InventoryQuantityChange from "../components/InventoryQuantityChange.vue";
+import InventoryInspectionAllowance from "../components/InventoryInspectionAllowance.vue";
+import { InfoFilled } from "@element-plus/icons-vue";
+import { registrationRowChanged } from "../utils/inventoryRegistrationUI";
 import {
   api,
   save,
@@ -558,6 +574,7 @@ const editing = ref(false),
   input = ref(),
   exporting = ref(false);
 const { dirty, markClean, canLeave } = useDirty(() => draft.value);
+const changedSizeCount = computed(() => draft.value.filter(registrationRowChanged).length);
 const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '合格', defectivePending: '次品', temporaryInbound: '临时待入库', overdeliveryUsed: '累计使用超量额度', overdeliveryInspection: '待验货超量', overdeliveryQualified: '合格超量' };
 const operationHistory = reactive({ items: [], total: 0, page: 1, loading: false, error: '' });
 let operationController, operationSerial = 0;
@@ -914,7 +931,41 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-.overdelivery-note { display: block; margin-top: 4px; color: #64748b; font-size: 12px; line-height: 1.6; }
+.registration-product { display: flex; align-items: center; gap: 14px; padding: 2px 0 20px; }
+.registration-product :deep(img) { width: 56px; height: 64px; border-radius: 8px; object-fit: cover; }
+.registration-product__content { min-width: 0; }
+.registration-product h3 { margin: 0 0 9px; font-size: 16px; line-height: 1.5; color: #1e293b; }
+.registration-product__meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; color: #7a8699; font-size: 12px; }
+.registration-sku { padding: 2px 7px; border-radius: 4px; background: #f1f5f9; color: #475569; font-weight: 600; }
+.registration-guide { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; margin-bottom: 16px; background: #f6f8fb; border: 1px solid #edf0f5; border-radius: 8px; color: #64748b; font-size: 12px; line-height: 1.7; }
+.registration-guide strong { color: #475569; font-weight: 500; }
+.registration-rule-trigger { flex-shrink: 0; color: #64748b; padding: 5px 6px; font-size: 12px; height: 30px; }
+.registration-rule-trigger :deep(.el-icon) { margin-left: 6px; }
+.registration-rules { color: #475569; font-size: 12px; line-height: 1.8; }
+.registration-rules > strong { color: #1e293b; font-size: 14px; }
+.registration-rules ul { margin: 10px 0 0; padding-left: 18px; }
+.registration-rules li + li { margin-top: 8px; }
+.registration-table { border: 1px solid #e8edf3; border-radius: 8px; --el-table-border-color: #edf0f5; --el-table-header-bg-color: #f7f9fc; --el-table-row-hover-bg-color: #f8faff; }
+.registration-table :deep(th.el-table__cell) { height: 44px; color: #64748b; font-weight: 600; }
+.registration-table :deep(td.el-table__cell) { padding: 14px 0; }
+.registration-table :deep(.registration-row-changed) { --el-table-tr-bg-color: #f8fbff; }
+.registration-size { display: flex; flex-direction: column; align-items: flex-start; padding-left: 4px; }
+.registration-size > strong { color: #334155; font-size: 13px; font-weight: 600; }
+.registration-quantity { width: 124px; margin: 0 auto; }
+.registration-quantity :deep(.el-input-number) { width: 124px; height: 36px; }
+.registration-quantity :deep(.el-input__wrapper) { height: 36px; border-radius: 6px; }
+.registration-quantity :deep(.el-input__inner) { color: #334155; font-size: 14px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.registration-quantity :deep(.el-input-number__increase), .registration-quantity :deep(.el-input-number__decrease) { width: 24px; color: #7a8699; background: #f8fafc; }
+.registration-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.registration-save-note { color: #7a8699; font-size: 12px; text-align: left; }
+.registration-footer__actions { display: flex; flex-shrink: 0; }
+@media (max-width: 600px) {
+  .registration-guide { align-items: flex-start; }
+  .registration-product h3 { font-size: 14px; }
+  .registration-product :deep(img) { width: 44px; height: 52px; }
+  .registration-footer { flex-wrap: wrap; justify-content: flex-end; }
+  .registration-save-note { margin-right: auto; }
+}
 .inventory-history {
   margin-top: 24px;
 }
