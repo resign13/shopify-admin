@@ -4,6 +4,7 @@ Uses existing active sessions without logging in or changing any staff session.
 Never creates accounts, business orders, stock changes or synthetic order events.
 """
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ import uuid
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--http', action='store_true')
 parser.add_argument('--expect-enabled', choices=['enable', 'disable'], default='disable')
+parser.add_argument('--audio-sha256')
 args = parser.parse_args()
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'admin-backend'))
@@ -31,6 +33,14 @@ print('Notification schema and publication progress verified (read-only).')
 
 if args.http:
     opener = request.build_opener(request.ProxyHandler({}))
+    if args.audio_sha256:
+        assets = Path(__file__).resolve().parents[1] / 'frontend' / 'dist' / 'assets'
+        matching = [p for p in assets.glob('new-order-zh-CN-*.wav')
+                    if hashlib.sha256(p.read_bytes()).hexdigest() == args.audio_sha256]
+        assert matching, 'Deployed audio does not match the release recording'
+        with opener.open('http://127.0.0.1:5302/assets/' + matching[0].name, timeout=15) as response:
+            assert response.status == 200 and hashlib.sha256(response.read()).hexdigest() == args.audio_sha256, 'Live audio response mismatch'
+        print('Live double-phrase WAV resource verified: SHA256=' + args.audio_sha256)
 
     def post(operation, body, token=None):
         headers = {'Content-Type': 'application/json'}
