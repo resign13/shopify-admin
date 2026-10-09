@@ -3,7 +3,8 @@ async (page) => {
   if (!page.url().startsWith('http://127.0.0.1:5359/')) throw new Error('Isolated overdelivery fixture required');
   const open = async () => {
     await page.getByRole('button',{name:'登记数量',exact:true}).first().click();
-    return page.getByRole('dialog').getByRole('row').filter({hasText:'30/M'});
+    // History rows also mention the size; target the editable registration row.
+    return page.getByRole('dialog').getByRole('row').filter({hasText:'30/M'}).filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
   };
   let row=await open();
   await row.getByRole('spinbutton').nth(2).fill('116');
