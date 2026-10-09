@@ -42,7 +42,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js src/utils/styleSalesperson.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/audioAsset.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/audioAsset.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:
@@ -97,6 +97,9 @@ jobs:
           curl -fsS http://127.0.0.1:5359/api/health >/dev/null
           npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci open http://127.0.0.1:5359/login --browser chrome
           npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci run-code --filename scripts/login-overdelivery-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-registration-ui-browser.js | tee "$RUNNER_TEMP/inventory-ui-result.log"
+          grep -q '"alignedInputs":true' "$RUNNER_TEMP/inventory-ui-result.log"
+          grep -q '"narrowScreen":true' "$RUNNER_TEMP/inventory-ui-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-overdelivery-browser.js | tee "$RUNNER_TEMP/overdelivery-result.log"
           grep -q '"accepted115":true' "$RUNNER_TEMP/overdelivery-result.log"
           grep -q '"spentQuotaNotRenewed":true' "$RUNNER_TEMP/overdelivery-result.log"

@@ -41,7 +41,11 @@ async (page) => {
   await page.getByRole('button',{name:'确认入库',exact:true}).click();
   row=await open();
   if (await row.getByRole('spinbutton').nth(0).inputValue()!=='110') throw new Error('Receipt stock mismatch');
-  if (!(await row.innerText()).includes('累计已用 15')) throw new Error('Receipt reset spent allowance');
+  await row.getByRole('button',{name:'验货额度 M',exact:true}).click();
+  const spent = page.locator('.allowance-card:visible .allowance-card__details > div').filter({hasText:'累计已用'});
+  await spent.waitFor();
+  if (!(await spent.innerText()).includes('15 件')) throw new Error('Receipt reset spent allowance');
+  await row.getByRole('button',{name:'验货额度 M',exact:true}).click();
   await page.getByRole('dialog').evaluate(node => Promise.all(node.getAnimations({subtree:true}).map(animation => animation.finished.catch(()=>{}))));
   await page.screenshot({path:'output/overdelivery-browser-verified.png'});
   return {accepted115:true,rejected116:true,reopened:true,extraReturn:true,spentQuotaNotRenewed:true,normalReplacement:true,qualifiedAndReceipt:true};
