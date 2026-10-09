@@ -60,10 +60,14 @@ jobs:
         run: |
           cd frontend && npm run build && cd ..
           python scripts/voice-browser-fixture.py > "$RUNNER_TEMP/voice-browser.log" 2>&1 &
-          for attempt in $(seq 1 30); do
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
             if curl -fsS http://127.0.0.1:5358/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/voice-browser.log"; exit 1; fi
             sleep 1
           done
+          if ! curl -fsS http://127.0.0.1:5358/api/health >/dev/null; then cat "$RUNNER_TEMP/voice-browser.log"; exit 1; fi
           mkdir -p output/playwright
           npx --yes --package @playwright/cli playwright-cli install-browser chrome
           npx --yes --package @playwright/cli playwright-cli -s=voiceci open http://127.0.0.1:5358/login --browser chrome
