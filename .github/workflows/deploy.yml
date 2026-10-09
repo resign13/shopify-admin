@@ -40,7 +40,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js src/utils/styleSalesperson.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js src/utils/styleSalesperson.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/audioAsset.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:
@@ -50,6 +50,32 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: fixture-only-password
         run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order test_sales_ownership test_sales_dashboard_access test_temporary_inbound test_inventory_operations test_order_search test_order_operations test_defective_inventory test_inventory_batch test_order_notifications
+      - name: Build and verify browser voice lifecycle on an isolated fixture
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_voice_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          cd frontend && npm run build && cd ..
+          python scripts/voice-browser-fixture.py > "$RUNNER_TEMP/voice-browser.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5358/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/voice-browser.log"; exit 1; fi
+            sleep 1
+          done
+          if ! curl -fsS http://127.0.0.1:5358/api/health >/dev/null; then cat "$RUNNER_TEMP/voice-browser.log"; exit 1; fi
+          mkdir -p output/playwright
+          npx --yes --package @playwright/cli playwright-cli install-browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=voiceci open http://127.0.0.1:5358/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=voiceci run-code --filename scripts/login-voice-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=voiceci run-code --filename scripts/verify-order-voice-browser.js | tee "$RUNNER_TEMP/voice-result.log"
+          grep -q '"multiTabOnce":true' "$RUNNER_TEMP/voice-result.log"
+          grep -q '"authTransportRetryRetainsEpisode":true' "$RUNNER_TEMP/voice-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=voiceci close
   deploy:
     needs: verify
     if: github.event_name != 'pull_request'

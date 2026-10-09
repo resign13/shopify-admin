@@ -39,6 +39,7 @@
             <strong>{{ route.meta.title }}</strong></span
           >
         </div>
+        <OrderVoiceReminder />
         <ElDropdown @command="logout"
           ><button class="profile-button">
             <span class="avatar">{{ auth.user?.name?.slice(0, 1) }}</span
@@ -60,6 +61,7 @@
   </div>
 </template>
 <script setup>
+import OrderVoiceReminder from "./OrderVoiceReminder.vue";
 import { routeModule } from "../permissions";
 import { computed, onBeforeUnmount, ref } from "vue";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";

@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v4
       - name: Configure and verify the deployed server over verified SSH
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -33,10 +34,12 @@ jobs:
           umask 077
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/deploy-known-hosts"
           opts=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy-known-hosts" -o ConnectTimeout=30 -o ServerAliveInterval=15)
-          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$VOICE_MODE" <<'REMOTE'
+          audio_hash=$(python -c 'import json; print(json.load(open("frontend/src/assets/new-order-zh-CN.json"))["wavSha256"])')
+          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$VOICE_MODE" "$audio_hash" <<'REMOTE'
           set -Eeuo pipefail
           umask 077
           mode="$1"
+          audio_hash="$2"
           root=/opt/smawell/shopify-admin
           exec 9>/var/lock/smawell-deploy.lock
           flock -w 120 9
@@ -53,7 +56,7 @@ jobs:
             sleep 2
           done
           systemctl is-active --quiet smawell-admin-api
-          .venv/bin/python "$root/scripts/verify-order-notifications.py" --http --expect-enabled "$mode"
+          .venv/bin/python "$root/scripts/verify-order-notifications.py" --http --expect-enabled "$mode" --audio-sha256 "$audio_hash"
           systemctl is-active --quiet smawell-order-notification-cleanup.timer
           trap - ERR
           echo 'Server delivery settings and live HTTP checks passed.'
