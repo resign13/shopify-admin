@@ -33,7 +33,7 @@ jobs:
           node-version: '22'
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js src/utils/styleSalesperson.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:

@@ -139,11 +139,30 @@ class SalesOwnershipTest(unittest.TestCase):
         self.assertIn('temporaryInbound', global_data['snapshot'])
 
     def test_personal_inventory_filter_recursively_hides_new_temporary_quantity(self):
-        sample = {'summary': {'stock': 4, 'temporaryInbound': 8},
-                  'items': [{'sizePrices': [{'temporaryInbound': 3, 'units': 2}]}]}
+        sample = {'summary': {'stock': 4, 'temporaryInbound': 8, 'defectivePending': 3},
+                  'items': [{'sizePrices': [{'temporaryInbound': 3, 'defectivePending': 2, 'units': 2}]}]}
         result = sales_ownership.personalize(sample, self.a)
         self.assertNotIn('temporaryInbound', json.dumps(result))
+        self.assertNotIn('defectivePending', json.dumps(result))
         self.assertEqual(result['items'][0]['sizePrices'][0]['units'], 2)
+
+    def test_style_keyword_and_salesperson_intersection_and_detail_scope(self):
+        self.scoped_fixture()
+        base = 'dateFrom=2026-09-18&dateTo=2026-09-18&keyword=GT-2026'
+        for owner, expected in [(str(self.a), 3), (str(self.b), 3), ('all', 6), ('unassigned', 0)]:
+            result = self.call(f'dashboard?view=style-performance&{base}&salespersonId={owner}')
+            self.assertEqual(result.status_code, 200, result.json)
+            self.assertEqual(result.json['summary']['units'], expected)
+            self.assertAlmostEqual(result.json['summary']['amount'], 29.9 * expected, places=2)
+        detail = self.call(f'dashboard?view=style-detail&styleCode=GT-2026&{base}&salespersonId={self.b}')
+        self.assertEqual(detail.status_code, 200, detail.json)
+        self.assertEqual(sum(row['units'] for row in detail.json['items']), 3)
+        self.assertNotIn('defectivePending', json.dumps(detail.json))
+        empty = self.call(f'dashboard?view=style-performance&{base}&country=Germany&salespersonId={self.b}')
+        self.assertEqual(empty.json['summary']['units'], 0)
+        forged = self.call(f'dashboard?view=style-performance&{base}&salespersonId={self.b}&styleSalespersonId={self.b}&_ownerId={self.b}', role='sales')
+        self.assertEqual(forged.json['scope']['ownerId'], self.a)
+        self.assertEqual(forged.json['summary']['units'], 3)
 
     def test_owner_identity_protection_and_disabled_history(self):
         self.scoped_fixture()

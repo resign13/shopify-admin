@@ -154,7 +154,7 @@
       <div class="panel-title style-performance-title">
         <div>
           <h2>款号商品表现</h2>
-          <small>{{ personalScope ? '按款号汇总对应业务员的订单，展开查看颜色 SKU 和真实尺码销量。' : '按款号汇总颜色 SKU，展开查看每个真实尺码的销量与库存。' }}</small>
+          <small>{{ stylePersonalScope ? '按款号汇总对应业务员的订单，展开查看颜色 SKU 和真实尺码销量。' : '按款号汇总颜色 SKU，展开查看每个真实尺码的销量与库存。' }}</small>
         </div>
         <div class="inline-actions">
           <ElRadioGroup
@@ -162,8 +162,8 @@
             size="small"
             @change="loadStylePerformance(true)"
           >
-            <ElRadioButton value="7">{{ personalScope ? '近 7 天日均' : '近 7 天周转' }}</ElRadioButton>
-            <ElRadioButton value="30">{{ personalScope ? '近 30 天日均' : '近 30 天周转' }}</ElRadioButton>
+            <ElRadioButton value="7">{{ stylePersonalScope ? '近 7 天日均' : '近 7 天周转' }}</ElRadioButton>
+            <ElRadioButton value="30">{{ stylePersonalScope ? '近 30 天日均' : '近 30 天周转' }}</ElRadioButton>
           </ElRadioGroup>
           <ElButton
             size="small"
@@ -195,7 +195,7 @@
           />
         </ElSelect>
         <ElSelect
-          v-if="!personalScope"
+          v-if="!stylePersonalScope"
           v-model="styleRisk"
           clearable
           placeholder="全部库存状态"
@@ -214,8 +214,8 @@
         >
           <ElOption label="销量" value="units" />
           <ElOption label="金额" value="amount" />
-          <ElOption v-if="!personalScope" label="现货余额" value="stock" />
-          <ElOption v-if="!personalScope" label="预计可售天数" value="estimatedDays" />
+          <ElOption v-if="!stylePersonalScope" label="现货余额" value="stock" />
+          <ElOption v-if="!stylePersonalScope" label="预计可售天数" value="estimatedDays" />
           <ElOption label="最近销售时间" value="lastSoldAt" />
         </ElSelect>
         <ElSelect
@@ -227,6 +227,20 @@
           <ElOption label="从高到低" value="desc" />
           <ElOption label="从低到高" value="asc" />
         </ElSelect>
+        <ElSelect
+          v-if="auth.isSuperAdmin"
+          v-model="styleSalespersonId"
+          clearable filterable
+          placeholder="沿用上方业务员"
+          aria-label="款号业务员筛选"
+          class="style-salesperson"
+          @change="loadStylePerformance(true)"
+        >
+          <ElOption label="沿用上方业务员" value="" />
+          <ElOption label="全公司业务员" value="all" />
+          <ElOption label="未分配订单" value="unassigned" />
+          <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
+        </ElSelect>
         <ElButton
           type="primary"
           :loading="stylePerformanceLoading"
@@ -235,14 +249,15 @@
         >
         <ElButton @click="resetStyleFilters">重置</ElButton>
       </div>
-      <p v-if="!personalScope" class="small-note calculation-note">
+      <p v-if="!stylePersonalScope" class="small-note calculation-note">
         销量与金额按上方日期、国家和款号筛选，排除已取消订单，金额不含运费。现货及各库存阶段为当前数量。预计可售天数
         = 当前现货 ÷ 截至 {{ appliedGlobal.dateTo }} 的近
         {{ velocityWindow }} 天日均销量（{{
           appliedGlobal.country || "全部国家"
         }}）；无销量时不估算。
       </p>
-      <p v-else class="small-note">仅统计对应业务员的订单，不含已取消订单及运费；共享库存请在库存管理查看，个人视图不计算公司周转。</p>
+      <p v-else class="small-note">仅统计当前所选业务员的订单，不含已取消订单及运费；共享库存请在库存管理查看，个人视图不计算公司周转。</p>
+      <p class="small-note">当前款号数据范围：{{ styleScopeLabel }}</p>
       <ElAlert
         v-if="stylePerformanceError"
         :title="stylePerformanceError"
@@ -275,32 +290,32 @@
                 money(stylePerformance.summary?.amount || 0)
               }}</strong>
             </div>
-            <div v-if="!personalScope">
+            <div v-if="!stylePersonalScope">
               <span>当前库存</span
               ><strong>{{ number(stylePerformance.summary?.stock) }}</strong>
             </div>
-            <div v-if="!personalScope"><span>可用现货</span><strong>{{ number(stylePerformance.summary?.availableStock) }}</strong></div>
-            <div v-if="!personalScope"><span>欠货件数 / 尺码数</span><strong>{{ number(stylePerformance.summary?.shortageUnits) }} / {{ number(stylePerformance.summary?.shortageSizeCount) }}</strong></div>
-            <div v-if="!personalScope">
+            <div v-if="!stylePersonalScope"><span>可用现货</span><strong>{{ number(stylePerformance.summary?.availableStock) }}</strong></div>
+            <div v-if="!stylePersonalScope"><span>欠货件数 / 尺码数</span><strong>{{ number(stylePerformance.summary?.shortageUnits) }} / {{ number(stylePerformance.summary?.shortageSizeCount) }}</strong></div>
+            <div v-if="!stylePersonalScope">
               <span>合同未送</span
               ><strong>{{
                 number(stylePerformance.summary?.contractPending)
               }}</strong>
             </div>
-            <div v-if="!personalScope">
+            <div v-if="!stylePersonalScope">
               <span>待验货</span
               ><strong>{{
                 number(stylePerformance.summary?.pendingInspection)
               }}</strong>
             </div>
-            <div v-if="!personalScope">
+            <div v-if="!stylePersonalScope">
               <span>合格</span
               ><strong>{{
                 number(stylePerformance.summary?.pendingInbound)
               }}</strong>
             </div>
-            <div v-if="!personalScope"><span>待打回次品</span><strong>{{ number(stylePerformance.summary?.defectivePending) }}</strong></div>
-            <div v-if="!personalScope"><span>临时待入库</span><strong>{{ number(stylePerformance.summary?.temporaryInbound) }}</strong></div>
+            <div v-if="!stylePersonalScope"><span>待打回次品</span><strong>{{ number(stylePerformance.summary?.defectivePending) }}</strong></div>
+            <div v-if="!stylePersonalScope"><span>临时待入库</span><strong>{{ number(stylePerformance.summary?.temporaryInbound) }}</strong></div>
           </div>
           <ElEmpty
             v-if="!stylePerformance.items.length"
@@ -339,7 +354,7 @@
               width="88"
               align="right"
             />
-            <ElTableColumn v-if="!personalScope"
+            <ElTableColumn v-if="!stylePersonalScope"
               label="现货余额"
               prop="stock"
               width="92"
@@ -350,12 +365,12 @@
                 row.averageDailyUnits || 0
               }}</template></ElTableColumn
             >
-            <ElTableColumn v-if="!personalScope" label="预计可售" width="105" align="right"
+            <ElTableColumn v-if="!stylePersonalScope" label="预计可售" width="105" align="right"
               ><template #default="{ row }">{{
                 daysText(row)
               }}</template></ElTableColumn
             >
-            <ElTableColumn v-if="!personalScope" label="状态" width="132"
+            <ElTableColumn v-if="!stylePersonalScope" label="状态" width="132"
               ><template #default="{ row }"
                 ><ElTag :type="riskType(row.risk)" size="small">{{
                   riskName(row.risk)
@@ -430,7 +445,7 @@
           <p class="small-note calculation-note">
             销售统计：{{ styleDetail.salesWindow.dateFrom }} 至
             {{ styleDetail.salesWindow.dateTo }} ·
-            {{ appliedStyleQuery.country || "全部国家" }}。周转窗口：{{
+            {{ appliedStyleQuery.country || "全部国家" }} · {{ styleScopeLabel }}。日均窗口：{{
               styleDetail.velocityWindow.dateFrom
             }}
             至 {{ styleDetail.velocityWindow.dateTo }}。点击行首箭头展开尺码。
@@ -440,7 +455,7 @@
               <span>颜色 SKU</span
               ><strong>{{ styleDetail.items.length }}</strong>
             </div>
-            <div v-for="item in inventoryMetrics" :key="item.key">
+            <div v-for="item in styleInventoryMetrics" :key="item.key">
               <span>{{ item.label }}</span
               ><strong>{{
                 number(
@@ -483,7 +498,7 @@
                         money(size.amount)
                       }}</template></ElTableColumn
                     ><ElTableColumn
-                      v-for="item in inventoryMetrics"
+                      v-for="item in styleInventoryMetrics"
                       :key="item.key"
                       :prop="item.key"
                       :label="item.label"
@@ -494,11 +509,11 @@
                       label="日均销量"
                       width="92"
                       align="right"
-                    /><ElTableColumn v-if="!personalScope" label="预计可售" width="105" align="right"
+                    /><ElTableColumn v-if="!stylePersonalScope" label="预计可售" width="105" align="right"
                       ><template #default="{ row: size }">{{
                         daysText(size)
                       }}</template></ElTableColumn
-                    ><ElTableColumn v-if="!personalScope" label="状态" width="130"
+                    ><ElTableColumn v-if="!stylePersonalScope" label="状态" width="130"
                       ><template #default="{ row: size }"
                         ><ElTag :type="riskType(size.risk)" size="small">{{
                           riskName(size.risk)
@@ -524,19 +539,19 @@
               }}</template></ElTableColumn
             >
             <ElTableColumn
-              v-for="item in inventoryMetrics"
+              v-for="item in styleInventoryMetrics"
               :key="item.key"
               :label="item.label"
               :prop="item.key"
               width="86"
               align="right"
             />
-            <ElTableColumn v-if="!personalScope" label="预计可售" width="95" align="right"
+            <ElTableColumn v-if="!stylePersonalScope" label="预计可售" width="95" align="right"
               ><template #default="{ row }">{{
                 daysText(row)
               }}</template></ElTableColumn
             >
-            <ElTableColumn v-if="!personalScope" label="状态" width="130"
+            <ElTableColumn v-if="!stylePersonalScope" label="状态" width="130"
               ><template #default="{ row }"
                 ><ElTag :type="riskType(row.risk)" size="small">{{
                   riskName(row.risk)
@@ -675,6 +690,7 @@ import {
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
+import { stylePerformanceQuery, isPersonalStyleScope } from "../utils/styleSalesperson";
 import { api, money, dateTime, statusNames } from "../composables/workbench";
 const TrendChart = defineAsyncComponent(
   () => import("../components/TrendChart.vue"),
@@ -699,6 +715,7 @@ const appliedGlobal = ref({}),
 const stylePerformance = ref({ items: null, summary: {} });
 const stylePerformanceLoading = ref(false),
   stylePerformanceError = ref("");
+const styleSalespersonId = ref("");
 const styleKeyword = ref(""),
   styleCategory = ref(""),
   styleRisk = ref("");
@@ -731,7 +748,11 @@ const allInventoryMetrics = [
   { key: "pendingInbound", label: "合格" },
   { key: "temporaryInbound", label: "临时待入库" },
 ];
-const inventoryMetrics = computed(() => personalScope.value ? [] : allInventoryMetrics);
+const stylePersonalScope = computed(() => isPersonalStyleScope(appliedStyleQuery.value, auth.userRole === "sales"));
+const styleInventoryMetrics = computed(() => stylePersonalScope.value ? [] : allInventoryMetrics);
+const styleScopeLabel = computed(() => auth.userRole === "sales" ? `我的数据 · ${auth.user?.name || ""}` :
+  appliedStyleQuery.value.salespersonId === "unassigned" ? "未分配订单" :
+  salespeople.value.find(person => String(person.id) === appliedStyleQuery.value.salespersonId)?.name || "全公司");
 const appliedRange = computed(
   () =>
     `${appliedGlobal.value.dateFrom || "—"} 至 ${appliedGlobal.value.dateTo || "—"}`,
@@ -838,6 +859,7 @@ function readRoute() {
       : q.dateFrom
         ? "custom"
         : "30";
+  styleSalespersonId.value = auth.isSuperAdmin ? scalar(q.styleSalespersonId) : "";
   styleKeyword.value = scalar(q.styleKeyword);
   styleCategory.value = scalar(q.styleCategory);
   styleRisk.value = [
@@ -875,10 +897,11 @@ let syncedRouteKey = "",
   styleSeq = 0,
   detailSeq = 0;
 let overviewController, styleController, detailController;
-function syncRoute(query) {
+function syncRoute(query, panelSalespersonId) {
   const next = {
     ...appliedGlobal.value,
     datePreset: appliedPreset.value,
+    styleSalespersonId: panelSalespersonId,
     styleKeyword: query.keyword,
     styleCategory: query.category,
     styleRisk: query.risk,
@@ -903,6 +926,7 @@ async function loadStylePerformance(resetPage = false, applyDraft = resetPage) {
   const filters =
     applyDraft || !requestedStyleQuery.value
       ? {
+          styleSalespersonId: auth.isSuperAdmin ? styleSalespersonId.value : "",
           keyword: styleKeyword.value.trim(),
           category: styleCategory.value,
           risk: styleRisk.value,
@@ -912,13 +936,16 @@ async function loadStylePerformance(resetPage = false, applyDraft = resetPage) {
         }
       : requestedStyleQuery.value;
   const query = {
-    ...filters,
-    ...appliedGlobal.value,
+    ...stylePerformanceQuery(appliedGlobal.value, filters, auth.isSuperAdmin),
     page: String(stylePage.value),
     pageSize: String(stylePageSize.value),
   };
-  requestedStyleQuery.value = query;
-  syncRoute(query);
+  if (applyDraft) {
+    styleRisk.value = query.risk;
+    styleSort.value = query.sort;
+  }
+  requestedStyleQuery.value = filters;
+  syncRoute(query, filters.styleSalespersonId);
   stylePerformanceLoading.value = true;
   stylePerformanceError.value = "";
   try {
@@ -931,7 +958,7 @@ async function loadStylePerformance(resetPage = false, applyDraft = resetPage) {
     stylePerformance.value = result;
     stylePage.value = result.page;
     appliedStyleQuery.value = query;
-    syncRoute(query);
+    syncRoute(query, filters.styleSalespersonId);
   } catch (e) {
     if (id === styleSeq && e.name !== "AbortError") {
       stylePerformanceError.value = e.message;
@@ -951,7 +978,7 @@ function changeStylePageSize(size) {
   loadStylePerformance(true);
 }
 function resetStyleFilters() {
-  styleKeyword.value = styleCategory.value = styleRisk.value = "";
+  styleSalespersonId.value = styleKeyword.value = styleCategory.value = styleRisk.value = "";
   styleSort.value = "units";
   styleDirection.value = "desc";
   velocityWindow.value = "7";
@@ -1097,6 +1124,9 @@ onBeforeUnmount(() => {
 }
 .style-performance-filters .sort-direction {
   width: 115px;
+}
+.style-performance-filters .style-salesperson {
+  width: 170px;
 }
 .style-summary-grid,
 .style-detail-summary {

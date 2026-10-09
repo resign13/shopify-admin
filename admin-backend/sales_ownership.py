@@ -68,7 +68,7 @@ def link_account(user_id, value):
     if owner is not None:
         db._fetch_all("UPDATE orders SET owner_admin_id=%s,updated_at=NOW() WHERE store_user_id=%s AND order_source='store' AND owner_admin_id IS NULL RETURNING id", (owner, user_id))
 
-INVENTORY_KEYS = {'stock','availableStock','shortageUnits','shortageSizeCount','contractPending','pendingInspection','pendingInbound','temporaryInbound','emptySizeCount','estimatedDays','risk'}
+INVENTORY_KEYS = {'stock','availableStock','shortageUnits','shortageSizeCount','contractPending','pendingInspection','pendingInbound','temporaryInbound','defectivePending','emptySizeCount','estimatedDays','risk'}
 
 
 def public_order(order):
