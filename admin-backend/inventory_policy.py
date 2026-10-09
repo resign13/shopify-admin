@@ -35,7 +35,7 @@ def public_inventory(value):
         return [public_inventory(v) for v in value]
     if not isinstance(value, dict):
         return value
-    hidden = {'shortageUnits', 'shortageSizeCount', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending'}
+    hidden = {'shortageUnits', 'shortageSizeCount', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending', 'contractReceived', 'originalContractQuantity', 'overdeliveryLimit', 'overdeliveryUsed', 'overdeliveryRemaining', 'overdeliveryInspection', 'overdeliveryQualified'}
     result = {k: public_inventory(v) for k, v in value.items() if k not in hidden}
     if 'zeroSizes' in result:
         result['zeroSizes'] += int(value.get('shortageSizeCount', 0))

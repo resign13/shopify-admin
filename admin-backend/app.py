@@ -1052,7 +1052,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     return output
 
 
-INVENTORY_TEMPLATE_VERSION = "inventory-v5"
+INVENTORY_TEMPLATE_VERSION = "inventory-v6"
 INVENTORY_HEADERS = [
     "模板版本",
     "商品ID",
@@ -1081,8 +1081,10 @@ INVENTORY_HEADER_VERSIONS = {
     "inventory-v2": LEGACY_INVENTORY_HEADERS[:14],
     "inventory-v3": LEGACY_INVENTORY_HEADERS[:16],
     "inventory-v4": LEGACY_INVENTORY_HEADERS,
-    "inventory-v5": INVENTORY_HEADERS,
+    "inventory-v5": INVENTORY_HEADERS.copy(),
 }
+INVENTORY_HEADERS.extend(['原合同数量（只读）', '超量额度（只读）', '累计超量（只读）', '待验货超量（只读）', '合格超量（只读）'])
+INVENTORY_HEADER_VERSIONS['inventory-v6'] = INVENTORY_HEADERS
 INVENTORY_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 INVENTORY_MAX_ROWS = 20_000
 INVENTORY_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
@@ -1141,6 +1143,7 @@ def inventory_export_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "sizeCode": size_code,
                     "stock": int(size.get("stock") or 0),
                     "contractPending": int(size.get("contractPending") or 0),
+                    **{k: int(size.get(k) or 0) for k in ['originalContractQuantity','overdeliveryLimit','overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']},
                     "pendingInbound": int(size.get("pendingInbound") or 0),
                     "pendingInspection": int(size.get("pendingInspection") or 0),
                     "temporaryInbound": int(size.get("temporaryInbound") or 0),
@@ -1184,13 +1187,14 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
                 row["temporaryInbound"],
                 row["temporaryInbound"],
                 row["defectivePending"],
+                *[row[k] for k in ['originalContractQuantity','overdeliveryLimit','overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']],
             ]
         )
 
     from openpyxl.comments import Comment
     worksheet['I1'].comment = Comment('转移待验货或合格时可保持此列原值，系统会自动按阶段差额计算合同未送；若同时填写此列，须与自动计算结果一致。', 'GINGTTO')
     worksheet['M1'].comment = Comment('填写合格目标数量。增加量从待验货扣减；单独修改此列时系统自动计算待验货余额，一键入库另行操作。', 'GINGTTO')
-    worksheet['O1'].comment = Comment('填写待验货目标数量。单独增加时从合同未送扣减；与合格同时修改时，两列均填写转移后的最终余额。', 'GINGTTO')
+    worksheet['O1'].comment = Comment('填写待验货目标数量。普通数量扣合同未送；超量按原合同总数量累计15%（向下取整），合同未送不扣负。与合格同时修改时，两列均为最终余额。只读额度以数据库为准，打回不返还超量额度。', 'GINGTTO')
     worksheet['Q1'].comment = Comment('独立临时待入库目标数量，不扣减采购阶段、不增加现货；保存后另行点击临时入库。', 'GINGTTO')
     worksheet['S1'].comment = Comment('只读：在库存页面登记次品并一键打回；修改本列不会写入。已登记次品预留待验货，不可转为合格。', 'GINGTTO')
     worksheet.column_dimensions['S'].width = 20
@@ -1206,7 +1210,9 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=cell.column in (3, 4, 5, 6))
     if worksheet.max_row > 1:
-        worksheet.auto_filter.ref = f"B1:S{worksheet.max_row}"
+        worksheet.auto_filter.ref = f"B1:X{worksheet.max_row}"
+    for column in ('T','U','V','W','X'):
+        worksheet.column_dimensions[column].width = 22
 
     output = BytesIO()
     workbook.save(output)
@@ -1376,7 +1382,10 @@ def inventory_import_payload(raw: bytes) -> dict[str, Any]:
                 effective[field] = row[field]
         try:
             import db as inventory_db
-            inventory_db.prepare_inventory_import(row)
+            if all(size[k] == row[k] for k in ['contractPending','pendingInspection','pendingInbound']):
+                row.update(_stagePrepared=True, _overdelivery={k:size[k] for k in ['overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']})
+            else:
+                inventory_db.prepare_inventory_import(row, size)
             final_inspection = row['pendingInspection'] if row['pendingInspection'] != row['originalPendingInspection'] else size['pendingInspection']
             inventory_db.validate_defective_reservation(size.get('defectivePending', 0), final_inspection, row['sizeCode'])
             moving = any(row[k] != row[o] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')])

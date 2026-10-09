@@ -36,6 +36,17 @@ rollback() {
   trap - ERR
   # Never restart a legacy balance-resetting backend after negative balances exist.
   systemctl stop "$service" || true
+  overdelivery=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT to_regclass('public.inventory_overdelivery') IS NOT NULL" 2>/dev/null) || overdelivery=unknown
+  if [ "$overdelivery" != f ]; then
+    cumulative=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM inventory_overdelivery WHERE used>0 OR normal_received>0)" 2>/dev/null) || cumulative=unknown
+    if [ "$cumulative" != f ]; then
+      if ! tar -xOf "$backup/code.tar.gz" "$backend/db.py" | grep 'inventory_overdelivery.migrate(cur)' > /dev/null || ! tar -tf "$backup/code.tar.gz" | grep "^$backend/inventory_overdelivery.py$" > /dev/null; then
+        echo "Legacy rollback blocked: cumulative allowance/source preservation required. Current code/database retained; backup: $backup."
+        systemctl restart "$service" || true
+        exit "$status"
+      fi
+    fi
+  fi
   ownership=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='owner_admin_id')" 2>/dev/null) || ownership=unknown
   if [ "$ownership" != f ]; then
     if ! tar -xOf "$backup/code.tar.gz" "$backend/workbench.py" | grep 'sales_ownership.assert_access' > /dev/null || ! tar -xOf "$backup/code.tar.gz" "$backend/customer_templates.py" | grep 'def scope' > /dev/null; then
@@ -78,7 +89,7 @@ rsync -a --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --e
 rsync -a "$stage/scripts/" "$root/scripts/"
 rsync -a "$stage/db/" "$root/db/"
 cd "$root/$backend"
-.venv/bin/python -m py_compile app.py db.py inventory_policy.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
+.venv/bin/python -m py_compile app.py db.py inventory_policy.py inventory_overdelivery.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
 .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt gunicorn
 .venv/bin/python "$root/scripts/configure-order-voice.py" ensure --env "$root/$backend/.env"
 # Existing initialization applies additive migrations; data is never re-seeded.
@@ -95,6 +106,7 @@ for attempt in $(seq 1 20); do
     .venv/bin/python "$root/scripts/verify-category-order.py" "$backend"
     .venv/bin/python "$root/scripts/verify-temporary-inbound.py" "$backend"
     .venv/bin/python "$root/scripts/verify-defective-inventory.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-inventory-overdelivery.py" "$backend"
     # Approved permission upgrade is explicit, audited and one-time. Existing
     # account links and all other module grants are preserved.
     .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply
