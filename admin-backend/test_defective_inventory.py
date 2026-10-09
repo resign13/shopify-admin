@@ -221,16 +221,16 @@ class DefectiveInventoryTest(unittest.TestCase):
         self.save({'M':3})
         raw=self.workbook()
         book=load_workbook(io.BytesIO(raw));sheet=book.active
-        self.assertEqual((sheet['A2'].value,sheet['M1'].value,sheet['N1'].value,sheet['S1'].value,sheet['S2'].value),('inventory-v5','合格','原始合格','次品（只读）',3))
+        self.assertEqual((sheet['A2'].value,sheet['M1'].value,sheet['N1'].value,sheet['S1'].value,sheet['S2'].value),('inventory-v6','合格','原始合格','次品（只读）',3))
         ignored=self.workbook(lambda s:setattr(s['S2'],'value',999))
         data=self.upload('preview',ignored).json
         self.assertEqual(data['errors'],[])
         self.assertEqual(data['summary']['changedRowCount'],0)
         self.assertEqual(self.upload('confirm',ignored,data['fileHash']).status_code,200)
         self.assertEqual(self.sizes()['M']['defectivePending'],3)
-        for version,columns in [('inventory-v1',12),('inventory-v2',14),('inventory-v3',16),('inventory-v4',18),('inventory-v5',19)]:
+        for version,columns in [('inventory-v1',12),('inventory-v2',14),('inventory-v3',16),('inventory-v4',18),('inventory-v5',19),('inventory-v6',24)]:
             def legacy(s):
-                if version!='inventory-v5':
+                if version!='inventory-v6':
                     s.delete_cols(columns+1,s.max_column-columns)
                     for col,label in enumerate(application.INVENTORY_HEADER_VERSIONS[version],1):s.cell(1,col,label)
                     for row in range(2,s.max_row+1):s.cell(row,1,version)

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { registrationError, moveProcurementStage, defectiveReturnPreview } from './inventoryStages.js';
+import { registrationError, moveProcurementStage, defectiveReturnPreview, procurementPreview } from './inventoryStages.js';
 const size = () => ({ sizeCode: 'M', stock: -5, contractPending: 10, pendingInspection: 8, pendingInbound: 4, temporaryInbound: 7, defectivePending: 3 });
 
 test('defect and temporary quantity inputs use right-side integer step controls', () => {
@@ -64,4 +64,36 @@ test('signed stock and other stages remain integer bounded', () => {
     }
   }
   assert.equal(registrationError([{...size(),stock:-2147483648}]),'');
+});
+
+const contractBase = () => ({contractPending:100,pendingInspection:0,pendingInbound:0,
+  originalContractQuantity:100,contractReceived:0,overdeliveryLimit:15,overdeliveryUsed:0,overdeliveryInspection:0,overdeliveryQualified:0});
+test('original-contract allowance accepts 115, rejects 116, and never makes pending negative', () => {
+  const base=contractBase();const extra=procurementPreview(base,115,0);
+  assert.equal(extra.contractPending,0);assert.equal(extra.overdeliveryUsed,15);assert.equal(extra.overdeliveryInspection,15);
+  assert.throws(()=>procurementPreview(base,116,0),/累计15%/);
+  assert.equal(procurementPreview({...base,originalContractQuantity:6,contractPending:6,overdeliveryLimit:0},6,0).overdeliveryUsed,0);
+});
+test('qualified transfers preserve provenance; draft undo does not spend quota', () => {
+  const base=contractBase();const row={...base,sizeCode:'M',stock:0,temporaryInbound:0,defectivePending:0,registrationBase:base};
+  row.pendingInspection=115;assert.equal(moveProcurementStage(row,'inspection',115,0),'');
+  assert.equal(row.overdeliveryUsed,15);assert.equal(row.contractPending,0);
+  row.pendingInspection=100;assert.equal(moveProcurementStage(row,'inspection',100,115),'');
+  assert.equal(row.overdeliveryUsed,0);
+  row.pendingInbound=100;assert.equal(moveProcurementStage(row,'inbound',100,0),'');
+  assert.equal(row.pendingInspection,0);
+  const delivered={...base,contractPending:0,pendingInspection:115,...procurementPreview(base,115,0)};
+  assert.equal(procurementPreview(delivered,0,115).overdeliveryQualified,15);
+  assert.equal(defectiveReturnPreview({...delivered,defectivePending:20}).contractAfter,5);
+});
+test('spent quota and original normal counter cannot be renewed by pending edits', () => {
+  const base={...contractBase(),contractReceived:100,contractPending:100};
+  assert.throws(()=>procurementPreview(base,16,0),/累计15%/);
+  assert.equal(procurementPreview(base,15,0).overdeliveryUsed,15);
+  assert.throws(()=>procurementPreview({...base,overdeliveryUsed:15},1,0),/累计15%/);
+});
+test('stage edits do not silently discard manual contract adjustments', () => {
+  const base=contractBase();const row={...base,registrationBase:base,contractPending:101,pendingInspection:10,defectivePending:0};
+  assert.match(moveProcurementStage(row,'inspection',10,0),/先单独保存/);
+  assert.equal(row.contractPending,101);assert.equal(row.pendingInspection,0);
 });

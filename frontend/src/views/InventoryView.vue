@@ -173,7 +173,7 @@
       ><h3>{{ productName(product) }}</h3>
       <p class="small-note">{{ product.sku }} · {{ product.colorName }}</p>
       <ElAlert
-        title="增加待验货等量减少合同未送；增加合格等量减少待验货。次品仅暂存并预留待验货，一键打回后减少待验货、增加合同未送；临时待入库独立登记。"
+        title="待验货允许按原合同数量累计超量15%（向下取整），合同未送扣至0；超量单独记录，打回不返还额度。增加合格扣待验货；次品预留待验货，打回优先处理超量次品，普通次品返合同；临时待入库独立登记。"
         type="info"
         :closable="false"
       /><ElTable :data="draft"
@@ -217,6 +217,7 @@
               @update:model-value="(value) => moveStage(row, 'inspection', value)"
             />
             <small style="display: block">原值 {{ row.originalInspection }} · 变化 {{delta(row.pendingInspection,row.originalInspection)}}</small>
+            <small class="overdelivery-note">原合同 {{ row.originalContractQuantity || 0 }} · 15%额度 {{ row.overdeliveryLimit || 0 }}<br>累计已用 {{ row.overdeliveryUsed || 0 }} · 剩余 {{ row.overdeliveryRemaining || 0 }}<br>待验货中超量 {{ row.overdeliveryInspection || 0 }}</small>
           </template></ElTableColumn
         ><ElTableColumn label="次品" min-width="155"><template #default="{ row }">
             <ElInputNumber v-model="row.defectivePending" :min="0" :max="2147483647" :precision="0" controls-position="right" :aria-label="`次品 ${row.sizeCode}`" />
@@ -557,7 +558,7 @@ const editing = ref(false),
   input = ref(),
   exporting = ref(false);
 const { dirty, markClean, canLeave } = useDirty(() => draft.value);
-const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '合格', defectivePending: '次品', temporaryInbound: '临时待入库' };
+const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '合格', defectivePending: '次品', temporaryInbound: '临时待入库', overdeliveryUsed: '累计使用超量额度', overdeliveryInspection: '待验货超量', overdeliveryQualified: '合格超量' };
 const operationHistory = reactive({ items: [], total: 0, page: 1, loading: false, error: '' });
 let operationController, operationSerial = 0;
 async function loadOperations() {
@@ -596,6 +597,7 @@ function populate(item) {
   product.value = item;
   draft.value = item.sizePrices.map((s) => ({
     ...s,
+    registrationBase: { ...s },
     originalStock: s.stock,
     originalPending: s.contractPending,
     originalInbound: s.pendingInbound,
@@ -656,6 +658,7 @@ async function moveStage(row, stage, value) {
     row[target] = old;
   } else {
     row[source] = candidate[source];
+    for (const key of ['overdeliveryUsed', 'overdeliveryInspection', 'overdeliveryQualified', 'overdeliveryRemaining', 'contractPending', 'contractReceived']) row[key] = candidate[key];
   }
   error.value = message;
 }
@@ -911,6 +914,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.overdelivery-note { display: block; margin-top: 4px; color: #64748b; font-size: 12px; line-height: 1.6; }
 .inventory-history {
   margin-top: 24px;
 }

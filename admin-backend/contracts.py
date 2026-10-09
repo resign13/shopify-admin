@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from flask import g
 from psycopg.types.json import Jsonb
 import db
+import inventory_overdelivery
 
 
 def migrate(cur):
@@ -165,6 +166,8 @@ def apply_delta(before, after):
                 delta[key] = delta.get(key,0) + sign * int(qty)
     ids = sorted({key[0] for key in delta})
     db._fetch_all('SELECT id FROM products WHERE id=ANY(%s) ORDER BY id FOR UPDATE',(ids,))
+    with db.get_connection() as conn, conn.cursor() as cur:
+        totals, ledger = inventory_overdelivery.states(cur, ids)
     for (pid,size), change in sorted(delta.items()):
         if not change: continue
         row = db._fetch_one('SELECT contract_pending,pending_inbound FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE',(pid,size))
@@ -173,6 +176,13 @@ def apply_delta(before, after):
         if value < 0:
             raise ValueError(f'商品 {pid} 尺码 {size} 的合同未送已减少，当前数量不足以回退；请先核对待验货、待入库及入库记录')
         if value > 2147483647: raise ValueError('合同未送数量超出允许范围')
+        new_total = totals.get((pid, size), 0)+change
+        used = int(ledger.get((pid, size), {}).get('used', 0))
+        if used > max(0, new_total)*15//100:
+            raise ValueError('合同减少后不足以覆盖已使用的15%超量额度，请先核对累计超量记录')
+        received = ledger.get((pid,size),{}).get('normal_received') or 0
+        if new_total < received:
+            raise ValueError('合同减少后小于已累计接收的合同内数量，请先核对到货记录')
         db._fetch_one('UPDATE product_size_prices SET contract_pending=%s WHERE product_id=%s AND size_code=%s RETURNING id',(value,pid,size))
         db._fetch_one('UPDATE products SET updated_at=clock_timestamp() WHERE id=%s RETURNING id',(pid,))
 

@@ -3,6 +3,7 @@
 import json
 import catalog_order
 import inventory_policy
+import inventory_overdelivery
 import order_notification_schema
 import os
 import secrets
@@ -295,6 +296,7 @@ def _apply_schema_migrations(cur: Any) -> None:
         cur.execute("UPDATE product_size_prices SET contract_pending=contract_pending-pending_inbound WHERE pending_inbound>0")
     cur.execute("SELECT 1 FROM pg_constraint WHERE conname='product_size_prices_inbound_nonnegative'")
     if not cur.fetchone(): cur.execute("ALTER TABLE product_size_prices ADD CONSTRAINT product_size_prices_inbound_nonnegative CHECK(pending_inbound >= 0)")
+    inventory_overdelivery.migrate(cur)
     migrate(cur)
     cur.execute("""UPDATE orders o SET created_by_admin_id = r.actor_id
                  FROM (SELECT DISTINCT ON (order_id) order_id, actor_id
@@ -408,6 +410,10 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
     galleries = {product_id: [] for product_id in product_ids}
     sizes = {product_id: [] for product_id in product_ids}
     size_prices = {product_id: [] for product_id in product_ids}
+    totals, ledger = {}, {}
+    if include_contract_pending:
+        with get_connection() as conn, conn.cursor() as cur:
+            totals, ledger = inventory_overdelivery.states(cur, product_ids)
 
     for row in translation_rows:
         product_id = int(row["product_id"])
@@ -432,6 +438,8 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
             size_price["pendingInspection"] = int(row["pending_inspection"] or 0)
             size_price["temporaryInbound"] = int(row["temporary_inbound"])
             size_price["defectivePending"] = int(row["defective_pending"])
+            key = (int(row['product_id']), row['size_code'])
+            size_price.update(inventory_overdelivery.internal(totals.get(key, 0), ledger.get(key), row))
         size_prices[int(row["product_id"])].append(size_price)
     return names, summaries, descriptions, galleries, sizes, size_prices
 
@@ -820,6 +828,10 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     existing_defective = {str(row["size_code"]): int(row["defective_pending"]) for row in existing_size_rows}
     normalized_size_prices = _normalize_size_prices(payload.get("sizePrices"), payload.get("sizes", []))
     next_size_codes = {item["sizeCode"] for item in normalized_size_prices}
+    cur.execute('SELECT size_code FROM inventory_overdelivery WHERE product_id=%s AND (used>0 OR normal_received>0)', (product_id,))
+    protected_overdelivery = {r['size_code'] for r in cur.fetchall()}
+    if protected_overdelivery - next_size_codes:
+        raise ValueError('有累计到货或超量记录的尺码不可删除或改名：' + ', '.join(sorted(protected_overdelivery-next_size_codes)))
     cur.execute("SELECT DISTINCT i.size_code FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.product_id=%s AND o.status IN ('pending_payment','allocated','paid')", (product_id,))
     protected = {r['size_code'] for r in cur.fetchall()} | {r['size_code'] for r in existing_size_rows if r['stock'] < 0}
     if protected - next_size_codes:
@@ -1127,16 +1139,21 @@ def update_product_inventory(
             if unknown_sizes:
                 raise ValueError(f"Unknown sizes: {', '.join(unknown_sizes)}")
 
+            totals, ledger = inventory_overdelivery.states(cur, [product_id])
+
             for row in rows:
                 size_code = row['size_code']
                 stock = normalized.get(size_code, row['stock'])
                 updates = {}
                 for values,key in [(normalized_contract_pending,'contractPending'),(normalized_inbound,'pendingInbound'),(inspection,'pendingInspection')]:
                     if size_code in values: updates[key]=values[size_code]
-                pending, inspect, inbound = inventory_stages(row, updates)
+                key = (product_id, size_code)
+                state_row = inventory_overdelivery.attach(row, totals.get(key, 0), ledger.get(key))
+                pending, inspect, inbound, excess = inventory_overdelivery.transition(state_row, updates)
                 next_defective = defective.get(size_code, row['defective_pending'])
                 validate_defective_reservation(next_defective, inspect, size_code)
                 cur.execute("UPDATE product_size_prices SET stock=%s,contract_pending=%s,pending_inspection=%s,pending_inbound=%s,temporary_inbound=%s,defective_pending=%s WHERE product_id=%s AND size_code=%s", (stock,pending,inspect,inbound,temporary.get(size_code,row['temporary_inbound']),next_defective,product_id,size_code))
+                inventory_overdelivery.save(cur, product_id, size_code, excess)
 
             cur.execute(
                 "SELECT COALESCE(SUM(stock), 0) AS total_stock FROM product_size_prices WHERE product_id = %s",
@@ -1231,7 +1248,12 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 next_inbound = int(row['pendingInbound']) if inbound_changed else current_inbound
                 if inbound_changed and current_inbound not in (int(row['originalPendingInbound']), next_inbound):
                     raise ValueError(f"合格数量冲突：{product_id} / {size_code}")
-                prepare_inventory_import(row)
+                totals, ledger = inventory_overdelivery.states(cur, [product_id])
+                state = inventory_overdelivery.internal(totals.get((product_id,size_code),0), ledger.get((product_id,size_code)), current)
+                stages_already_applied = all(int(current[col]) == row[key] for col,key in [('contract_pending','contractPending'),('pending_inspection','pendingInspection'),('pending_inbound','pendingInbound')])
+                if not stages_already_applied:
+                    row.pop('_stagePrepared', None)
+                    prepare_inventory_import(row, state)
                 fields=[('contractPending','originalContractPending','contract_pending'),('pendingInspection','originalPendingInspection','pending_inspection'),('pendingInbound','originalPendingInbound','pending_inbound')]
                 moving = any(row[k] != row[o] for k,o,_ in fields)
                 if moving and not all(int(current[col]) == row[o] for k,o,col in fields):
@@ -1262,6 +1284,8 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 if row['pendingInspection'] != row['originalPendingInspection'] and int(current['pending_inspection']) != row['pendingInspection']:
                     assignments.append('pending_inspection = %s');params.append(row['pendingInspection'])
                 if assignments:
+                    if not stages_already_applied:
+                        inventory_overdelivery.save(cur, product_id, size_code, row['_overdelivery'])
                     params.extend([product_id, size_code])
                     cur.execute(
                         f"UPDATE product_size_prices SET {', '.join(assignments)} "
@@ -1310,6 +1334,11 @@ def delete_product(product_id: int) -> dict[str, Any] | None:
 
                 cur.execute('SELECT 1 FROM product_size_prices WHERE product_id=%s AND (stock<0 OR contract_pending>0 OR pending_inspection>0 OR pending_inbound>0 OR temporary_inbound>0 OR defective_pending>0) LIMIT 1', (product_id,))
                 if cur.fetchone():
+                    has_related_orders = True
+                cur.execute('SELECT 1 FROM inventory_overdelivery WHERE product_id=%s AND (used>0 OR normal_received>0) LIMIT 1', (product_id,))
+                if cur.fetchone():
+                    # Cumulative allowance must survive even after every current
+                    # stage and stock balance has been cleared.
                     has_related_orders = True
                 if has_related_orders:
                     cur.execute(
@@ -2509,23 +2538,13 @@ def validate_defective_reservation(defective, inspection, size_code=''):
 
 
 def inventory_stages(current, updates):
-    old_p, old_i, old_b = (int(current[k]) for k in ['contract_pending','pending_inspection','pending_inbound'])
-    inbound = updates.get('pendingInbound', old_b)
-    inspection = updates.get('pendingInspection', old_i - (inbound-old_b))
-    expected = old_p - (inspection + inbound - old_i - old_b)
-    moving = inspection != old_i or inbound != old_b
-    pending = updates.get('contractPending', expected)
-    if moving and pending != expected:
-        raise ValueError('阶段转移时合同未送须按差额同步，请勿重复扣减或增加合同数量')
-    if min(pending,inspection,inbound) < 0:
-        raise ValueError('本次转移超过上一阶段可用数量：请核对合同未送和待验货')
-    if max(pending,inspection,inbound)>2147483647: raise ValueError('数量超出允许范围')
-    return pending,inspection,inbound
+    return inventory_overdelivery.transition(current, updates)[:3]
 
 
-def prepare_inventory_import(row):
+def prepare_inventory_import(row, state=None):
     if row.get('_stagePrepared'): return
     originals = {'contract_pending':row['originalContractPending'], 'pending_inspection':row['originalPendingInspection'], 'pending_inbound':row['originalPendingInbound']}
     changes={k:row[k] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')] if row[k] != row[o]}
-    p,i,b=inventory_stages(originals,changes)
-    row.update(contractPending=p,pendingInspection=i,pendingInbound=b,_stagePrepared=True)
+    originals.update(state or {})
+    p,i,b,extra=inventory_overdelivery.transition(originals,changes)
+    row.update(contractPending=p,pendingInspection=i,pendingInbound=b,_stagePrepared=True,_overdelivery=extra)

@@ -9,6 +9,7 @@ from flask import g, jsonify, request, make_response
 from psycopg.types.json import Jsonb
 import db
 import inventory_policy
+import inventory_overdelivery
 import catalog_order
 import sales_ownership
 
@@ -465,7 +466,7 @@ def migrate(cur):
     """)
     for table in ['products', 'product_size_prices', 'product_translations', 'product_images',
                   'product_sizes', 'orders', 'order_items', 'homepage_configs', 'product_categories',
-                  'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts', 'order_customer_templates']:
+                  'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts', 'order_customer_templates', 'inventory_overdelivery']:
         cur.execute(f'DROP TRIGGER IF EXISTS admin_audit ON {table}')
         cur.execute(f'CREATE TRIGGER admin_audit AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION capture_admin_audit()')
 
@@ -685,6 +686,8 @@ def receive_inventory(product_id, payload, *, source='normal'):
         amount=row[field]
         if not amount: continue
         db._fetch_one(f'UPDATE product_size_prices SET stock=stock+{field},{field}=0 WHERE product_id=%s AND size_code=%s RETURNING id',(product_id,row['size_code']))
+        if source == 'normal':
+            db._fetch_one('UPDATE inventory_overdelivery SET qualified=0 WHERE product_id=%s AND size_code=%s RETURNING product_id', (product_id, row['size_code']))
         changes.append({'sizeCode':row['size_code'],'quantity':amount,'stockBefore':row['stock'],'stockAfter':row['stock']+amount,
                         'contractBefore':row['contract_pending'],'contractAfter':row['contract_pending'],
                         'inspectionBefore':row['pending_inspection'],'inspectionAfter':row['pending_inspection'],
@@ -714,7 +717,10 @@ def return_defective_inventory(product_id, payload):
     check_versions({'versions': {str(product_id): payload['version']}})
     if not db._fetch_one('SELECT id FROM products WHERE id=%s FOR UPDATE', (product_id,)):
         raise ValueError('商品不存在')
-    rows = db._fetch_all('SELECT size_code,contract_pending,pending_inspection,defective_pending FROM product_size_prices WHERE product_id=%s ORDER BY size_code FOR UPDATE', (product_id,))
+    rows = db._fetch_all('SELECT size_code,contract_pending,pending_inspection,pending_inbound,defective_pending FROM product_size_prices WHERE product_id=%s ORDER BY size_code FOR UPDATE', (product_id,))
+    with db.get_connection() as conn, conn.cursor() as cur:
+        totals, ledger = inventory_overdelivery.states(cur, [product_id])
+    rows = [inventory_overdelivery.attach(r, totals.get((product_id,r['size_code']),0), ledger.get((product_id,r['size_code']))) for r in rows]
     if not any(row['defective_pending'] for row in rows):
         raise ValueError('没有待打回的次品')
     before = db.get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
@@ -722,15 +728,18 @@ def return_defective_inventory(product_id, payload):
     for row in rows:
         if row['size_code'] not in known_sizes: raise ValueError('次品尺码无效')
         db.validate_defective_reservation(row['defective_pending'], row['pending_inspection'], row['size_code'])
-        inventory_policy.parse_stock(row['contract_pending'] + row['defective_pending'], '打回后的合同未送')
+        inventory_policy.parse_stock(inventory_overdelivery.return_preview(row, row['defective_pending'])['contractAfter'], '打回后的合同未送')
     changes = []
     for row in rows:
         amount = row['defective_pending']
         if not amount: continue
-        db._fetch_one('UPDATE product_size_prices SET contract_pending=contract_pending+defective_pending,pending_inspection=pending_inspection-defective_pending,defective_pending=0 WHERE product_id=%s AND size_code=%s RETURNING id', (product_id, row['size_code']))
+        preview = inventory_overdelivery.return_preview(row, amount)
+        db._fetch_one('UPDATE product_size_prices SET contract_pending=%s,pending_inspection=%s,defective_pending=0 WHERE product_id=%s AND size_code=%s RETURNING id', (preview['contractAfter'], preview['inspectionAfter'], product_id, row['size_code']))
+        with db.get_connection() as conn, conn.cursor() as cur:
+            inventory_overdelivery.save(cur, product_id, row['size_code'], preview)
         changes.append({'sizeCode': row['size_code'], 'quantity': amount,
                         'inspectionBefore': row['pending_inspection'], 'inspectionAfter': row['pending_inspection']-amount,
-                        'contractBefore': row['contract_pending'], 'contractAfter': row['contract_pending']+amount,
+                        'contractBefore': row['contract_pending'], 'contractAfter': preview['contractAfter'], 'extraReturned': preview['extraReturned'],
                         'defectiveBefore': amount, 'defectiveAfter': 0})
     db._fetch_one('UPDATE products SET updated_at=clock_timestamp() WHERE id=%s RETURNING id', (product_id,))
     after = db.get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
@@ -812,7 +821,7 @@ def process_inventory_batch(payload, *, source):
     return result
 
 
-INVENTORY_REGISTRATION_FIELDS = ('stock', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending')
+INVENTORY_REGISTRATION_FIELDS = ('stock', 'contractPending', 'pendingInspection', 'pendingInbound', 'temporaryInbound', 'defectivePending', 'overdeliveryUsed', 'overdeliveryInspection', 'overdeliveryQualified')
 
 
 def record_inventory_registration(before, after, *, operation='registration'):
