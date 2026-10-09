@@ -44,6 +44,8 @@
             >登录工作台</ElButton
           ></ElForm
         >
+        <ElButton v-if="auth.token && !auth.isAuthenticated" style="width:100%; margin-top:12px"
+          :loading="retrying" @click="retryConnection">重试连接</ElButton>
         <p class="small-note" style="margin-top: 26px">
           账号由管理员分配。如需帮助，请联系您的管理员。
         </p>
@@ -52,12 +54,18 @@
   </div>
 </template>
 <script setup>
-import { reactive } from "vue";
+import { reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 const auth = useAdminAuthStore(),
   router = useRouter(),
   form = reactive({ email: "", password: "" });
+const retrying = ref(false);
+async function retryConnection() {
+  retrying.value = true;
+  try { await auth.initialize(); if (auth.isAuthenticated) router.push(auth.defaultRoute); }
+  finally { retrying.value = false; }
+}
 async function login() {
   if (auth.loading) return;
   if (!form.email || !form.password) {

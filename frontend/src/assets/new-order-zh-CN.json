@@ -1,0 +1,13 @@
+{
+  "phraseText": "您有新的外贸部订单，请注意查收。",
+  "voice": "Microsoft Huihui Desktop",
+  "repeatCount": 2,
+  "pauseMs": 500,
+  "channels": 1,
+  "sampleWidth": 2,
+  "sampleRate": 22050,
+  "phraseFrameCount": 98297,
+  "pauseFrameCount": 11025,
+  "phrasePcmSha256": "6330d94e6befe32acc7b2101b5ec616687e4ef6f23ddd68f63c0374bd0e9bed4",
+  "wavSha256": "08c2c7be51344c47ab30191a082efb13c6523c4679875fc3f3a36cddc1d0f57e"
+}

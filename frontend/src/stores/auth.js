@@ -73,16 +73,26 @@ export const useAdminAuthStore = defineStore("admin-auth", {
         this.initialized = true;
         return;
       }
+      const token = this.token;
       try {
         const data = await request("/api/auth/me", {
-          headers: { Authorization: `Bearer ${this.token}` },
+          headers: { Authorization: `Bearer ${token}` },
         });
+        if (this.token !== token) return;
         if (data.role !== "admin") throw new Error("Role mismatch");
         this.user = data.user;
-      } catch {
-        this.token = "";
+        this.error = "";
+      } catch (error) {
+        if (this.token !== token) return;
         this.user = null;
-        writeToken("");
+        if ([401, 403].includes(error.status) || error.message === "Role mismatch") {
+          this.token = "";
+          writeToken("");
+        } else {
+          // Transport errors are not a new login: retain the session and its voice queue.
+          // Protected views remain unavailable until /auth/me succeeds again.
+          this.error = "连接暂时中断，恢复网络后请点击重试连接；原登录进度已保留。";
+        }
       } finally {
         this.initialized = true;
       }
@@ -107,17 +117,19 @@ export const useAdminAuthStore = defineStore("admin-auth", {
       }
     },
     async logout() {
-      try {
-        if (this.token) {
-          await request("/api/auth/logout", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${this.token}` },
-          });
-        }
-      } catch {}
+      const token = this.token;
+      // Stop local listeners and notify other tabs before waiting for the network.
       this.token = "";
       this.user = null;
       writeToken("");
+      try {
+        if (token) {
+          await request("/api/auth/logout", {
+            method: "POST",
+            headers: { Authorization: `Bearer ${token}` },
+          });
+        }
+      } catch {}
     },
   },
 });

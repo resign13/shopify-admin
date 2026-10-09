@@ -46,7 +46,12 @@ The systemd timer removes only expired events at 03:00 Beijing time daily. Publi
 
 No deployment is performed by local development. Publish compatible backend migrations/APIs first with delivery off,
 then the admin UI. Existing GitHub Actions remains the deployment mechanism.
-Configure the private signing secret outside Git, test on the actual Windows/Chrome/Edge/Bluetooth setup, then explicitly enable delivery.
+The release script ensures a private random signing secret in the server-only .env and keeps initial delivery off.
+After the backend and UI releases pass, dispatch the **Order Voice Settings** workflow on main with mode=enable.
+It checks the deployed trigger and audio resource, changes only server voice configuration, restarts the admin service,
+and smoke-tests live start/poll/validate using existing permitted staff sessions, without a new login or business writes.
+Failures automatically disable delivery. Dispatch mode=disable to stop delivery without stopping event collection.
+Actual Windows/Chrome/Edge/Bluetooth audibility and a full working day remain manual acceptance items.
 On failure disable delivery first. Keep notification tables/triggers and existing signed-stock/defect/ownership compatibility when rolling back.
 
 ## Acceptance still requiring a person
