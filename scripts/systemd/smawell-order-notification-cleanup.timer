@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily order notification retention
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 Asia/Shanghai
+Persistent=true
+Unit=smawell-order-notification-cleanup.service
+
+[Install]
+WantedBy=timers.target

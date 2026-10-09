@@ -3,10 +3,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  pull_request:
+    branches: [main]
 permissions:
   contents: read
 concurrency:
-  group: production-admin
+  group: admin-${{ github.event.pull_request.number || 'production' }}
   cancel-in-progress: false
 jobs:
   verify:
@@ -31,6 +33,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install frontend test dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Release configuration tests
+        run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Catalog ordering UI tests
         working-directory: frontend
         run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/inventoryStages.test.js src/utils/styleSalesperson.test.js
@@ -42,9 +49,10 @@ jobs:
           PGDATABASE: gingtto_workbench_test
           PGUSER: postgres
           PGPASSWORD: fixture-only-password
-        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order test_sales_ownership test_sales_dashboard_access test_temporary_inbound test_inventory_operations test_order_search test_order_operations test_defective_inventory test_inventory_batch
+        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order test_sales_ownership test_sales_dashboard_access test_temporary_inbound test_inventory_operations test_order_search test_order_operations test_defective_inventory test_inventory_batch test_order_notifications
   deploy:
     needs: verify
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

@@ -78,8 +78,9 @@ rsync -a --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --e
 rsync -a "$stage/scripts/" "$root/scripts/"
 rsync -a "$stage/db/" "$root/db/"
 cd "$root/$backend"
-.venv/bin/python -m py_compile app.py db.py inventory_policy.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py
+.venv/bin/python -m py_compile app.py db.py inventory_policy.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
 .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt gunicorn
+.venv/bin/python "$root/scripts/configure-order-voice.py" ensure --env "$root/$backend/.env"
 # Existing initialization applies additive migrations; data is never re-seeded.
 .venv/bin/python -c 'import app'
 # Keep older hashed assets so already-open browser tabs continue working.
@@ -99,6 +100,11 @@ for attempt in $(seq 1 20); do
     .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply
     .venv/bin/python "$root/scripts/verify-sales-access.py" "$backend"
     .venv/bin/python "$root/scripts/verify-order-search.py"
+    .venv/bin/python "$root/scripts/verify-order-notifications.py"
+    install -m 644 "$root/scripts/systemd/smawell-order-notification-cleanup.service" /etc/systemd/system/
+    install -m 644 "$root/scripts/systemd/smawell-order-notification-cleanup.timer" /etc/systemd/system/
+    systemctl daemon-reload
+    systemctl enable --now smawell-order-notification-cleanup.timer
     stock_snapshot > "$backup/inventory-after.json"
     echo "Inventory before release: $(cat "$backup/inventory-before.json")"
     echo "Inventory after release: $(cat "$backup/inventory-after.json")"

@@ -164,6 +164,7 @@ def run_sync():
         management.execute(SQL('CREATE DATABASE {}').format(Identifier(stage)))
         try:
             with psycopg.connect(**config, dbname=stage) as staged:
+                staged.execute("SET gingtto.notifications_paused='on'")
                 staged.execute(sql, prepare=False)
                 actual = fingerprint(staged)
                 if actual != payload['tables']:
@@ -177,7 +178,8 @@ def run_sync():
             # Migrate the validated staging database before switching. A failed
             # local migration must leave the previous usable mirror untouched.
             environment = {**os.environ, 'PGHOST':'127.0.0.1', 'PGPORT':'55439',
-                           'PGDATABASE':stage, 'PGUSER':config['user'], 'PGPASSWORD':config['password']}
+                           'PGDATABASE':stage, 'PGUSER':config['user'], 'PGPASSWORD':config['password'],
+                           'ORDER_NOTIFICATION_MAINTENANCE':'1'}
             # Apply active manual-validation worktree migrations before swapping
             # the mirror so daily sync cannot remove fields required by a running
             # uncommitted feature, e.g. independent temporary inbound quantities.

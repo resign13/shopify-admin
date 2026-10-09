@@ -98,6 +98,8 @@ from db import (
 )
 
 import workbench
+import order_notifications
+from time import perf_counter
 
 app = Flask(__name__)
 CORS(app)
@@ -3161,6 +3163,31 @@ def sanitize_customer_inventory(response):
     if user.get('role') == 'customer' and request.path.startswith('/api/admin/inventory') and response.is_json:
         response.set_data(app.json.dumps(inventory_policy.public_inventory(response.get_json())))
     return response
+
+
+@app.post('/api/admin/order-notifications/<operation>')
+@require_auth
+@require_roles('admin', 'sales', 'warehouse')
+def order_notification_api(operation):
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({'message':'请求内容必须为对象'}), 400
+    started = perf_counter()
+    try:
+        if operation == 'start':
+            result = order_notifications.start(extract_token(), body)
+        elif operation == 'poll':
+            result = order_notifications.poll(extract_token(), body, g.current_user)
+        elif operation == 'validate':
+            result = order_notifications.validate(extract_token(), body, g.current_user)
+        else:
+            return jsonify({'message':'通知操作不存在'}), 404
+        app.logger.info('order_notification operation=%s count=%d duration_ms=%.1f',
+                        operation, len(result.get('events', [])), (perf_counter()-started)*1000)
+        return jsonify(result)
+    except order_notifications.NotificationError as exc:
+        app.logger.warning('order_notification operation=%s code=%s status=%d', operation, exc.code, exc.status)
+        return jsonify({'message':str(exc), 'code':exc.code}), exc.status
 
 
 ensure_database_ready()

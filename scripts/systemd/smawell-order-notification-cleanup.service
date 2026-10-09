@@ -1,0 +1,10 @@
+[Unit]
+Description=Remove order notification events older than seven days
+After=postgresql.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/smawell/shopify-admin/admin-backend
+ExecStart=/opt/smawell/shopify-admin/admin-backend/.venv/bin/python /opt/smawell/shopify-admin/scripts/cleanup-order-notifications.py
+NoNewPrivileges=true
+PrivateTmp=true
