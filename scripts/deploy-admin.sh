@@ -113,6 +113,7 @@ for attempt in $(seq 1 20); do
   if curl -fsS "http://127.0.0.1:5302/api/health" > /dev/null; then
     systemctl is-active --quiet "$service"
     .venv/bin/python "$root/scripts/verify-category-order.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-style-catalog.py" "$backend"
     .venv/bin/python "$root/scripts/verify-temporary-inbound.py" "$backend"
     .venv/bin/python "$root/scripts/verify-defective-inventory.py" "$backend"
     .venv/bin/python "$root/scripts/verify-inventory-overdelivery.py" "$backend"

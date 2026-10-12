@@ -84,7 +84,7 @@ export async function download(path, filename) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-export function useList(resource, defaults = {}) {
+export function useList(resource, defaults = {}, ignoredKeys = []) {
   const route = useRoute(),
     router = useRouter(),
     path = route.path;
@@ -93,7 +93,10 @@ export function useList(resource, defaults = {}) {
   try {
     cached = JSON.parse(sessionStorage.getItem(cacheKey) || "{}");
   } catch {}
-  const initial = Object.keys(route.query).length ? route.query : cached;
+  const cleanQuery = (query) => Object.fromEntries(
+    Object.entries(query).filter(([key]) => !ignoredKeys.includes(key)),
+  );
+  const initial = cleanQuery(Object.keys(route.query).length ? route.query : cached);
   const state = reactive({
     rows: [],
     total: 0,
@@ -160,7 +163,7 @@ export function useList(resource, defaults = {}) {
     () => route.query,
     (q) => {
       if (route.path !== path) return;
-      const next = { page: 1, pageSize: 25, ...defaults, ...q };
+      const next = { page: 1, pageSize: 25, ...defaults, ...cleanQuery(q) };
       if (normalize(next) !== normalize(state.query)) state.query = next;
     },
   );
@@ -178,7 +181,7 @@ export function useList(resource, defaults = {}) {
     },
   );
   state.apply = (filters) => {
-    state.query = { ...state.query, ...filters, page: 1 };
+    state.query = cleanQuery({ ...state.query, ...filters, page: 1 });
   };
   state.load = load;
   state.sort = ({ prop, order }) => {

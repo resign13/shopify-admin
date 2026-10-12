@@ -187,7 +187,8 @@ class CatalogOrderTest(unittest.TestCase):
         config['collectionProductIds']['bestSeller'] = [1, 3, 2]
         config['displayCategoryKeys'] = ['outerwear', 'denim']
         response = self.call('home-config', 'PUT', {**config, 'version': workbench.version('homepage_configs', 1)})
-        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.status_code, 410, response.json)
+        db.save_homepage_config(config)  # Legacy read compatibility fixture, not a live write route.
         for endpoint in ('home-config', 'activity-config'):
             config = self.call(endpoint).json['config']
             self.assertEqual(config['sectionProductIds']['bestSeller'], [3, 2, 1])

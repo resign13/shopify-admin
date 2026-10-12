@@ -23,16 +23,12 @@
         ><ElOption value="backordered" label="欠货" /><ElOption value="available" label="有可用现货" /><ElOption
           value="empty"
           label="无库存" /></ElSelect
-      ><ElSelect v-model="filters.featured" clearable placeholder="首页推荐"
-        ><ElOption value="true" label="已推荐" /><ElOption
-          value="false"
-          label="未推荐" /></ElSelect
       ><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton>
     </form>
     <div v-if="selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个商品</strong
-      ><ElButton @click="batchOpen = true">批量调整分类 / 推荐</ElButton
+      ><ElButton @click="batchOpen = true">批量调整分类</ElButton
       ><ElButton text @click="clearSelection">清空选择</ElButton>
     </div>
     <DataTable
@@ -158,13 +154,7 @@
             :key="c.key"
             :value="c.key"
             :label="c.labels?.zh || c.key" /></ElSelect></ElFormItem
-      ><ElFormItem label="首页推荐"
-        ><ElSelect v-model="batch.featured"
-          ><ElOption value="keep" label="保持原值" /><ElOption
-            value="true"
-            label="设置推荐" /><ElOption
-            value="false"
-            label="取消推荐" /></ElSelect></ElFormItem></ElForm
+      ></ElForm>
     ><template #footer
       ><ElButton @click="batchOpen = false">取消</ElButton
       ><ElButton type="primary" :loading="saving" @click="applyBatch"
@@ -195,7 +185,7 @@ import {
   dateTime,
 } from "../composables/workbench";
 const router = useRouter(),
-  list = useList("products", { sort: "category" }),
+  list = useList("products", { sort: "category" }, ["featured"]),
   categories = ref([]),
   selected = ref([]),
   table = ref(),
@@ -203,13 +193,12 @@ const router = useRouter(),
   item = ref(),
   batchOpen = ref(false),
   saving = ref(false),
-  batch = reactive({ categoryKey: "", featured: "keep" });
+  batch = reactive({ categoryKey: "" });
 const orderedRows = computed(() => sortProductsByCategory(list.rows || [], categories.value));
 const filters = reactive({
   keyword: list.query.keyword || "",
   category: list.query.category || "",
   stock: list.query.stock || "",
-  featured: list.query.featured || "",
 });
 const columns = [
   { prop: "name", label: "商品信息", width: 260 },
@@ -241,7 +230,6 @@ function reset() {
     keyword: "",
     category: "",
     stock: "",
-    featured: "",
   });
   apply();
 }
@@ -279,7 +267,7 @@ async function remove(row) {
 }
 async function applyBatch() {
   if (saving.value) return;
-  if (!batch.categoryKey && batch.featured === "keep") {
+  if (!batch.categoryKey) {
     ElMessage.info("请选择要修改的字段");
     return;
   }
@@ -293,9 +281,7 @@ async function applyBatch() {
           selected.value.map((p) => [p.id, p.version]),
         ),
         ...(batch.categoryKey ? { categoryKey: batch.categoryKey } : {}),
-        ...(batch.featured !== "keep"
-          ? { featured: batch.featured === "true" }
-          : {}),
+
       },
       "POST",
     );

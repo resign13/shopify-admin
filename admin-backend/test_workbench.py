@@ -295,8 +295,8 @@ class WorkbenchTest(unittest.TestCase):
         response=self.call('home-config');self.assertEqual(response.status_code,200,response.json)
         config=response.json['config']
         config['heroBanners']={key:'/uploads/fixture.jpg' for key in ['bestSeller','newArrival','specialPrice']}
-        self.assertEqual(self.call('home-config','PUT',config).status_code,200)
-        self.assertEqual(self.call('home-config','PUT',config).status_code,409)
+        self.assertEqual(self.call('home-config','PUT',config).status_code,410)
+        self.assertEqual(self.call('home-config','PUT',config).status_code,410)
         for path,method in [('inventory/1/receive','POST'),('inventory/export','GET'),('inventory/import/preview','POST')]:
             self.assertEqual(self.call(path,method,role='customer').status_code,403)
 

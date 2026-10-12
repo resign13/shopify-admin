@@ -120,9 +120,7 @@ const definitions = [
   {
     label: "商城运营",
     items: [
-      ["/home-config", "首页配置", Picture, "admin,sales"],
-      ["/activity-zone/apply", "活动报名", Promotion, "admin,sales"],
-      ["/activity-zone/manage", "活动管理", Collection, "admin,sales"],
+      ["/presale", "预售管理", Promotion, "admin,sales"],
     ],
   },
   {

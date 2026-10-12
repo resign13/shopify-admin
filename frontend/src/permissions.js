@@ -18,9 +18,7 @@ export const moduleGroups = [
   {
     label: "商城运营",
     items: [
-      ["home-config", "首页配置"],
-      ["activity-zone/apply", "活动报名"],
-      ["activity-zone/manage", "活动管理"],
+      ["presale", "预售管理"],
     ],
   },
   {
@@ -45,4 +43,13 @@ export function roleModules(role) {
 export function routeModule(path) {
   const clean = path.replace(/^\//, "");
   return clean.startsWith("activity-zone/") ? clean : clean.split("/")[0];
+}
+
+export function defaultRoleModules(role) {
+ return roleModules(role).filter(key => role !== "sales" || key !== "presale");
+}
+
+export function editableRolePermissions(role, permissions) {
+  const allowed = roleModules(role);
+  return [...(permissions ?? defaultRoleModules(role))].filter(key => allowed.includes(key));
 }

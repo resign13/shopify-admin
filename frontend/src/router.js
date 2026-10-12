@@ -16,14 +16,7 @@ const definitions = [
   ],
   ["orders", "OrdersView", "订单管理", ["admin", "sales", "warehouse"]],
   ["categories", "CategoriesView", "商品分类", ["admin", "sales"]],
-  ["home-config", "HomeConfigView", "首页配置", ["admin", "sales"]],
-  ["activity-zone/apply", "ActivityApplyView", "活动报名", ["admin", "sales"]],
-  [
-    "activity-zone/manage",
-    "ActivityManageView",
-    "活动管理",
-    ["admin", "sales"],
-  ],
+  ["presale", "PresaleView", "预售管理", ["admin", "sales"]],
   ["store-accounts", "AccountsView", "商城账号", ["admin"]],
   ["admin-users", "AdminUsersView", "后台账号", ["admin"]],
   ["audit-logs", "AuditLogsView", "操作日志", ["admin"]],
@@ -32,6 +25,9 @@ const views = import.meta.glob([
   "./views/*.vue",
   "!./views/BannersView.vue",
   "!./views/ActivityZoneView.vue",
+  "!./views/HomeConfigView.vue",
+  "!./views/ActivityApplyView.vue",
+  "!./views/ActivityManageView.vue",
 ]);
 const router = createRouter({
   history: createWebHistory(),
@@ -54,7 +50,7 @@ const router = createRouter({
           meta: { title, roles, module: routeModule(path), requiresAuth: true },
         })),
         { path: "accounts", redirect: "/store-accounts" },
-        { path: "activity-zone", redirect: "/activity-zone/apply" },
+
       ],
     },
     { path: "/:pathMatch(.*)*", redirect: "/" },

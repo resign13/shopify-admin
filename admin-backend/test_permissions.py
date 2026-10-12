@@ -57,32 +57,21 @@ class ModulePermissionsTest(unittest.TestCase):
         self.assertEqual(self.call(f'admin-users/{other}', 'PUT', {'status': 'disabled'}).status_code, 400)
         self.assertEqual(self.call(f'admin-users/{other}', 'PUT', {'role': 'sales', 'permissions': []}).status_code, 400)
 
-    def test_module_dependencies_and_scoped_activity_updates(self):
-        config = self.call('home-config').json['config']
-        for key in config['heroBanners']:
-            config['heroBanners'][key] = '/uploads/fixture.jpg'
-        response = self.call('home-config', 'PUT', config)
-        self.assertEqual(response.status_code, 200, response.json)
-        self.grant('sales', ['activity-zone/apply'])
+    def test_module_dependencies_and_retired_activity_writes(self):
+        before = db.get_homepage_config()
+        self.assertEqual(self.call('home-config', 'PUT', before).status_code, 410)
+        self.assertEqual(self.call('activity-config', 'PUT', before).status_code, 410)
+        self.assertEqual(db.get_homepage_config(), before)
+        self.grant('sales', ['presale'])
+        self.assertEqual(self.call('presale', role='sales').status_code, 200)
         self.assertEqual(self.call('products?page=1', role='sales').status_code, 200)
         self.assertEqual(self.call('products/1', 'DELETE', role='sales').status_code, 403)
         self.assertEqual(self.call('home-config', role='sales').status_code, 403)
-        config = self.call('activity-config', role='sales').json['config']
-        self.assertEqual(self.call('activity-config', 'PUT', config, role='sales').status_code, 400)
-        body = {'version': config['version'], 'collectionProductIds': {key: [1] for key in config['collectionProductIds']}}
-        response = self.call('activity-config', 'PUT', body, role='sales')
-        self.assertEqual(response.status_code, 200, response.json)
-        self.assertEqual(response.json['config']['heroBanners'], config['heroBanners'])
-        self.assertEqual(self.call('activity-config', 'PUT', body, role='sales').status_code, 409)
-        self.grant('sales', ['home-config'])
-        config = self.call('home-config', role='sales').json['config']
-        config['collectionProductIds'] = {key: [] for key in config['collectionProductIds']}
-        self.assertEqual(self.call('home-config', 'PUT', config, role='sales').status_code, 403)
+        self.assertEqual(self.call('activity-config','PUT',before,role='sales').status_code,403)
         self.grant('sales', ['orders'])
         self.assertEqual(self.call('orders/customers?page=1', role='sales').status_code, 200)
         self.assertEqual(self.call('products/1', role='sales').status_code, 200)
         self.assertEqual(self.call('products/batch', 'POST', {}, role='sales').status_code, 403)
 
 
-if __name__ == '__main__':
-    unittest.main()
+if __name__ == '__main__': unittest.main()
