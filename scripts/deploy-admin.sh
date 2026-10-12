@@ -27,6 +27,7 @@ stock_snapshot() {
     'productBalances',(SELECT md5(string_agg(id::text||':'||stock::text,',' ORDER BY id)) FROM products),
     'sizeBalances',(SELECT md5(string_agg(id::text||':'||stock::text,',' ORDER BY id)) FROM product_size_prices),
     'pipelineBalances',(SELECT md5(string_agg(id::text||':'||contract_pending::text||':'||pending_inspection::text||':'||pending_inbound::text||':'||COALESCE(to_jsonb(s)->>'temporary_inbound','0')||':'||COALESCE(to_jsonb(s)->>'defective_pending','0'),',' ORDER BY id)) FROM product_size_prices s),
+    'weightBalances',(SELECT md5(string_agg(id::text||':'||COALESCE(to_jsonb(s)->>'weight_grams','null'),',' ORDER BY id)) FROM product_size_prices s),
     'accountLinks',(SELECT md5(string_agg(id::text||':'||COALESCE(to_jsonb(u)->>'linked_admin_user_id','0'),',' ORDER BY id)) FROM store_users u),
     'templateCreators',(SELECT md5(string_agg(id::text||':'||COALESCE(created_by_admin_id::text,'0'),',' ORDER BY id)) FROM order_customer_templates));"
 }
@@ -36,6 +37,14 @@ rollback() {
   trap - ERR
   # Never restart a legacy balance-resetting backend after negative balances exist.
   systemctl stop "$service" || true
+  weights=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM product_size_prices s WHERE to_jsonb(s)->>'weight_grams' IS NOT NULL)" 2>/dev/null) || weights=unknown
+  if [ "$weights" != f ]; then
+    if ! tar -xOf "$backup/code.tar.gz" "$backend/db.py" | grep 'existing_weights' > /dev/null || ! tar -tf "$backup/code.tar.gz" | grep "^$backend/product_weights.py$" > /dev/null; then
+      echo "Legacy rollback blocked: saved product weights must be preserved. Current code/database retained; backup: $backup."
+      systemctl restart "$service" || true
+      exit "$status"
+    fi
+  fi
   overdelivery=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT to_regclass('public.inventory_overdelivery') IS NOT NULL" 2>/dev/null) || overdelivery=unknown
   if [ "$overdelivery" != f ]; then
     cumulative=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM inventory_overdelivery WHERE used>0 OR normal_received>0)" 2>/dev/null) || cumulative=unknown
@@ -89,7 +98,7 @@ rsync -a --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --e
 rsync -a "$stage/scripts/" "$root/scripts/"
 rsync -a "$stage/db/" "$root/db/"
 cd "$root/$backend"
-.venv/bin/python -m py_compile app.py db.py inventory_policy.py inventory_overdelivery.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
+.venv/bin/python -m py_compile app.py db.py product_weights.py inventory_policy.py inventory_overdelivery.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
 .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt gunicorn
 .venv/bin/python "$root/scripts/configure-order-voice.py" ensure --env "$root/$backend/.env"
 # Existing initialization applies additive migrations; data is never re-seeded.
@@ -107,6 +116,7 @@ for attempt in $(seq 1 20); do
     .venv/bin/python "$root/scripts/verify-temporary-inbound.py" "$backend"
     .venv/bin/python "$root/scripts/verify-defective-inventory.py" "$backend"
     .venv/bin/python "$root/scripts/verify-inventory-overdelivery.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-product-weights.py" "$backend"
     # Approved permission upgrade is explicit, audited and one-time. Existing
     # account links and all other module grants are preserved.
     .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply

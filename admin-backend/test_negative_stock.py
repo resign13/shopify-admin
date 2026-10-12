@@ -109,20 +109,16 @@ class NegativeStockTest(unittest.TestCase):
         self.assertTrue(all(r.status_code in [200,400,404] for r in results),[r.json for r in results])
         self.assertEqual(self.balance(),0)
 
-    def test_fulfilled_deletion_and_transition_guards(self):
+    def test_fulfilled_deletion_and_reopening_stock_arithmetic(self):
         self.set_stock(M=0)
         for status in ['shipped','completed']:
             order=self.create(2)
             order=self.update(order,status=status,trackingNo='FIXTURE')
             before=self.balance()
-            if status == 'completed':
-                for target in ['paid','pending_payment','allocated','cancelled','shipped']:
-                    self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':target}).status_code,400)
-            else:
-                for target in ['cancelled','cancelled','paid','allocated','shipped']:
-                    response = self.call(f"orders/{order['id']}",'PUT',{'status':target,'trackingNo':'FIXTURE'})
-                    self.assertEqual(response.status_code,200,response.json)
-                    self.assertEqual(self.balance(), before + (2 if target == 'cancelled' else 0))
+            for target in ['paid','pending_payment','allocated','cancelled','cancelled','paid','shipped']:
+                response = self.call(f"orders/{order['id']}",'PUT',{'status':target,'trackingNo':'FIXTURE'})
+                self.assertEqual(response.status_code,200,response.json)
+                self.assertEqual(self.balance(), before + (2 if target == 'cancelled' else 0))
             self.assertEqual(self.call('orders','DELETE',{'orderIds':[order['id']]}).status_code,200)
             self.assertEqual(self.balance(),before)
         order=self.create(3);before=self.balance()

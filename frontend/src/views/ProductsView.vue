@@ -79,10 +79,6 @@
       >
       <template #stock="{ row }">{{ row.stock }}<ElTag v-if="row.shortageUnits" type="danger" size="small">欠货 {{ row.shortageUnits }}</ElTag></template>
       <template #price="{ row }">{{ priceRange(row) }}</template
-      ><template #featured="{ row }"
-        ><ElTag :type="row.featured ? 'primary' : 'info'">{{
-          row.featured ? "已推荐" : "未推荐"
-        }}</ElTag></template
       ><template #updatedAt="{ row }"
         ><small>{{ dateTime(row.updatedAt) }}</small></template
       >
@@ -141,7 +137,7 @@
         ><ElTableColumn
           prop="stock"
           label="库存"
-          align="right" /></ElTable></template
+          align="right" /><ElTableColumn label="单件净重（g）" align="right"><template #default="{ row }">{{ row.weightGrams == null ? "未设置" : row.weightGrams }}</template></ElTableColumn></ElTable></template
   ></ElDrawer>
   <ElDialog
     v-model="batchOpen"
@@ -221,7 +217,6 @@ const columns = [
   { prop: "categoryLabel", label: "分类", width: 90 },
   { prop: "price", label: "价格", numeric: true, sortable: true, width: 115 },
   { prop: "stock", label: "现货余额", numeric: true, sortable: true, width: 130 },
-  { prop: "featured", label: "推荐", width: 80 },
   { prop: "updatedAt", label: "更新时间", width: 140, sortable: true },
   { prop: "actions", label: "操作", width: 100 },
 ];

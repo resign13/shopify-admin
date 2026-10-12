@@ -1,7 +1,7 @@
 <template>
   <PageHeader
     :title="editing ? '编辑商品' : '新建商品'"
-    description="共同资料统一维护，各颜色独立设置图片、真实尺码、价格与库存。"
+    description="共同资料统一维护，各颜色独立设置图片、真实尺码、价格、库存与净重。"
     eyebrow="CATALOG / 商品资料"
     ><ElButton @click="router.push('/products')"
       >返回商品列表</ElButton
@@ -109,7 +109,7 @@
         </section>
         <section id="sizes" class="panel editor-section">
           <div class="panel-title">
-            <h2>真实尺码、价格与库存</h2>
+            <h2>真实尺码、价格、库存与净重</h2>
             <small>合同未送与合格在库存模块独立登记</small>
           </div>
           <div class="filters">
@@ -130,6 +130,15 @@
               :precision="0"
               placeholder="统一库存"
             /><ElButton @click="fill('stock')">应用库存</ElButton>
+          </div>
+          <div class="filters weight-bulk-tools" data-testid="weight-bulk-tools">
+            <ElSelect v-model="weightSizeCode" :empty-values="[null, undefined]" aria-label="批量重量尺码" style="width: 160px">
+              <ElOption label="全部尺码" value="" />
+              <ElOption v-for="code in weightSizes" :key="code" :label="code" :value="code" />
+            </ElSelect>
+            <ElInputNumber v-model="bulkWeight" :min="1" :max="MAX_WEIGHT_GRAMS" :precision="0" controls-position="right" placeholder="单件净重（g）" aria-label="批量单件净重（g）" />
+            <ElButton @click="fillWeight">批量应用重量</ElButton>
+            <small class="small-note">单件商品净重，不含包装；应用后保存商品才生效。</small>
           </div>
           <div
             v-for="variant in form.variants"
@@ -165,7 +174,8 @@
                   :max="2147483647"
                   :precision="0"
                   controls-position="right"
-                />
+                /><label>单件净重（g）</label>
+                <ElInputNumber v-model="size.weightGrams" :min="1" :max="MAX_WEIGHT_GRAMS" :precision="0" controls-position="right" placeholder="未设置" :aria-label="`${variant.colorName || '未命名颜色'} ${size.sizeCode} 单件净重（g）`" />
               </div>
             </div>
           </div>
@@ -225,7 +235,8 @@
 </template>
 <script setup>
 import { productSlug } from "../utils/productSlug";
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { MAX_WEIGHT_GRAMS, validWeight, realWeightSizes, weightTargets, applyWeight } from "../utils/productWeights";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import PageHeader from "../components/PageHeader.vue";
@@ -253,6 +264,8 @@ const route = useRoute(),
   newSize = ref(""),
   bulkPrice = ref(),
   bulkStock = ref(),
+  bulkWeight = ref(),
+  weightSizeCode = ref(""),
   uploadBusy = reactive({});
 const form = reactive({
   categoryKey: "",
@@ -265,6 +278,20 @@ const form = reactive({
   variants: [],
 });
 const { dirty, markClean } = useDirty(() => form);
+const weightSizes = computed(() => realWeightSizes(form.variants));
+watch(weightSizes, (codes) => { if (weightSizeCode.value && !codes.includes(weightSizeCode.value)) weightSizeCode.value = ""; });
+async function fillWeight() {
+  if (!validWeight(bulkWeight.value)) { ElMessage.error("单件净重请填写正整数克数"); return; }
+  const targets = weightTargets(form.variants, weightSizeCode.value);
+  if (!targets.length) { ElMessage.info("没有可应用的尺码"); return; }
+  const changed = targets.filter(({ size }) => size.weightGrams !== bulkWeight.value);
+  if (!changed.length) { ElMessage.info("对应尺码已经使用该重量"); return; }
+  const overwritten = changed.filter(({ size }) => size.weightGrams != null).length;
+  const colors = new Set(targets.map(({ variant }) => variant.localId)).size;
+  if (overwritten && !(await confirm(`将 ${colors} 个颜色、${targets.length} 个尺码的单件净重设为 ${bulkWeight.value} g，其中 ${overwritten} 个已填重量将被覆盖。保存商品后生效，是否应用？`))) return;
+  applyWeight(form.variants, weightSizeCode.value, bulkWeight.value);
+  ElMessage.success(`已应用到 ${targets.length} 个尺码，请保存商品`);
+}
 function addVariant() {
   form.variants.push({
     localId: crypto.randomUUID(),
@@ -282,7 +309,7 @@ function addVariant() {
         { sizeCode: "L" },
         { sizeCode: "XL" },
       ]
-    ).map((s) => ({ sizeCode: s.sizeCode, price: 0, stock: 0 })),
+    ).map((s) => ({ sizeCode: s.sizeCode, price: 0, stock: 0, weightGrams: null })),
   });
 }
 function populate(items) {
@@ -338,7 +365,7 @@ function addSize() {
   }
   for (const v of form.variants)
     if (!v.sizePrices.some((s) => s.sizeCode === newSize.value))
-      v.sizePrices.push({ sizeCode: newSize.value, price: 0, stock: 0 });
+      v.sizePrices.push({ sizeCode: newSize.value, price: 0, stock: 0, weightGrams: null });
   newSize.value = "";
 }
 async function removeSize(variant, index) {
@@ -393,10 +420,11 @@ async function submit() {
           s.stock < -2147483648 || s.stock > 2147483647 ||
           typeof s.price !== "number" ||
           !Number.isFinite(s.price) ||
-          s.price < 0,
+          s.price < 0 ||
+          (s.weightGrams != null && !validWeight(s.weightGrams)),
       )
     ) {
-      error.value = `请核对 ${v.colorName} 的尺码、价格和整数现货余额`;
+      error.value = `请核对 ${v.colorName} 的尺码、价格、整数现货余额及正整数净重`;
       return;
     }
   }
@@ -420,6 +448,7 @@ async function submit() {
         sizeCode: s.sizeCode,
         stock: s.stock,
         price: s.price,
+        weightGrams: s.weightGrams ?? null,
       })),
       image: v.images[0],
       gallery: v.images,
@@ -466,5 +495,13 @@ onMounted(load);
 }
 .filters .el-input {
   width: 200px;
+}
+.weight-bulk-tools .el-input-number {
+  width: 160px;
+}
+@media (max-width: 760px) {
+  .editor-layout { display: block; }
+  .editor-anchor { display: none; }
+  .save-bar { padding: 12px; gap: 8px; flex-wrap: wrap; }
 }
 </style>

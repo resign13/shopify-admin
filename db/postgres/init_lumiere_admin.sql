@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS product_size_prices (
   product_id BIGINT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
   size_code VARCHAR(32) NOT NULL,
   price NUMERIC(12, 2) NOT NULL CHECK (price >= 0),
+  weight_grams INTEGER CONSTRAINT product_size_prices_weight_positive CHECK (weight_grams IS NULL OR weight_grams > 0),
   stock INTEGER NOT NULL DEFAULT 0,
   contract_pending INTEGER NOT NULL DEFAULT 0 CHECK (contract_pending >= 0),
   temporary_inbound INTEGER NOT NULL DEFAULT 0 CHECK (temporary_inbound >= 0),

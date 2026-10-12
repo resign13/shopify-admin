@@ -4,6 +4,7 @@ import module_permissions
 import sales_ownership
 
 import os
+import product_weights
 import re
 import hashlib
 import zipfile
@@ -173,6 +174,7 @@ def filter_orders(
             [
                 str(order.get("orderNo") or "").lower(),
                 str(order.get("userName") or "").lower(),
+                str(order.get("contactName") or "").lower(),
             ]
         )
         if status_match and time_match and category_match and keyword_match:
@@ -1001,7 +1003,11 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet.row_dimensions[product_total_row].height = 30
     worksheet.row_dimensions[shipping_row].height = 30
     worksheet.row_dimensions[total_row].height = 30
-    worksheet.row_dimensions[spacer_row].height = 20.1
+    worksheet.row_dimensions[spacer_row].height = 28
+    worksheet.merge_cells(start_row=spacer_row, start_column=1, end_row=spacer_row, end_column=10)
+    worksheet[f"A{spacer_row}"] = product_weights.description(order, english=True)
+    worksheet[f"A{spacer_row}"].font = invoice_body_font(worksheet)
+    worksheet[f"A{spacer_row}"].alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
     worksheet.row_dimensions[deposit_row].height = 20.1
     worksheet.row_dimensions[balance_row].height = 20.1
     worksheet.row_dimensions[pre_footer_spacer_row].height = 11
@@ -2695,11 +2701,11 @@ def export_orders() -> Any:
     }
     if request.args.get('view') == 'workbench':
         owner_id = sales_ownership.scope(request.args, g.current_user)
-        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id))
+        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id), include_weight=True)
     else:
         # Compatibility exports use the same keyword/style/category/owner query
         # as the order list; only their legacy relative time range is additional.
-        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range)
+        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)), include_weight=True), time_range=time_range)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     if g.current_user.get("role") == "warehouse":
@@ -2727,9 +2733,9 @@ def export_orders_by_sheet() -> Any:
         if str(item).strip().isdigit()
     }
     if request.args.get('view') == 'workbench':
-        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)))
+        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)), include_weight=True)
     else:
-        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user))), time_range=time_range)
+        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)), include_weight=True), time_range=time_range)
     if selected_order_ids:
         orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
     if g.current_user.get("role") == "warehouse":
@@ -2748,7 +2754,7 @@ def export_orders_by_sheet() -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def export_order_invoice(order_id: int) -> Any:
-    order = get_order_by_id(order_id)
+    order = get_order_by_id(order_id, include_weight=True)
     if not order:
         return jsonify({"message": "Order not found"}), 404
     try:
@@ -2883,6 +2889,16 @@ def order_customer_options():
     return jsonify({'items':rows,'total':total,'page':page,'pageSize':size})
 
 
+@app.post('/api/admin/orders/weights/preview')
+@require_auth
+@require_roles('admin', 'sales')
+def order_weight_preview_route():
+    try:
+        return jsonify(workbench.order_weight_preview(request.get_json(silent=True)))
+    except ValueError as error:
+        return jsonify({'message': str(error)}), 400
+
+
 @app.post('/api/admin/orders')
 @require_auth
 @require_roles('admin', 'sales')
@@ -3003,7 +3019,7 @@ def invalid_workbench_input(error):
 @require_auth
 @require_roles('admin', 'sales')
 def product_detail_route(product_id):
-    item = workbench.product_detail(product_id)
+    item = workbench.product_detail(product_id, include_weight=True)
     return (jsonify({'product': item}) if item else (jsonify({'message': '商品不存在'}), 404))
 
 
@@ -3011,11 +3027,11 @@ def product_detail_route(product_id):
 @require_auth
 @require_roles('admin', 'sales')
 def product_family_route(product_id):
-    item = workbench.product_detail(product_id)
+    item = workbench.product_detail(product_id, include_weight=True)
     if not item:
         return jsonify({'message': '商品不存在'}), 404
     ids = workbench.db._fetch_all("SELECT p.id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE AND (p.id=%s OR (p.color_group<>'' AND p.color_group=%s)) ORDER BY pc.sort_order,pc.id,p.id", (product_id, item['colorGroup']))
-    return jsonify({'items': [workbench.product_detail(row['id']) for row in ids]})
+    return jsonify({'items': [workbench.product_detail(row['id'], include_weight=True) for row in ids]})
 
 
 @app.post('/api/admin/products/save-group')
@@ -3087,7 +3103,7 @@ def inventory_detail_route(product_id):
 @require_auth
 @require_roles('admin', 'sales', 'warehouse')
 def order_detail_route(order_id):
-    item = get_order_by_id(order_id)
+    item = get_order_by_id(order_id, include_weight=True)
     if not item: return jsonify({'message':'订单不存在'}),404
     item['version'] = workbench.version('orders', order_id)
     item['goodsAmount'] = round(sum(float(row['totalPrice']) for row in item['items']),2)

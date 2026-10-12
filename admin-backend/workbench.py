@@ -620,8 +620,8 @@ def products_page(args, pending=False):
     return {'items': items, 'total': summary['total'], 'page': page, 'pageSize': size, 'summary': totals}
 
 
-def product_detail(product_id, pending=False):
-    item = db.get_product_by_id(product_id, include_contract_pending=pending, include_inactive=pending)
+def product_detail(product_id, pending=False, *, include_weight=False):
+    item = db.get_product_by_id(product_id, include_contract_pending=pending, include_inactive=pending, include_weight=include_weight)
     if item:
         item['version'] = version('products', product_id)
         item['updatedAt'] = item['version']
@@ -856,6 +856,41 @@ def inventory_registrations_page(product_id, args):
             'total': total, 'page': page, 'pageSize': size}
 
 
+def order_weight_preview(payload):
+    """Read current real-size weights in one statement; never persist draft orders."""
+    import product_weights
+    if not isinstance(payload, dict) or not isinstance(payload.get('items'), list) or len(payload['items']) > 500:
+        raise ValueError('重量预览须提交最多 500 个商品尺码行')
+    items, seen = [], set()
+    for item in payload['items']:
+        if not isinstance(item, dict):
+            raise ValueError('重量预览商品行无效')
+        product_id, size_code, quantity = item.get('productId'), item.get('sizeCode'), item.get('quantity')
+        if type(product_id) is not int or not 1 <= product_id <= 9223372036854775807:
+            raise ValueError('重量预览商品编号无效')
+        if not isinstance(size_code, str) or len(size_code) > 200:
+            raise ValueError('重量预览尺码无效')
+        if type(quantity) is not int or not 0 <= quantity <= 2147483647:
+            raise ValueError('重量预览数量须为范围内的非负整数')
+        if quantity == 0:
+            continue
+        key = (product_id, size_code)
+        if key in seen:
+            raise ValueError('重量预览商品尺码不能重复')
+        seen.add(key)
+        items.append({'product_id': product_id, 'size_code': size_code, 'quantity': quantity})
+    rows = db._fetch_all('''
+        SELECT r.product_id, r.size_code, r.quantity, p.sku, s.weight_grams AS "unitWeightGrams"
+        FROM jsonb_to_recordset(%s::jsonb) AS r(product_id BIGINT, size_code TEXT, quantity INTEGER)
+        LEFT JOIN products p ON p.id=r.product_id
+        LEFT JOIN product_size_prices s ON s.product_id=p.id AND s.size_code=r.size_code AND r.size_code<>''
+    ''', (json.dumps(items),)) if items else []
+    missing = [{'productId': row['product_id'], 'sku': row['sku'] or f"商品 #{row['product_id']}",
+                'sizeCode': row['size_code'], 'quantity': row['quantity']}
+               for row in rows if row['unitWeightGrams'] is None]
+    return {**product_weights.summary(rows), 'missingItems': missing}
+
+
 def order_where(args, status=True, owner_id=None):
     where, params = ['TRUE'], []
     if owner_id is None: owner_id = args.get('_ownerId')
@@ -867,7 +902,7 @@ def order_where(args, status=True, owner_id=None):
     if keyword:
         # EXISTS keeps one row per order even when several sizes/colors match.
         # The item SKU is a historical snapshot; retain matches after SKU edits.
-        where.append("(concat_ws(' ',o.order_no,su.name,su.email,su.company_name,o.tracking_no) ILIKE %s "
+        where.append("(concat_ws(' ',o.order_no,o.contact_name,su.name,su.email,su.company_name,o.tracking_no) ILIKE %s "
                      "OR EXISTS(SELECT 1 FROM order_items ki LEFT JOIN products kp ON kp.id=ki.product_id "
                      "WHERE ki.order_id=o.id AND concat_ws(' ',ki.sku,kp.sku,kp.product_code,"
                      + _style_code_sql('kp') + ") ILIKE %s))")

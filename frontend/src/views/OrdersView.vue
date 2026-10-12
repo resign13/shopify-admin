@@ -39,7 +39,7 @@
       <ElInput
         v-model="filters.keyword"
         clearable
-        placeholder="订单号、账号、公司、物流单号、商品款号"
+        placeholder="订单号、客户名称、账号、公司、物流单号、商品款号"
         aria-label="订单查询关键词"
         style="width: 300px; max-width: 100%"
       /><ElDatePicker
@@ -189,7 +189,6 @@ const statusBusy = ref(false);
 const templatesOpen = ref(false);
 function statusOptions(row) {
   if (!auth.can("orders") || !["admin", "sales", "warehouse"].includes(auth.userRole)) return [];
-  if (row.status === "completed") return [];
   return Object.keys(statusNames).filter(status =>
     status !== row.status,
   );
@@ -256,6 +255,7 @@ const filters = reactive({
   );
 const columns = computed(() => [
   { prop: "orderNo", label: "订单号", width: 165 },
+  { prop: "createdAt", label: "下单时间", width: 145, sortable: true },
   { prop: "userName", label: "业务员", width: 150 },
   { prop: "contactName", label: "客户", width: 125, defaultVisible: true },
   { prop: "country", label: "国家", width: 90 },
@@ -274,7 +274,6 @@ const columns = computed(() => [
       ]
     : []),
   { prop: "status", label: "状态", width: 85 },
-  { prop: "createdAt", label: "下单时间", width: 145, sortable: true },
   { prop: "actions", label: "操作", width: 85 },
 ]);
 watch(

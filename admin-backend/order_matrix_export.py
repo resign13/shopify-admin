@@ -1,6 +1,7 @@
 """Order packing exports: one color SKU per row, paired sizes across columns."""
 from io import BytesIO
 import re
+import product_weights
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -151,6 +152,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
         for cell in ws[row_no][:end_col]:
             cell.font = Font(bold=True)
             cell.fill = PatternFill('solid', fgColor='F1F5F9')
+        full_line(row_no + 1, product_weights.description(order), 26)
         image_urls, file_urls = attachments(order)
         full_line(row_no + 2, '备注：' + str(order.get('note') or ''), 48)
         urls = file_urls

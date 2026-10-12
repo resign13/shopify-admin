@@ -4,6 +4,7 @@ import json
 import catalog_order
 import inventory_policy
 import inventory_overdelivery
+import product_weights
 import order_notification_schema
 import os
 import secrets
@@ -217,6 +218,7 @@ def _apply_schema_migrations(cur: Any) -> None:
     )
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='product_size_prices' AND column_name='stock') AS present")
     had_size_stock = cur.fetchone()['present']
+    product_weights.migrate(cur)
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS contract_pending INTEGER NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE product_size_prices DROP CONSTRAINT IF EXISTS product_size_prices_contract_pending_check")
@@ -359,7 +361,7 @@ def ensure_database_ready() -> None:
         conn.commit()
 
 
-def _build_product_bundles(product_ids: list[int], *, include_contract_pending: bool = False) -> tuple[
+def _build_product_bundles(product_ids: list[int], *, include_contract_pending: bool = False, include_weight: bool = False) -> tuple[
     dict[int, dict[str, str]],
     dict[int, dict[str, str]],
     dict[int, dict[str, str]],
@@ -396,7 +398,7 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
     )
     size_price_rows = _fetch_all(
         """
-        SELECT product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, defective_pending, sort_order
+        SELECT product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, defective_pending, weight_grams, sort_order
         FROM product_size_prices
         WHERE product_id = ANY(%s)
         ORDER BY product_id, sort_order, id
@@ -432,6 +434,8 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
             "stock": int(row["stock"]),
             "sortOrder": int(row["sort_order"]),
         }
+        if include_weight:
+            size_price["weightGrams"] = row["weight_grams"]
         if include_contract_pending:
             size_price["contractPending"] = int(row["contract_pending"] or 0)
             size_price["pendingInbound"] = int(row["pending_inbound"] or 0)
@@ -444,12 +448,12 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
     return names, summaries, descriptions, galleries, sizes, size_prices
 
 
-def _build_product_result(rows: list[dict[str, Any]], *, include_contract_pending: bool = False) -> list[dict[str, Any]]:
+def _build_product_result(rows: list[dict[str, Any]], *, include_contract_pending: bool = False, include_weight: bool = False) -> list[dict[str, Any]]:
     if not rows:
         return []
     product_ids = [int(row["id"]) for row in rows]
     names, summaries, descriptions, galleries, sizes, size_prices = _build_product_bundles(
-        product_ids, include_contract_pending=include_contract_pending
+        product_ids, include_contract_pending=include_contract_pending, include_weight=include_weight
     )
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -658,14 +662,14 @@ def list_products(*, include_contract_pending: bool = False, include_inactive: b
     return _build_product_result(rows, include_contract_pending=include_contract_pending)
 
 
-def get_product_by_id(product_id: int, *, include_contract_pending: bool = False, include_inactive: bool = False) -> dict[str, Any] | None:
+def get_product_by_id(product_id: int, *, include_contract_pending: bool = False, include_inactive: bool = False, include_weight: bool = False) -> dict[str, Any] | None:
     rows = _fetch_all(
         _product_base_query() + """
         WHERE p.id = %s AND (p.is_active = TRUE OR %s)
         """,
         (DEFAULT_LANG, product_id, include_inactive),
     )
-    items = _build_product_result(rows, include_contract_pending=include_contract_pending)
+    items = _build_product_result(rows, include_contract_pending=include_contract_pending, include_weight=include_weight)
     return _attach_color_options(items[0] if items else None)
 
 
@@ -763,6 +767,7 @@ def _normalize_size_prices(size_prices: list[dict[str, Any]] | None, sizes: list
             raise ValueError(f"Duplicate sizeCode: {size_code}")
         normalized.append(
             {
+                **({"weightGrams": product_weights.parse(row["weightGrams"], f"{size_code} 单件净重")} if "weightGrams" in row else {}),
                 "sizeCode": size_code,
                 "price": price,
                 "stock": stock,
@@ -813,7 +818,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     # values attached to existing real size codes instead of resetting them.
     cur.execute(
         """
-        SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, defective_pending
+        SELECT size_code, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, defective_pending, weight_grams
         FROM product_size_prices
         WHERE product_id = %s
         FOR UPDATE
@@ -821,6 +826,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
         (product_id,),
     )
     existing_size_rows = list(cur.fetchall())
+    existing_weights = {str(row["size_code"]): row["weight_grams"] for row in existing_size_rows}
     existing_contract_pending = {str(row["size_code"]): int(row["contract_pending"] or 0) for row in existing_size_rows}
     existing_inbound = {str(row["size_code"]): int(row["pending_inbound"] or 0) for row in existing_size_rows}
     existing_inspection = {str(row["size_code"]): int(row["pending_inspection"] or 0) for row in existing_size_rows}
@@ -883,8 +889,8 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
         cur.execute(
             """
             INSERT INTO product_size_prices
-              (product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, defective_pending, sort_order)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+              (product_id, size_code, price, stock, contract_pending, pending_inbound, pending_inspection, temporary_inbound, defective_pending, weight_grams, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 product_id,
@@ -896,6 +902,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
                 existing_inspection.get(item["sizeCode"], 0),
                 existing_temporary.get(item["sizeCode"], 0),
                 existing_defective.get(item["sizeCode"], 0),
+                item.get("weightGrams", existing_weights.get(item["sizeCode"])),
                 item["sortOrder"],
             ),
         )
@@ -2168,8 +2175,10 @@ def delete_admin_sessions_for_user(user_id: int) -> None:
         conn.commit()
 
 
-def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None) -> list[dict[str, Any]]:
-    query = """
+def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None, include_weight: bool = False) -> list[dict[str, Any]]:
+    weight_column = ", psp.weight_grams AS current_weight_grams" if include_weight else ""
+    weight_join = "LEFT JOIN product_size_prices psp ON psp.product_id=oi.product_id AND psp.size_code=oi.size_code AND oi.size_code<>''" if include_weight else ""
+    query = f"""
         SELECT
           o.id,
           o.order_no,
@@ -2192,7 +2201,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           oi.product_name,
           oi.sku,
           oi.size_code,
-          oi.quantity,
+          oi.quantity{weight_column},
           oi.unit_price,
           oi.total_price,
           p.product_code,
@@ -2222,6 +2231,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
         JOIN store_users su ON su.id = o.store_user_id
         LEFT JOIN order_items oi ON oi.order_id = o.id
         LEFT JOIN products p ON p.id = oi.product_id
+        {weight_join}
         LEFT JOIN product_categories pc ON pc.id = p.category_id
         LEFT JOIN product_category_translations pct ON pct.category_id = pc.id AND pct.lang_code = %s
     """
@@ -2291,6 +2301,8 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                     "categoryKey": row.get("category_key") or "",
                     "categoryLabel": row.get("category_label") or "",
                     "sizeCode": row["size_code"] or "",
+                    **({"unitWeightGrams": row["current_weight_grams"],
+                        "lineWeightGrams": str(int(row["current_weight_grams"]) * quantity) if row["current_weight_grams"] is not None else None} if include_weight else {}),
                     "quantity": quantity,
                     "unitPrice": _num(row["unit_price"]) if row["unit_price"] is not None else 0,
                     "totalPrice": _num(row["total_price"]) if row["total_price"] is not None else 0,
@@ -2298,13 +2310,16 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                 }
             )
     items = list(grouped.values())
+    if include_weight:
+        for item in items:
+            item.update(product_weights.summary(item["items"]))
     if limit is not None:
         items = items[:limit]
     return items
 
 
-def get_order_by_id(order_id: int) -> dict[str, Any] | None:
-    items = list_orders(order_ids=[order_id])
+def get_order_by_id(order_id: int, *, include_weight: bool = False) -> dict[str, Any] | None:
+    items = list_orders(order_ids=[order_id], include_weight=include_weight)
     return next((item for item in items if item["id"] == order_id), None)
 
 
@@ -2424,10 +2439,10 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def validate_admin_order_transition(previous, next_status):
+    # Authorized staff may reopen completed orders. Customer transitions remain
+    # restricted in inventory_policy.validate_transition.
     if next_status not in ORDER_STATUSES:
         raise ValueError('订单状态无效')
-    if previous == 'completed' and next_status != 'completed':
-        raise ValueError('已完成订单不能变更状态或取消')
 
 
 def update_order_status(
@@ -2460,6 +2475,7 @@ def update_order_status(
                         shipping_fee = %s,
                         total_amount = %s,
                         shipped_at = COALESCE(shipped_at, NOW()),
+                        completed_at = NULL,
                         updated_at = NOW()
                     WHERE id = %s
                     RETURNING id
@@ -2491,6 +2507,7 @@ def update_order_status(
                         payment_link = %s,
                         shipping_fee = %s,
                         total_amount = %s,
+                        completed_at = NULL,
                         updated_at = NOW()
                     WHERE id = %s
                     RETURNING id
