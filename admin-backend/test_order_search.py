@@ -110,6 +110,47 @@ class OrderSearchTest(unittest.TestCase):
         self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM inventory_receipts')['n'], 0)
         self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM admin_audit_logs')['n'], 0)
 
+    def test_contact_name_search_combines_pagination_status_and_owner_scope(self):
+        db._fetch_one("UPDATE orders SET contact_name='Omar Jbari' WHERE id=1 RETURNING id")
+        db._fetch_one("UPDATE orders SET contact_name='OMAR Customer B' WHERE id=2 RETURNING id")
+        db._fetch_one("UPDATE orders SET contact_name='陈先生 客户' WHERE id=3 RETURNING id")
+        before = db._fetch_all('SELECT * FROM product_size_prices ORDER BY id')
+        for keyword in ['Omar', '  oMaR  ', 'OMAR']:
+            query = {'keyword': keyword}
+            self.assertEqual(self.ids(query), {1, 2})
+            self.assertEqual(self.ids({**query, 'page': 1}), {1, 2})
+            result = self.call({**query, 'page': 1, 'status': 'paid'}).json
+            self.assertEqual(result['total'], 1)
+            self.assertEqual(result['statusCounts'], {'paid': 1, 'pending_payment': 1})
+            self.assertEqual(self.ids({**query, 'country': 'Germany', 'category': 'denim'}), {1})
+            self.assertEqual(self.ids({**query, 'dateFrom': '2026-09-18', 'dateTo': '2026-09-18'}), {1, 2})
+            self.assertEqual(self.ids({**query, 'salespersonId': self.b}), {2})
+            self.assertEqual(self.ids({**query, 'salespersonId': self.b}, 'sales'), {1})
+            self.assertEqual(self.ids(query, 'b'), {2})
+        self.assertEqual(self.ids({'keyword': '陈先生'}), {3})
+        self.assertEqual(self.ids({'keyword': '陈先生'}, 'b'), set())
+        self.assertEqual(self.ids({'keyword': "' OR TRUE --"}), set())
+        self.assertEqual(self.call({'keyword': 'Omar'}, 'customer').status_code, 403)
+        self.assertEqual(db._fetch_all('SELECT * FROM product_size_prices ORDER BY id'), before)
+        self.assertEqual(db._fetch_one('SELECT COUNT(*) AS n FROM admin_audit_logs')['n'], 0)
+
+    def test_contact_name_exports_compatibility_and_legacy_filter_agree(self):
+        db._fetch_one("UPDATE orders SET contact_name='Unique Buyer Contact' WHERE id IN (1,2) RETURNING id")
+        for route, builder in [('orders/export', 'build_orders_export'), ('orders/export-by-sheet', 'build_orders_sheet_export')]:
+            for view in ['', 'workbench']:
+                for role, expected in [('admin', {1, 2}), ('sales', {1}), ('b', {2}), ('warehouse', {1, 2})]:
+                    with self.subTest(route=route, view=view, role=role), patch.object(
+                        application, builder, return_value=io.BytesIO(b'fixture')
+                    ) as mocked:
+                        response = self.call({'keyword': '  BUYER CONTACT ', 'view': view, 'includeImages': '0'}, role, route)
+                        self.assertEqual(response.status_code, 200, response.json)
+                        orders = mocked.call_args.args[0]
+                        self.assertEqual({row['id'] for row in orders}, expected)
+                        if role == 'warehouse':
+                            self.assertTrue(all('totalAmount' not in row for row in orders))
+        filtered = application.filter_orders(db.list_orders(), keyword=' unique buyer ')
+        self.assertEqual({row['id'] for row in filtered}, {1, 2})
+
 
 if __name__ == '__main__':
     unittest.main()

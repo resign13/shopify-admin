@@ -195,6 +195,130 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(self.call(f"orders/{order['id']}/details",'PUT',body).status_code,200)
         self.assertEqual(self.stock()['stock'],25)
 
+    def change_status(self, order, status, role='admin', **fields):
+        response = self.call(f"orders/{order['id']}", 'PUT', {
+            'version': order['version'], 'status': status, 'shippingFee': order['shippingFee'],
+            'paymentLink': order['paymentLink'], 'trackingNo': order['trackingNo'], **fields,
+        }, role)
+        self.assertEqual(response.status_code, 200, response.json)
+        return self.call(f"orders/{order['id']}").json['order']
+
+    def test_completed_can_reopen_to_every_status_with_one_operation_and_no_new_event(self):
+        for target in ['pending_payment', 'allocated', 'paid', 'shipped', 'cancelled']:
+            with self.subTest(target=target):
+                stock_before_creation = self.stock()['stock']
+                order = self.create()
+                completed = self.change_status(order, 'completed')
+                self.assertTrue(completed['completedAt'])
+                stages = [(r['sizeCode'], r['contractPending'], r['pendingInspection'],
+                           r['pendingInbound'], r['defectivePending'], r['temporaryInbound'])
+                          for r in self.stock()['sizePrices']]
+                events = db._fetch_one('SELECT COUNT(*) AS n FROM order_created_events')['n']
+                updated = self.change_status(completed, target, trackingNo='REOPEN-FIXTURE' if target == 'shipped' else '')
+                self.assertEqual(updated['status'], target)
+                self.assertFalse(updated['completedAt'])
+                self.assertEqual(updated['items'], completed['items'])
+                self.assertEqual(updated['totalAmount'], 127.5)
+                self.assertEqual(updated['shippingFee'], 12.5)
+                expected = stock_before_creation if target == 'cancelled' else stock_before_creation - 5
+                self.assertEqual(self.stock()['stock'], expected)
+                self.assertEqual([(r['sizeCode'], r['contractPending'], r['pendingInspection'],
+                                   r['pendingInbound'], r['defectivePending'], r['temporaryInbound'])
+                                  for r in self.stock()['sizePrices']], stages)
+                history = self.call(f"orders/{order['id']}/operations").json
+                self.assertEqual(history['total'], 2)
+                changes = {c['field']: c for c in history['items'][0]['changes']}
+                self.assertEqual((changes['status']['before'], changes['status']['after']), ('completed', target))
+                self.assertEqual(db._fetch_one('SELECT COUNT(*) AS n FROM order_created_events')['n'], events)
+                self.assertEqual(self.call(f"orders/{order['id']}", 'PUT', {
+                    'version': completed['version'], 'status': target, 'trackingNo': 'REOPEN-FIXTURE',
+                }).status_code, 409)
+                self.assertEqual(self.stock()['stock'], expected)
+                self.assertEqual(self.call(f"orders/{order['id']}/operations").json['total'], 2)
+
+    def test_completed_details_reopen_and_preserve_fulfilled_line_protection(self):
+        completed = self.change_status(self.create(), 'completed')
+        bad = copy.deepcopy(completed)
+        bad['status'] = 'paid'
+        bad['items'][0]['quantity'] += 1
+        self.assertEqual(self.call(f"orders/{completed['id']}/details", 'PUT', bad).status_code, 400)
+        self.assertEqual(self.stock()['stock'], 25)
+        self.assertEqual(self.call(f"orders/{completed['id']}/operations").json['total'], 1)
+        body = copy.deepcopy(completed)
+        body.update(status='paid', note='Reopened by staff')
+        response = self.call(f"orders/{completed['id']}/details", 'PUT', body)
+        self.assertEqual(response.status_code, 200, response.json)
+        reopened = self.call(f"orders/{completed['id']}").json['order']
+        self.assertEqual((reopened['status'], reopened['note']), ('paid', 'Reopened by staff'))
+        self.assertFalse(reopened['completedAt'])
+        self.assertEqual(self.stock()['stock'], 25)
+        recompleted = self.change_status(reopened, 'completed')
+        self.assertTrue(recompleted['completedAt'])
+        recompleted['status'] = 'cancelled'
+        response = self.call(f"orders/{recompleted['id']}/details", 'PUT', recompleted)
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(self.stock()['stock'], 30)
+        self.assertEqual(self.call(f"orders/{recompleted['id']}/operations").json['total'], 4)
+
+    def test_completed_invalid_and_concurrent_cancel_are_atomic(self):
+        completed = self.change_status(self.create(), 'completed')
+        for fields in [{'status': 'invalid'}, {'status': 'shipped', 'trackingNo': ''}]:
+            response = self.call(f"orders/{completed['id']}", 'PUT', {'version': completed['version'], **fields})
+            self.assertEqual(response.status_code, 400, response.json)
+        unchanged = self.call(f"orders/{completed['id']}").json['order']
+        self.assertEqual(unchanged, completed)
+        self.assertEqual(self.call(f"orders/{completed['id']}/operations").json['total'], 1)
+        body = {'version': completed['version'], 'status': 'cancelled', 'shippingFee': 12.5}
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            responses = list(pool.map(lambda _: self.call(f"orders/{completed['id']}", 'PUT', body), range(2)))
+        self.assertEqual(sorted(r.status_code for r in responses), [200, 409])
+        self.assertEqual(self.stock()['stock'], 30)
+        cancelled = self.call(f"orders/{completed['id']}").json['order']
+        self.change_status(cancelled, 'cancelled')
+        self.assertEqual(self.stock()['stock'], 30)
+        self.assertEqual(self.call(f"orders/{completed['id']}/operations").json['total'], 2)
+        restored = self.change_status(self.call(f"orders/{completed['id']}").json['order'], 'paid')
+        self.assertEqual(restored['status'], 'paid')
+        self.assertEqual(self.stock()['stock'], 25)
+
+    def test_completed_cancel_overflow_rolls_back_status_stock_and_history(self):
+        completed = self.change_status(self.create(), 'completed')
+        db.update_product_inventory(1, {'M': 2147483645, 'L': 0, 'Tall XL': 0})
+        before = self.stock()
+        response = self.call(f"orders/{completed['id']}", 'PUT', {
+            'version': completed['version'], 'status': 'cancelled', 'shippingFee': 12.5,
+        })
+        self.assertEqual(response.status_code, 400, response.json)
+        self.assertEqual(self.stock(), before)
+        self.assertEqual(self.call(f"orders/{completed['id']}").json['order'], completed)
+        self.assertEqual(self.call(f"orders/{completed['id']}/operations").json['total'], 1)
+
+    def test_completed_reopen_respects_owner_role_module_and_warehouse_redaction(self):
+        import inventory_policy
+        own_response = self.call('orders', 'POST', self.payload(), 'sales')
+        self.assertEqual(own_response.status_code, 200, own_response.json)
+        own = self.call(f"orders/{own_response.json['order']['id']}").json['order']
+        completed = self.change_status(own, 'completed')
+        response = self.call(f"orders/{own['id']}", 'PUT', {
+            'version': completed['version'], 'status': 'paid', 'shippingFee': 999,
+            'paymentLink': 'https://fixture.invalid/changed',
+        }, 'warehouse')
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue({'totalAmount', 'goodsAmount', 'shippingFee', 'paymentLink'}.isdisjoint(response.json['order']))
+        self.assertTrue(all({'unitPrice', 'totalPrice'}.isdisjoint(r) for r in response.json['order']['items']))
+        updated = self.call(f"orders/{own['id']}").json['order']
+        self.assertEqual((updated['shippingFee'], updated['totalAmount'], updated['paymentLink']), (12.5, 127.5, ''))
+        completed = self.change_status(updated, 'completed')
+        self.change_status(completed, 'allocated', 'sales')
+        other = self.change_status(self.create(), 'completed')
+        self.assertEqual(self.call(f"orders/{other['id']}", 'PUT', {'status': 'paid'}, 'sales').status_code, 404)
+        self.assertEqual(self.call(f"orders/{own['id']}", 'PUT', {'status': 'paid'}, 'customer').status_code, 403)
+        db._fetch_one("UPDATE admin_users SET permissions='[]' WHERE role='warehouse' RETURNING id")
+        self.assertEqual(self.call(f"orders/{other['id']}", 'PUT', {'status': 'paid'}, 'warehouse').status_code, 403)
+        for target in ['paid', 'cancelled', 'shipped']:
+            with self.assertRaises(ValueError):
+                inventory_policy.validate_transition('completed', target)
+
 
 if __name__=='__main__':
     unittest.main()

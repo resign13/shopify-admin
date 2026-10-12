@@ -45,7 +45,9 @@
           </div>
         </div>
         <div class="detail-section">
-          <h3>商品明细 · {{ order.itemCount }} 件</h3>
+          <div class="panel-title"><h3>商品明细 · {{ order.itemCount }} 件</h3>
+            <ElButton :disabled="editing || busy" :loading="loading" @click="refreshDetails">刷新详情</ElButton>
+          </div>
           <ElTable :data="order.items"
             ><ElTableColumn label="商品" min-width="230"
               ><template #default="{ row }"
@@ -70,8 +72,8 @@
               ><template #default="{ row }">{{
                 money(row.totalPrice)
               }}</template></ElTableColumn
-            ></ElTable
-          >
+            ><ElTableColumn label="单件净重（g）" width="105" align="right"><template #default="{ row }">{{ row.unitWeightGrams == null ? "未设置" : row.unitWeightGrams }}</template></ElTableColumn>
+            </ElTable>
           <div v-if="!warehouseStatusOnly" class="detail-grid section-gap">
             <div>
               <span>商品金额</span
@@ -84,6 +86,11 @@
               }}</strong>
             </div>
           </div>
+        </div>
+        <div class="detail-section order-weight-summary" data-testid="order-weight-summary">
+          <span>商品净重（kg）</span>
+          <strong :class="{ 'weight-incomplete': order.totalWeightGrams == null }">{{ orderWeightText(order) }}</strong>
+          <small>按当前商品重量计算，不含包装；刷新详情可获取最新重量。</small>
         </div>
         <div v-if="order.labelImageUrls?.length" class="detail-section">
           <h3>订单附件</h3>
@@ -121,7 +128,7 @@
                   v-for="(label, value) in statusNames"
                   :key="value"
                   :value="value"
-                  :label="label" :disabled="order.status === 'completed' && value !== 'completed'" /></ElSelect></ElFormItem
+                  :label="label" /></ElSelect></ElFormItem
             ><ElFormItem v-if="!warehouseStatusOnly"
               label="运费（USD）"
               prop="shippingFee"
@@ -206,6 +213,7 @@
 </template>
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
+import { orderWeightText } from "../utils/productWeights";
 import { ElMessage } from "element-plus";
 import OrderEditor from "./OrderEditor.vue";
 import OrderOperations from "./OrderOperations.vue";
@@ -336,6 +344,16 @@ async function submit() {
     saving.value = false;
   }
 }
+async function refreshDetails() {
+  if (editing.value || busy.value || loading.value) return;
+  const id = props.id;
+  loading.value = true;
+  try {
+    const item = (await api(`orders/${id}`)).order;
+    if (props.open && props.id === id) populate(item);
+  } catch (e) { notifyError(e); }
+  finally { loading.value = false; }
+}
 async function readLatest() {
   try {
     latest.value = (await api(`orders/${props.id}`)).order;
@@ -374,3 +392,9 @@ async function exportInvoice() {
   }
 }
 </script>
+<style scoped>
+.order-weight-summary { display: flex; flex-direction: column; gap: 8px; }
+.order-weight-summary span, .order-weight-summary small { color: #64748b; }
+.order-weight-summary strong { font-size: 16px; color: #0f172a; }
+.order-weight-summary .weight-incomplete { color: #b45309; font-size: 14px; }
+</style>

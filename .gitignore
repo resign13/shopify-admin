@@ -15,3 +15,5 @@ admin-backend/uploads/
 admin-backend/__pycache__/
 
 admin-backend/data/image-cache/
+.playwright-cli/
+output/

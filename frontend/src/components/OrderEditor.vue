@@ -3,7 +3,7 @@
     :is="embedded ? 'div' : ElDrawer"
     :model-value="open"
     :title="id ? '订单详情' : '新增订单'"
-    size="900px"
+    size="min(900px, 100vw)"
     :before-close="close"
     :close-on-click-modal="false"
   >
@@ -118,16 +118,10 @@
                 size="small"
                 @update:model-value="setMatrixQuantity(row, sizeCode, $event)"
               />
-              <small v-if="lineFor(row, sizeCode)" class="order-size-price">
-                {{ money(lineFor(row, sizeCode).unitPrice) }} / 件
-              </small>
             </div></template
         ></ElTableColumn
         ><ElTableColumn label="总件数" width="85" align="right"
           ><template #default="{ row }">{{ orderProductQuantity(form.items, row.productId) }} 件</template
-        ></ElTableColumn
-        ><ElTableColumn label="小计" width="105" align="right"
-          ><template #default="{ row }">{{ money(matrixRowSubtotal(row)) }}</template
         ></ElTableColumn
         ><ElTableColumn label="操作" width="70"
           ><template #default="{ row }"
@@ -141,30 +135,69 @@
           ></ElTableColumn
         ></ElTable
       >
+      <div class="order-goods-summary" data-testid="order-goods-summary">
+        <div class="order-amount-summary">
+          <ElFormItem
+            label="运费（USD）"
+            prop="shippingFee"
+            :rules="[{ validator: validateFee }]"
+            ><ElInputNumber
+              v-model="form.shippingFee"
+              :min="0"
+              :precision="2"
+              controls-position="right"
+          /></ElFormItem>
+          <div class="order-amount-values">
+            <div><span>商品金额</span><strong>{{ money(subtotal) }}</strong></div>
+            <h3>订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}</h3>
+          </div>
+        </div>
+        <div class="order-draft-weight" data-testid="order-draft-weight">
+          <div class="order-weight-heading">
+            <div class="order-weight-total">
+              <span class="order-weight-label">商品总重量（kg）</span>
+              <span class="order-weight-value" :class="{ 'is-placeholder': weightValuePlaceholder }" role="status" aria-live="polite">{{ draftWeightText }}</span>
+              <ElPopover
+                v-if="!weightLoading && (weightError || weightPreview.missingWeightQuantity)"
+                trigger="click"
+                placement="bottom-start"
+                :width="320"
+                :popper-style="{ maxWidth: 'calc(100vw - 32px)' }"
+              >
+                <template #reference>
+                  <ElButton text size="small" class="order-weight-hint" :aria-label="weightError ? '查看重量计算异常' : `查看${weightPreview.missingWeightQuantity}件未设置重量的商品`">
+                    <ElIcon><InfoFilled /></ElIcon>
+                    <span>{{ weightError ? '查看原因' : `${weightPreview.missingWeightQuantity} 件未设置` }}</span>
+                  </ElButton>
+                </template>
+                <div class="order-weight-details" data-testid="order-weight-details">
+                  <template v-if="weightError">
+                    <strong>暂未取得重量</strong>
+                    <p>{{ weightError }}；可点击“刷新重量”重试，不影响保存订单。</p>
+                  </template>
+                  <template v-else>
+                    <strong>{{ weightPreview.missingWeightQuantity }} 件商品未设置重量</strong>
+                    <p>当前重量不完整，仅统计已设置重量的商品。</p>
+                    <ul>
+                      <li v-for="item in weightPreview.missingItems" :key="`${item.productId}:${item.sizeCode}`">
+                        <span>{{ item.sku }} · {{ item.sizeCode || '未指定尺码' }}</span><span>{{ item.quantity }} 件</span>
+                      </li>
+                    </ul>
+                  </template>
+                </div>
+              </ElPopover>
+            </div>
+            <ElButton class="order-weight-refresh" :loading="weightLoading" :disabled="!weightItems.length" @click="refreshWeightPreview">刷新重量</ElButton>
+          </div>
+          <small class="order-weight-caption">按当前商品净重计算，不含包装。</small>
+        </div>
+      </div>
       <ElTable :data="inventoryImpact" size="small" empty-text="添加商品后显示库存变化">
         <ElTableColumn prop="sku" label="库存核对 / SKU"/><ElTableColumn prop="sizeCode" label="尺码"/>
         <ElTableColumn prop="current" label="当前余额"/><ElTableColumn prop="change" label="此次库存增减"/>
         <ElTableColumn label="预计保存后余额"><template #default="{row}"><ElTag :type="row.after < 0 ? 'danger' : 'info'">{{ row.after }}{{ row.after < 0 ? ' · 欠货' : '' }}</ElTag></template></ElTableColumn>
       </ElTable>
       <ElAlert v-if="inventoryImpact.some(row => row.after < 0)" title="保存后存在欠货，仍可提交。入库时会抵减欠货余额。" type="warning" :closable="false"/>
-      <div class="detail-grid section-gap">
-        <ElFormItem
-          label="运费（USD）"
-          prop="shippingFee"
-          :rules="[{ validator: validateFee }]"
-          ><ElInputNumber
-            v-model="form.shippingFee"
-            :min="0"
-            :precision="2"
-            controls-position="right"
-        /></ElFormItem>
-        <div class="numeric">
-          <small>商品金额 {{ money(subtotal) }}</small>
-          <h3 class="section-gap">
-            订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}
-          </h3>
-        </div>
-      </div>
       <div v-if="id" class="detail-grid">
         <ElFormItem label="订单状态"
           ><ElSelect v-model="form.status"
@@ -172,7 +205,7 @@
               v-for="(label, value) in statusNames"
               :key="value"
               :value="value"
-              :label="label" :disabled="statusDisabled(value)" /></ElSelect
+              :label="label" /></ElSelect
         ></ElFormItem>
         <ElFormItem label="物流单号"
           ><ElInput v-model.trim="form.trackingNo" placeholder="发货时必填"
@@ -222,8 +255,9 @@
   />
 </template>
 <script setup>
-import { computed, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElDrawer, ElMessage } from "element-plus";
+import { InfoFilled } from "@element-plus/icons-vue";
 import ImageUploader from "./ImageUploader.vue";
 import ProductPicker from "./ProductPicker.vue";
 import CustomerTemplates from "./CustomerTemplates.vue";
@@ -232,6 +266,7 @@ import { customerFields, customerProfile, applyCustomerProfile } from "../utils/
 import { compareProductCategories } from "../utils/catalogOrder";
 import { useAdminAuthStore } from "../stores/auth";
 import { orderProductQuantity } from "../utils/orderQuantities";
+import { formatWeightKg, orderWeightPreviewItems } from "../utils/productWeights";
 import {
   api,
   save,
@@ -322,6 +357,53 @@ const matrixRows = computed(() => {
   }
   return [...grouped.values()].sort((left, right) => compareProductCategories(products[left.productId], products[right.productId]));
 });
+const weightItems = computed(() => orderWeightPreviewItems(form.items));
+const emptyWeightPreview = () => ({ knownWeightGrams: "0", totalWeightGrams: "0", missingWeightQuantity: 0, missingItems: [] });
+const weightPreview = ref(emptyWeightPreview()), weightLoading = ref(false), weightError = ref("");
+const draftWeightText = computed(() => {
+  if (weightLoading.value) return "计算中…";
+  if (weightError.value) return "暂未取得重量";
+  const value = weightPreview.value;
+  if (value.totalWeightGrams != null) return `${formatWeightKg(value.totalWeightGrams)} kg`;
+  return BigInt(value.knownWeightGrams || "0") > 0n ? `已知 ${formatWeightKg(value.knownWeightGrams)} kg` : "未设置";
+});
+const weightValuePlaceholder = computed(() => weightLoading.value || !!weightError.value ||
+  (weightPreview.value.totalWeightGrams == null && BigInt(weightPreview.value.knownWeightGrams || "0") === 0n));
+let weightSerial = 0, weightTimer, weightController;
+function cancelWeightPreview() {
+  ++weightSerial;
+  clearTimeout(weightTimer);
+  weightController?.abort();
+}
+async function loadWeightPreview(current, items) {
+  const controller = new AbortController();
+  weightController = controller;
+  try {
+    const result = await api("orders/weights/preview", {
+      method: "POST", body: JSON.stringify({ items }), signal: controller.signal,
+    });
+    if (current === weightSerial && props.open) weightPreview.value = result;
+  } catch (error) {
+    if (current === weightSerial && error.name !== "AbortError") weightError.value = error.message;
+  } finally {
+    if (current === weightSerial) weightLoading.value = false;
+  }
+}
+function refreshWeightPreview(debounce = false) {
+  cancelWeightPreview();
+  weightError.value = "";
+  if (!props.open || !ready.value || !weightItems.value.length) {
+    weightPreview.value = emptyWeightPreview();
+    weightLoading.value = false;
+    return;
+  }
+  const current = weightSerial, items = weightItems.value;
+  weightLoading.value = true;
+  if (debounce === true) weightTimer = setTimeout(() => loadWeightPreview(current, items), 250);
+  else loadWeightPreview(current, items);
+}
+watch(() => [props.open, ready.value, JSON.stringify(weightItems.value)], () => refreshWeightPreview(true));
+onBeforeUnmount(cancelWeightPreview);
 const matrixSizes = computed(() => {
   const seen = new Set();
   const sizes = [];
@@ -372,19 +454,9 @@ function setMatrixQuantity(row, sizeCode, value) {
   }
   if (line) line.quantity = next;
 }
-function matrixRowSubtotal(row) {
-  return matrixSizes.value.reduce((sum, sizeCode) => {
-    const line = lineFor(row, sizeCode);
-    return sum + Number(line?.quantity || 0) * Number(line?.unitPrice || 0);
-  }, 0);
-}
 function removeMatrixProduct(row) {
   if (lockedLines.value) return;
   form.items = form.items.filter((item) => item.productId !== row.productId);
-}
-function statusDisabled(value) {
-  if (status.value === 'completed') return value !== status.value;
-  return false;
 }
 const inventoryImpact = computed(() => {
   const rows = new Map();
@@ -675,3 +747,50 @@ async function adoptLatest() {
   }
 }
 </script>
+<style scoped>
+.order-goods-summary {
+  padding: 16px 8px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.order-amount-summary, .order-weight-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.order-amount-summary :deep(.el-form-item) { margin-bottom: 0; }
+.order-amount-values { margin-left: auto; text-align: right; }
+.order-amount-values > div { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.order-amount-values > div { justify-content: flex-end; }
+.order-amount-values h3 { margin: 10px 0 0; color: var(--text); }
+.order-amount-values strong {
+  color: var(--text);
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+}
+.order-draft-weight { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--line); }
+.order-weight-heading { align-items: center; gap: 8px 16px; }
+.order-weight-total { display: flex; flex: 1; min-width: 0; align-items: center; flex-wrap: wrap; gap: 6px 12px; }
+.order-weight-label { white-space: nowrap; }
+.order-weight-value { color: var(--text); font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.order-weight-value.is-placeholder { color: var(--muted); font-size: 12px; font-weight: 400; }
+.order-weight-hint { height: 28px; margin: 0; padding: 4px 6px; color: #b45309; font-size: 12px; font-weight: 400; }
+.order-weight-hint :deep(.el-icon) { margin-right: 4px; font-size: 13px; }
+.order-weight-hint:hover, .order-weight-hint:focus-visible { color: #92400e; background: #fffbeb; }
+.order-weight-refresh { flex-shrink: 0; }
+.order-weight-caption { display: block; margin-top: 4px; font-size: 12px; line-height: 1.6; }
+.order-weight-details { color: #334155; font-size: 12px; line-height: 1.6; }
+.order-weight-details > strong { font-size: 13px; font-weight: 600; }
+.order-weight-details p { margin: 6px 0 0; color: #64748b; overflow-wrap: anywhere; }
+.order-weight-details ul { display: grid; gap: 8px; margin: 12px 0 0; padding: 12px 0 0; max-height: 200px; overflow-y: auto; list-style: none; border-top: 1px solid #e8edf3; }
+.order-weight-details li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.order-weight-details li > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.order-weight-details li > span:last-child { flex-shrink: 0; color: #b45309; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) {
+  .order-goods-summary { padding: 14px 0; }
+  .order-weight-total { flex-basis: 100%; }
+  .order-weight-refresh { margin-left: auto; }
+}
+</style>
