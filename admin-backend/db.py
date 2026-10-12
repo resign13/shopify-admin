@@ -4,6 +4,7 @@ import json
 import catalog_order
 import inventory_policy
 import inventory_overdelivery
+import style_catalog
 import product_weights
 import order_notification_schema
 import os
@@ -218,6 +219,7 @@ def _apply_schema_migrations(cur: Any) -> None:
     )
     cur.execute("SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='product_size_prices' AND column_name='stock') AS present")
     had_size_stock = cur.fetchone()['present']
+    style_catalog.migrate(cur)
     product_weights.migrate(cur)
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS stock INTEGER NOT NULL DEFAULT 0")
     cur.execute("ALTER TABLE product_size_prices ADD COLUMN IF NOT EXISTS contract_pending INTEGER NOT NULL DEFAULT 0")
@@ -468,8 +470,8 @@ def _build_product_result(rows: list[dict[str, Any]], *, include_contract_pendin
                 "slug": row["slug"],
                 "sku": row["sku"],
                 "productCode": row.get("product_code") or "",
-                "styleCode": row.get("style_code") or "",
                 "colorGroup": row.get("color_group") or "",
+                "styleCode": style_catalog.style_code(row.get("product_code"),row.get("color_group"),row.get("sku"),row.get("style_code")),
                 "colorName": row.get("color_name") or "",
                 "colorHex": row.get("color_hex") or "",
                 "categoryKey": row["category_key"],
@@ -556,18 +558,7 @@ def _product_code_family_prefix(product_code: str) -> str:
 
 def normalize_style_code(product_code: str = "", color_group: str = "", sku: str = "") -> str:
     """Return the stable style identifier shared by all color variants."""
-    code = str(product_code or "").strip()
-    group = str(color_group or "").strip()
-    fallback_sku = str(sku or "").strip()
-    if group and group.casefold() != code.casefold():
-        return group
-    source = code or fallback_sku
-    for separator in ("-", "_", "－"):
-        if separator in source:
-            prefix = source.rsplit(separator, 1)[0].strip()
-            if prefix:
-                return prefix
-    return source
+    return style_catalog.style_code(product_code, color_group, sku)
 
 
 def _list_color_options(
@@ -575,67 +566,14 @@ def _list_color_options(
     product_code: str = "",
     category_key: str = "",
     names: dict[str, str] | None = None,
+    explicit_style: str = "",
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    if color_group:
-        rows = _fetch_all(
-            """
-            SELECT id, slug, product_code, color_name, color_hex, main_image_url, stock
-            FROM products
-            WHERE is_active = TRUE AND color_group = %s
-            ORDER BY (SELECT sort_order FROM product_categories WHERE id=products.category_id), category_id, id
-            """,
-            (color_group,),
-        )
-
-    # Backward compatibility: older edits could accidentally overwrite color_group
-    # with each color variant's own product_code. In that case the query above
-    # only returns itself, so recover sibling colors by the shared product-code
-    # prefix such as CS2010-Black / CS2010-White.
-    family_prefix = _product_code_family_prefix(product_code)
-    if family_prefix and len(rows) <= 1:
-        fallback_rows = _fetch_all(
-            """
-            SELECT id, slug, product_code, color_name, color_hex, main_image_url, stock
-            FROM products
-            WHERE is_active = TRUE
-              AND (color_group = %s OR product_code = %s OR product_code ILIKE %s)
-            ORDER BY (SELECT sort_order FROM product_categories WHERE id=products.category_id), category_id, id
-            """,
-            (family_prefix, family_prefix, f"{family_prefix}-%"),
-        )
-        if len(fallback_rows) > len(rows):
-            rows = fallback_rows
-
-    # Some products use plain codes such as ZM4757 for each color, so there is no
-    # reliable code prefix to recover from. For those, use the product title
-    # inside the same category as the grouping fallback. Different color variants
-    # are created with the same title and category but different color_name/images.
-    name_values = list(
-        dict.fromkeys(
-            str(value or "").strip()
-            for value in (names or {}).values()
-            if str(value or "").strip()
-        )
-    )
-    if category_key and name_values and len(rows) <= 1:
-        title_rows = _fetch_all(
-            """
-            SELECT DISTINCT p.id, p.slug, p.product_code, p.color_name, p.color_hex, p.main_image_url, p.stock
-            FROM products p
-            JOIN product_categories pc ON pc.id = p.category_id
-            JOIN product_translations pt ON pt.product_id = p.id
-            WHERE p.is_active = TRUE
-              AND pc.category_key = %s
-              AND pt.name = ANY(%s)
-            ORDER BY p.id
-            """,
-            (category_key, name_values),
-        )
-        if len(title_rows) > len(rows):
-            rows = title_rows
-
+    code = style_catalog.style_code(product_code,color_group,explicit=explicit_style)
+    rows = _fetch_all(f"""SELECT p.id,p.slug,p.product_code,p.color_name,p.color_hex,p.main_image_url,p.stock
+      FROM products p WHERE p.is_active=TRUE AND {style_catalog.style_sql('p')}=%s
+      ORDER BY (SELECT sort_order FROM product_categories WHERE id=p.category_id),p.category_id,p.id""", (code,))
     return _format_color_options(rows)
+
 
 
 def _attach_color_options(product: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -646,6 +584,7 @@ def _attach_color_options(product: dict[str, Any] | None) -> dict[str, Any] | No
         product.get("productCode", ""),
         product.get("categoryKey", ""),
         product.get("name") or {},
+        product.get("styleCode", ""),
     )
     return product
 
@@ -1024,7 +963,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, color_group FROM products WHERE id = %s AND is_active = TRUE FOR UPDATE",
+                "SELECT id, color_group, featured FROM products WHERE id = %s AND is_active = TRUE FOR UPDATE",
                 (product_id,),
             )
             existing_product = cur.fetchone()
@@ -1072,7 +1011,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                     payload.get("colorHex", ""),
                     price,
                     stock,
-                    bool(payload.get("featured")),
+                    bool(payload.get("featured", existing_product["featured"])),
                     payload.get("origin", ""),
                     payload["image"],
                     details["sizeChartImage"],

@@ -99,6 +99,7 @@ from db import (
 )
 
 import workbench
+import presale
 import order_notifications
 from time import perf_counter
 
@@ -2452,6 +2453,20 @@ def delete_banner_route(banner_id: int) -> Any:
     return jsonify({"message": "Banner deleted"})
 
 
+@app.get('/api/admin/presale')
+@require_auth
+@require_roles('admin', 'sales')
+def presale_config_route():
+    return jsonify({'config': presale.get_config(), 'items': presale.catalog()})
+
+
+@app.put('/api/admin/presale')
+@require_auth
+@require_roles('admin', 'sales')
+def presale_save_route():
+    return jsonify({'config': presale.save_config(request.get_json(silent=True)), 'message': '预售配置已保存'})
+
+
 @app.get("/api/admin/activity-config")
 @app.get("/api/admin/home-config")
 @require_auth
@@ -2465,19 +2480,7 @@ def get_home_config_route() -> Any:
 @require_auth
 @require_roles("admin", "sales")
 def update_home_config_route() -> Any:
-    payload = request.get_json(silent=True) or {}
-    if request.path.endswith("/activity-config"):
-        if set(payload) - {"collectionProductIds", "version"}:
-            return jsonify({"message": "活动接口仅支持修改活动商品"}), 400
-        payload = {**get_homepage_config(), **payload}
-    elif not set(module_permissions.effective(g.current_user)) & {'activity-zone/apply', 'activity-zone/manage'}:
-        if payload.get('collectionProductIds') != get_homepage_config()['collectionProductIds']:
-            return jsonify({'message': '未分配活动模块权限，不能修改活动商品'}), 403
-    error = validate_homepage_config_payload(payload)
-    if error:
-        return jsonify({"message": error}), 400
-    config = save_homepage_config(payload)
-    return jsonify({"message": "Home config updated", "config": {**config, "version": workbench.version("homepage_configs", 1)}})
+    return jsonify({'message': '旧商城配置已停用，请使用预售管理', 'code': 'module_retired'}), 410
 
 
 @app.get("/api/admin/store-users")

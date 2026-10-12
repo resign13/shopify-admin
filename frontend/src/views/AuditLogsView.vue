@@ -146,6 +146,7 @@ const list = useList("audit-logs"),
   open = ref(false),
   item = ref();
 const modules = {
+    presale: "预售管理",
     products: "商品",
     inventory: "库存",
     orders: "订单",

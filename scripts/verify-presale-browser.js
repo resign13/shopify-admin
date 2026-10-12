@@ -1,0 +1,67 @@
+async (page) => {
+  if (!page.url().startsWith('http://127.0.0.1:5370/')) throw new Error('Isolated catalog fixture required');
+  page.removeAllListeners('dialog');
+  await page.getByRole('link',{name:'预售管理',exact:true}).click();
+  await page.getByRole('button',{name:'保存修改',exact:true}).waitFor();
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='保存修改'&&b.disabled));
+  const check=(ok,message)=>{if(!ok)throw new Error(message)};
+  const api=(body)=>page.evaluate(async body=>{
+    const r=await fetch('/api/admin/presale',{method:body?'PUT':'GET',headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+    return {status:r.status,...await r.json()};
+  },body);
+  const initial=(await api()).config;await api({...initial,styleCodes:[],sortMode:'automatic'});
+  await page.goto('http://127.0.0.1:5370/presale');await page.getByText('尚未选择预售款号',{exact:true}).waitFor();
+  await page.setViewportSize({width:1600,height:1000});
+  const picker=page.getByRole('dialog',{name:'添加完整款号（全部颜色）'});
+  if(!await picker.isVisible())await page.getByRole('button',{name:'＋ 添加款号',exact:true}).click();
+  for(const code of ['CAT-13','CAT-12','CAT-11'])await picker.getByRole('row').filter({has:page.getByRole('cell',{name:code,exact:true})}).locator('.el-checkbox').click();
+  await picker.getByRole('button',{name:'添加 3 款',exact:true}).click();
+  check((await api()).config.styleCodes.length===0,'Draft saved prematurely');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  await page.getByRole('button',{name:'保存修改',exact:true}).waitFor({state:'visible'});
+  await page.waitForFunction(()=>document.querySelector('button') && [...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='保存修改'&&b.disabled));
+  check((await api()).config.styleCodes.length===3,'Batch selection did not persist');
+  await page.locator('.presale-row').nth(1).getByRole('button',{name:'上移',exact:true}).click();
+  check((await page.locator('.presale-row strong').allTextContents()).join(',')==='CAT-12,CAT-13,CAT-11','Manual move order incorrect');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='保存修改'&&b.disabled));
+  await page.reload();await page.locator('.presale-row').first().waitFor();
+  check((await page.locator('.presale-row strong').allTextContents()).join(',')==='CAT-12,CAT-13,CAT-11','Manual order lost after reopen');
+  await page.locator('.presale-row').last().dragTo(page.locator('.presale-row').first());
+  check((await page.locator('.presale-row strong').allTextContents()).join(',')==='CAT-11,CAT-12,CAT-13','Drag order incorrect');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='保存修改'&&b.disabled));
+  await page.locator('.presale-row').first().getByRole('button',{name:'查看颜色',exact:true}).click();
+  const colors=page.getByRole('dialog',{name:'全部颜色',exact:true});await colors.waitFor();
+  check(await colors.locator('.presale-colors>div').count()===2,'Whole style color preview incomplete');
+  await colors.getByRole('button',{name:'关闭此对话框'}).click();
+  await page.getByRole('button',{name:'恢复按上架时间排序',exact:true}).click();
+  check((await page.locator('.presale-row strong').allTextContents()).join(',')==='CAT-13,CAT-12,CAT-11','Auto reset failed');
+  // Change server version while retaining a dirty draft, as another operator would.
+  const current=(await api()).config;check((await api({...current,styleCodes:['CAT-11']})).status===200,'Fixture conflict update failed');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  const conflict=page.getByRole('alert').filter({hasText:'草稿已保留'});
+  await conflict.waitFor();
+  check((await conflict.innerText()).includes('草稿已保留'),'409 did not preserve draft');
+  check(await page.locator('.presale-row').count()===3,'Conflict erased draft');
+  await page.getByRole('button',{name:'读取最新配置',exact:true}).click();
+  await page.getByRole('dialog',{name:'确认操作'}).getByRole('button',{name:'确认',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.presale-row').length===1);
+  // Leave a persisted manual selection for the storefront integration.
+  const latest=(await api()).config;await api({...latest,sortMode:'manual',styleCodes:['CAT-12','CAT-13','CAT-11']});
+  await page.getByRole('button',{name:'读取最新配置',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.presale-row').length===3);
+  await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='保存修改'&&b.disabled));
+  for(const text of ['首页配置','活动报名','活动管理'])check(await page.getByRole('link',{name:text,exact:true}).count()===0,'Old navigation still visible');
+  await page.locator('.el-loading-mask').waitFor({state:'hidden'});
+  await page.screenshot({path:'output/playwright/presale-desktop.png',fullPage:true});
+  await page.getByRole('link',{name:'商品管理',exact:true}).click();await page.getByRole('button',{name:'编辑',exact:true}).first().waitFor();
+  await page.goto('http://127.0.0.1:5370/products?featured=1');
+  await page.getByRole('button',{name:'编辑',exact:true}).first().waitFor();
+  check(!new URL(page.url()).searchParams.has('featured'),'Retired recommendation query still filters the list');
+  check(await page.getByRole('button',{name:'编辑',exact:true}).count()===25,'Retired recommendation filter hides products');
+  check(await page.getByText('首页推荐',{exact:true}).count()===0,'Recommendation filter remains');
+  await page.getByRole('button',{name:'编辑',exact:true}).first().click();await page.locator('#sizes').waitFor();
+  check(await page.getByRole('checkbox',{name:'首页推荐',exact:true}).count()===0,'Recommendation checkbox remains');
+  return {checks:13,draftOnly:true,wholeStyle:true,persistedManual:true,dragSort:true,resetAutomatic:true,conflictRetainsDraft:true,retiredUi:true,retiredFiltersCleared:true};
+}

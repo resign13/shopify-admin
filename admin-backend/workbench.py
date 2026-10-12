@@ -465,7 +465,7 @@ def migrate(cur):
         END $$;
     """)
     for table in ['products', 'product_size_prices', 'product_translations', 'product_images',
-                  'product_sizes', 'orders', 'order_items', 'homepage_configs', 'product_categories',
+                  'product_sizes', 'orders', 'order_items', 'presale_configs', 'homepage_configs', 'product_categories',
                   'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts', 'order_customer_templates', 'inventory_overdelivery']:
         cur.execute(f'DROP TRIGGER IF EXISTS admin_audit ON {table}')
         cur.execute(f'CREATE TRIGGER admin_audit AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION capture_admin_audit()')

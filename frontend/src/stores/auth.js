@@ -1,4 +1,4 @@
-import { roleModules } from "../permissions";
+import { roleModules, defaultRoleModules } from "../permissions";
 import { defineStore } from "pinia";
 
 import { request } from "../api";
@@ -47,7 +47,7 @@ export const useAdminAuthStore = defineStore("admin-auth", {
       return this.can("admin-users");
     },
     permissions: (state) =>
-      (state.user?.permissions ?? roleModules(state.user?.role)).filter((key) =>
+      (state.user?.permissions ?? defaultRoleModules(state.user?.role)).filter((key) =>
         roleModules(state.user?.role).includes(key),
       ),
     can() {

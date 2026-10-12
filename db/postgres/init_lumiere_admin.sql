@@ -258,3 +258,13 @@ DO $$ BEGIN
 END $$;
 
 COMMIT;
+
+-- Independent display-only curation. Existing homepage selection is not migrated.
+CREATE TABLE IF NOT EXISTS presale_configs (
+ id SMALLINT PRIMARY KEY DEFAULT 1 CHECK(id=1),
+ style_codes JSONB NOT NULL DEFAULT '[]' CHECK(jsonb_typeof(style_codes)='array'),
+ sort_mode TEXT NOT NULL DEFAULT 'automatic' CHECK(sort_mode IN ('automatic','manual')),
+ version BIGINT NOT NULL DEFAULT 0 CHECK(version>=0),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+INSERT INTO presale_configs(id) VALUES(1) ON CONFLICT DO NOTHING;

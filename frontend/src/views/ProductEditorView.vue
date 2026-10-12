@@ -52,7 +52,7 @@
               v-model.trim="form.title"
               maxlength="255"
               show-word-limit /></ElFormItem
-          ><ElCheckbox v-model="form.featured">首页推荐</ElCheckbox>
+          >
         </section>
         <section id="colors" class="panel editor-section">
           <div class="panel-title">
@@ -271,7 +271,6 @@ const form = reactive({
   categoryKey: "",
   familyCode: "",
   title: "",
-  featured: false,
   origin: "China",
   chartImages: [],
   descriptionImages: [],
@@ -318,7 +317,6 @@ function populate(items) {
     categoryKey: first.categoryKey,
     familyCode: first.colorGroup || first.productCode,
     title: first.name.zh || first.name.en,
-    featured: first.featured,
     origin: first.origin,
     chartImages: first.sizeChartImage ? [first.sizeChartImage] : [],
     descriptionImages: first.descriptionImage ? [first.descriptionImage] : [],
@@ -436,7 +434,6 @@ async function submit() {
       familyCode: form.familyCode,
       colorGroup: form.familyCode,
       title: form.title,
-      featured: form.featured,
       origin: form.origin,
       colorName: v.colorName,
       colorHex: v.colorHex,

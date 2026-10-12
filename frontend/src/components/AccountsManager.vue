@@ -164,7 +164,7 @@
   >
 </template>
 <script setup>
-import { moduleGroups, roleModules } from "../permissions";
+import { moduleGroups, roleModules, editableRolePermissions } from "../permissions";
 import { useRouter } from "vue-router";
 import { reactive, ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
@@ -233,7 +233,7 @@ function edit(row) {
     password: "",
   });
   if (props.admin)
-    form.permissions = [...(row?.permissions ?? roleModules(form.role))];
+    form.permissions = editableRolePermissions(form.role, row?.permissions);
   error.value = "";
   open.value = true;
   markClean();
