@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { orderProductQuantity } from './orderQuantities.js';
+import { orderProductQuantity, orderVariantInventory } from './orderQuantities.js';
 
 test('sums every size in one color SKU without mixing other products', () => {
   const items = [
@@ -38,4 +38,24 @@ test('total can exceed the per-size integer limit', () => {
     { productId: 1, quantity: 2147483647 },
   ];
   assert.equal(orderProductQuantity(items, 1), 4294967294);
+});
+
+test('new/reorder/draft quantities preview per-size balance including shortage', () => {
+  assert.equal(orderVariantInventory(18,0,1).after,17);
+  assert.equal(orderVariantInventory(-3,0,1).after,-4);
+  assert.equal(orderVariantInventory(0,0,2).after,-2);
+  assert.equal(orderVariantInventory(18,0,0).after,18);
+});
+test('editing applies differences, reductions and clearing restore only original units', () => {
+  assert.equal(orderVariantInventory(18,3,3).after,18);
+  assert.equal(orderVariantInventory(18,3,5).after,16);
+  assert.equal(orderVariantInventory(18,3,1).after,20);
+  assert.equal(orderVariantInventory(18,3,0).after,21);
+});
+test('cancel and restore use original inventory rules; unknown stock is not zero', () => {
+  assert.equal(orderVariantInventory(18,3,3,'allocated','cancelled').after,21);
+  assert.equal(orderVariantInventory(18,3,3,'cancelled','allocated').after,15);
+  assert.equal(orderVariantInventory(18,3,3,'cancelled','cancelled').after,18);
+  assert.equal(orderVariantInventory(undefined,0,2).after,'待刷新');
+  assert.equal(orderVariantInventory(null,0,2).after,'待刷新');
 });

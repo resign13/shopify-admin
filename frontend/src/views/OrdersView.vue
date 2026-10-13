@@ -6,6 +6,7 @@
     ><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
       >＋ 新增订单</ElButton
     ><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
+    ><ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton
     ><ElDropdown v-if="canExportOrders" @command="exportOrders"
       ><ElButton :loading="exporting">导出订单 ▾</ElButton
       ><template #dropdown
@@ -95,9 +96,7 @@
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       ><template #orderNo="{ row }"
-        ><ElButton link type="primary" @click="open(row.id)">{{
-          row.orderNo
-        }}</ElButton></template
+        ><OrderNumber :value="row.orderNo" clickable copyable @open="open(row.id)" /></template
       ><template #userName="{ row }"
         >{{ row.ownerAdminName || "未分配"
         }}<small style="display: block">{{
@@ -146,12 +145,13 @@
             detailOpen = true;
           "
           >订单详情</ElButton
-        ></template
+        ><ElButton v-if="canEditDetails" link type="primary" @click="reorder(row.id)">再来一单</ElButton></template
       ></DataTable
     >
   </section>
-  <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" />
-  <OrderEditor v-model:open="editorOpen" @saved="orderSaved" />
+  <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" @reorder="reorder" />
+  <OrderEditor v-model:open="editorOpen" :source-order-id="reorderSourceId" :draft-id="selectedDraftId" @saved="orderSaved" />
+  <OrderDrafts v-if="canEditDetails" v-model:open="draftsOpen" @select="openDraft" />
   <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
 </template>
 <script setup>
@@ -161,8 +161,10 @@ import { useRoute } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
+import OrderNumber from "../components/OrderNumber.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderEditor from "../components/OrderEditor.vue";
+import OrderDrafts from "../components/OrderDrafts.vue";
 import CustomerTemplates from "../components/CustomerTemplates.vue";
 import {
   api,
@@ -234,7 +236,19 @@ const canEditDetails = computed(() =>
   // The route is already protected by the orders module permission. Reuse that
   // capability here so warehouse accounts with the module grant see exports.
   canExportOrders = computed(() => auth.can("orders")),
-  editorOpen = ref(false);
+  editorOpen = ref(false), reorderSourceId = ref(null), selectedDraftId = ref(null), draftsOpen = ref(false);
+function openDraft(row) {
+  draftsOpen.value = false;
+  selectedDraftId.value = row.id;
+  reorderSourceId.value = row.sourceOrderId;
+  editorOpen.value = true;
+}
+function reorder(id) {
+  selectedDraftId.value = null;
+  detailOpen.value = false;
+  reorderSourceId.value = id;
+  editorOpen.value = true;
+}
 function orderSaved(id) {
   list.load();
   if (id) {
@@ -243,6 +257,8 @@ function orderSaved(id) {
   }
 }
 function editOrder() {
+  selectedDraftId.value = null;
+  reorderSourceId.value = null;
   editorOpen.value = true;
 }
 const filters = reactive({
@@ -254,7 +270,7 @@ const filters = reactive({
     list.query.dateFrom ? [list.query.dateFrom, list.query.dateTo] : null,
   );
 const columns = computed(() => [
-  { prop: "orderNo", label: "订单号", width: 165 },
+  { prop: "orderNo", label: "订单号", width: 260, fixedWidth: 260 },
   { prop: "createdAt", label: "下单时间", width: 145, sortable: true },
   { prop: "userName", label: "业务员", width: 150 },
   { prop: "contactName", label: "客户", width: 125, defaultVisible: true },
@@ -274,7 +290,7 @@ const columns = computed(() => [
       ]
     : []),
   { prop: "status", label: "状态", width: 85 },
-  { prop: "actions", label: "操作", width: 85 },
+  { prop: "actions", label: "操作", width: 170 },
 ]);
 watch(
   () => list.filterKey,

@@ -8,6 +8,8 @@ from flask import g
 import db
 import inventory_policy
 import sales_ownership
+import order_reorder
+import order_numbering
 
 
 def amount(value, label):
@@ -78,6 +80,21 @@ def save_order(payload, order_id=None):
                 raise ValueError('该请求已创建过订单，订单随后被删除，请重新打开新增订单')
             return {'order': existing, 'replayed': True}
 
+    stored_draft = None
+    if payload.get('draftId') is not None:
+        if old:
+            raise ValueError('草稿仅用于新增订单和再来一单')
+        import order_drafts
+        stored_draft = order_drafts.for_submit(payload)
+    origin = None
+    if payload.get('sourceOrderId') is not None:
+        if old:
+            raise ValueError('来源订单仅用于创建返单')
+        origin = order_reorder.source(positive(payload['sourceOrderId'], '来源订单编号'), lock=True)
+    inherited = None
+    if 'inheritedAttachmentUrls' in payload:
+        inherited = order_reorder.inherited_attachments(payload, origin or old or {})
+
     user_id = positive(payload.get('userId'), '客户编号')
     if g.current_user.get('role') == 'sales':
         owner_id = g.current_user['id']
@@ -87,7 +104,11 @@ def save_order(payload, order_id=None):
             sales_ownership.validate_owner(owner_id)
     else:
         owner_id = sales_ownership.validate_owner(payload.get('ownerAdminId', (old or {}).get('owner_admin_id')), previous=(old or {}).get('owner_admin_id'))
-    image_urls = order_images(payload, old)
+        if origin and origin.get('owner_admin_id') and owner_id is None:
+            former = db._fetch_one("SELECT id FROM admin_users WHERE id=%s AND role='sales' AND status='active'", (origin['owner_admin_id'],))
+            if not former and payload.get('ownerConfirmed') is not True:
+                raise ValueError('原业务员已停用，请重新选择业务员或明确确认未分配')
+    image_urls = order_images(payload, None if inherited is not None else old)
     # Older clients echo labelPdfUrl even when it contains a legacy image/file.
     # Preserve that unchanged value without accepting new non-PDF attachments.
     legacy_pdf_echo = (old and payload.get('labelPdfUrl') == old.get('label_pdf_url')
@@ -102,6 +123,9 @@ def save_order(payload, order_id=None):
         image_urls = [url for url in current_urls if not urlsplit(url).path.lower().endswith('.pdf')]
         if pdf:
             image_urls.append(pdf)
+    if inherited is not None:
+        order_reorder.validate_attachment_uploads(inherited, payload.get('labelImageUrls', []), payload.get('labelPdfUrl', ''))
+        image_urls = list(dict.fromkeys(inherited + (image_urls or [])))
     next_status = payload.get('status', old['status'] if old else 'pending_payment')
     if not isinstance(next_status, str) or next_status not in {'pending_payment', 'allocated', 'paid', 'shipped', 'completed', 'cancelled'}:
         raise ValueError('订单状态无效')
@@ -155,17 +179,22 @@ def save_order(payload, order_id=None):
         if not product:
             raise ValueError('商品已删除，请重新核对订单')
         products[product_id] = product
+    price_changes = []
     for key in sorted(set(desired) | set(previous_quantities)):
         product_id, size_code = key
         new = desired.get(key)
         delta = (new['quantity'] if new else 0) - previous_quantities.get(key, 0)
-        size = db._fetch_one('SELECT stock FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE', key)
+        size = db._fetch_one('SELECT stock,price FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE', key)
         if new and not size and (key not in previous_quantities or delta > 0):
             raise ValueError(f"{products[product_id]['sku']} 的尺码 {size_code} 不存在")
         if delta and not size and size_code:
             raise ValueError('原订单尺码已移除，请先恢复尺码再调整数量')
         if delta > 0 and not products[product_id]['is_active']:
             raise ValueError('已下架商品不能增加订购数量')
+        if (origin or stored_draft) and new and size:
+            order_reorder.check_price(price_changes, key, new['price'], size['price'], products[product_id]['sku'])
+    if price_changes:
+        raise order_reorder.PriceChanged(price_changes)
     changes = {key: previous_quantities.get(key, 0) - desired.get(key, {}).get('quantity', 0)
                for key in set(desired) | set(previous_quantities)}
     changes = {key: delta for key, delta in changes.items() if delta}
@@ -175,9 +204,9 @@ def save_order(payload, order_id=None):
     total = amount(sum(row['quantity'] * row['price'] for row in desired.values()) + shipping, '订单总额')
     address = ', '.join(fields[key] for key in ['address', 'apartment', 'city', 'state', 'zip', 'country'] if fields[key])
     if not old:
-        record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount,created_by_admin_id,owner_admin_id,order_source) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s,%s,%s,'backend') RETURNING id", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total, g.current_user['id'], owner_id))
+        record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount,created_by_admin_id,owner_admin_id,order_source) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s,%s,%s,'backend') RETURNING id,created_at,contact_name", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total, g.current_user['id'], owner_id))
         order_id = record['id']
-        db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id', (f'LM-{order_id:06d}', order_id))
+        db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id', (order_numbering.make_order_number(order_id, record['created_at'], record['contact_name']), order_id))
     db._fetch_one('''UPDATE orders SET store_user_id=%s,contact_name=%s,phone=%s,country=%s,contact_email=%s,
         address_line1=%s,apartment=%s,city=%s,state=%s,postal_code=%s,shipping_address=%s,note=%s,
         shipping_fee=%s,total_amount=%s,updated_at=NOW() WHERE id=%s RETURNING id''',
@@ -201,4 +230,8 @@ def save_order(payload, order_id=None):
                       (json.dumps(image_urls, ensure_ascii=False), legacy_files[0] if legacy_files else '', order_id))
     if old:
         db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping)
+    if origin:
+        order_reorder.audit(order_id, origin)
+    if stored_draft:
+        order_drafts.converted(stored_draft, order_id)
     return {'order': db.get_order_by_id(order_id), 'replayed': False}

@@ -2,7 +2,7 @@
   <ElDrawer
     :model-value="open"
     :title="order ? `订单详情 · ${order.orderNo}` : '订单详情'"
-    size="800px"
+    size="min(800px, 100vw)"
     :before-close="close"
     ><ElSkeleton v-if="loading" :rows="10" animated /><template v-if="order">
       <OrderEditor
@@ -178,6 +178,8 @@
       ><OrderOperations :order-id="order.id" :open="open" :revision="order.version" />
       </template
     ><template #footer>
+      <ElButton v-if="!editing && ['admin', 'sales'].includes(auth.userRole) && auth.can('orders')"
+        :disabled="loading || !order || busy" type="primary" plain @click="emit('reorder', order.id)">再来一单</ElButton>
       <ElButton
         v-if="!editing && !warehouseStatusOnly"
         :disabled="loading || !order"
@@ -232,7 +234,7 @@ import {
   confirm,
 } from "../composables/workbench";
 const props = defineProps({ open: Boolean, id: [Number, String] }),
-  emit = defineEmits(["update:open", "saved"]),
+  emit = defineEmits(["update:open", "saved", "reorder"]),
   auth = useAdminAuthStore();
 const editing = ref(false),
   editor = ref();

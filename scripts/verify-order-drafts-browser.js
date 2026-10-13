@@ -1,0 +1,95 @@
+async (page) => {
+  const base='http://127.0.0.1:5360';
+  if(!page.url().startsWith(base+'/')) throw new Error('Isolated fixture required');
+  const check=(v,m)=>{if(!v)throw new Error(m);};
+  const api=(path,method='GET',body)=>page.evaluate(async({path,method,body})=>{
+    const r=await fetch('/api/admin/'+path,{method,headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+    return {status:r.status,data:await r.json().catch(()=>({}))};
+  },{path,method,body});
+  const login=async role=>{
+    await page.goto(base+'/orders');
+    await page.waitForFunction(()=>location.pathname==='/login'||document.querySelector('.profile-button'));
+    if(new URL(page.url()).pathname!=='/login'){
+      await page.locator('.profile-button').click();
+      await page.getByRole('menuitem',{name:'退出登录',exact:true}).click();
+    }
+    await page.waitForURL(u=>u.pathname==='/login');
+    await page.getByRole('textbox',{name:'账号 / 邮箱'}).fill(role+'@gingtto.test');
+    await page.getByRole('textbox',{name:'密码',exact:true}).fill('Workbench-Test-2026');
+    await page.getByRole('button',{name:'登录工作台',exact:true}).click();
+    await page.waitForURL(u=>u.pathname!=='/login');await page.goto(base+'/orders');
+    await page.getByRole('button',{name:'我的草稿',exact:true}).waitFor();
+  };
+  await page.setViewportSize({width:1440,height:1000});
+  await login('sales');
+  const before=(await api('orders?page=1')).data.total;
+  const stockBefore=(await api('inventory/1')).data.product.stock;
+  await page.getByRole('button',{name:'＋ 新增订单',exact:true}).click();
+  const editor=page.getByRole('dialog',{name:'新增订单',exact:true});
+  const name='Draft QA '+Date.now();
+  await editor.getByRole('textbox',{name:/收货人/}).fill(name);
+  await editor.getByRole('textbox',{name:'备注',exact:true}).fill('Incomplete order\n辅料与包装保持');
+  const saveWait=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders/drafts')&&r.request().method()==='POST');
+  await editor.getByRole('button',{name:'保存草稿',exact:true}).click();
+  const saveResponse=await saveWait;check(saveResponse.status()===200,'Incomplete draft rejected');
+  const saved=await saveResponse.json();
+  await editor.getByText(/已保存至服务器/).waitFor();
+  await editor.getByRole('button',{name:'取消',exact:true}).click();
+  await editor.waitFor({state:'hidden'});
+  check((await api('orders?page=1')).data.total===before,'Draft created an order');
+  check((await api('inventory/1')).data.product.stock===stockBefore,'Draft changed inventory');
+  await page.reload();
+  await page.getByRole('button',{name:'我的草稿',exact:true}).click();
+  const manager=page.getByRole('dialog',{name:'订单草稿',exact:true}).filter({hasText:'草稿保存在服务器，不生成订单、不占库存。'});
+  const row=manager.locator('.el-table__row').filter({has:page.getByText(name,{exact:true})});
+  await row.getByRole('button',{name:'继续编辑',exact:true}).waitFor();
+  await manager.getByRole('button',{name:'关闭此对话框',exact:true}).click();
+  await manager.waitFor({state:'hidden'});
+  await login('admin');
+  check((await api('orders/drafts')).data.items.every(r=>r.id!==saved.id),'Admin default not private');
+  await page.getByRole('button',{name:'我的草稿',exact:true}).click();
+  await manager.getByText('我的草稿',{exact:true}).click();
+  await page.getByRole('option',{name:'全部草稿',exact:true}).click();
+  await row.getByRole('button',{name:'查看',exact:true}).click();
+  const readonly=page.getByRole('dialog',{name:'订单草稿',exact:true}).filter({has:page.getByRole('textbox',{name:/收货人/})});
+  await readonly.getByText('正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。',{exact:true}).waitFor();
+  check(await readonly.getByRole('button',{name:'保存草稿',exact:true}).count()===0,'Admin can save another owner draft');
+  check(await readonly.getByRole('textbox',{name:/收货人/}).isDisabled(),'Read-only form editable');
+  check((await api(`orders/drafts/${saved.id}`,'DELETE',{version:saved.version})).status===404,'Admin deleted another owner draft');
+  await readonly.getByRole('button',{name:'取消',exact:true}).click();
+  await readonly.waitFor({state:'hidden'});
+  await login('sales');
+  await page.getByRole('button',{name:'我的草稿',exact:true}).click();
+  await row.getByRole('button',{name:'继续编辑',exact:true}).click();
+  const resumed=page.getByRole('dialog',{name:'订单草稿',exact:true}).filter({has:page.getByRole('textbox',{name:/收货人/})});
+  await resumed.getByRole('textbox',{name:/收货人/}).waitFor();
+  check(await resumed.getByRole('textbox',{name:/收货人/}).inputValue()===name,'Draft name lost after login');
+  check((await resumed.getByRole('textbox',{name:'备注',exact:true}).inputValue()).includes('辅料与包装保持'),'Notes lost');
+  await resumed.getByRole('combobox',{name:/商城客户/}).click();
+  await page.getByRole('option',{name:'Alex Morgan · Northline Apparel',exact:true}).click();
+  for(const [label,value] of [['联系电话','123456'],['国家','Germany'],['详细地址','18 Market Street']])
+    await resumed.getByRole('textbox',{name:new RegExp(label)}).fill(value);
+  await resumed.getByRole('button',{name:'＋ 添加商品',exact:true}).click();
+  const picker=page.getByRole('dialog',{name:'选择商品',exact:true});
+  await picker.locator('.el-table__row').filter({has:page.getByText('GT-2026-1',{exact:true})}).locator('.el-checkbox').click();
+  await picker.getByRole('button',{name:'加入所选并完成',exact:true}).click();
+  await picker.waitFor({state:'hidden'});
+  const matrix=resumed.locator('.el-table').first();
+  await matrix.getByRole('spinbutton').first().fill('2');await matrix.getByRole('spinbutton').first().press('Tab');
+  const savedUpdate=page.waitForResponse(r=>r.url().endsWith(`/api/admin/orders/drafts/${saved.id}`)&&r.request().method()==='PUT');
+  await resumed.getByRole('button',{name:'保存草稿',exact:true}).click();
+  check((await savedUpdate).status()===200,'Draft update failed');
+  await resumed.getByTestId('order-goods-summary').scrollIntoViewIfNeeded();
+  await page.screenshot({path:'output/playwright/order-draft-resumed.png'});
+  await resumed.getByRole('button',{name:'创建待付款订单',exact:true}).click();
+  const createdWait=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders')&&r.request().method()==='POST');
+  await page.getByRole('button',{name:'确认',exact:true}).click();
+  const created=await createdWait;check(created.status()===200,'Draft conversion failed');
+  const order=(await created.json()).order;
+  check((await api('orders/drafts')).data.items.every(r=>r.id!==saved.id),'Converted draft still active');
+  check((await api('inventory/1')).data.product.stock===stockBefore-2,'Conversion stock incorrect');
+  const detail=page.getByRole('dialog',{name:`订单详情 · ${order.orderNo}`,exact:true});
+  await detail.getByRole('button',{name:'关闭',exact:true}).click();
+  return {drafts:true,incompleteSave:true,serverPersistence:true,salesPrivate:true,adminReadOnlyAll:true,
+    stockNeutralDraft:true,resumeAndConvert:true,convertedRemoved:true};
+}

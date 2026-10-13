@@ -864,3 +864,9 @@ small,
   line-height: 1.2;
   white-space: nowrap;
 }
+
+/* Full order numbers remain readable in detail/reorder drawer headings. */
+.el-drawer__header { align-items: flex-start; }
+.el-drawer__title { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.el-drawer__close-btn { flex-shrink: 0; }
+.el-message-box__message { overflow-wrap: anywhere; }
