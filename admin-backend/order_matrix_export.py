@@ -117,7 +117,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             lines = order_numbering.wrapped_lines(value, 70)
             ws.row_dimensions[row].height = min(409, max(height, lines * 18))
 
-        full_line(start, f"订单：{order.get('orderNo', '')}    业务员：{order.get('userName', '')}")
+        full_line(start, f"订单：{order_numbering.export_label(order)}    业务员：{order.get('userName', '')}")
         ws.cell(start, 1).font = Font(bold=True, size=14)
         full_line(start + 1, f"联系人：{order.get('contactName', '')}    电话：{order.get('phone', '')}    邮箱：{order.get('userEmail', '')}", 34)
         full_line(start + 2, '收货地址：' + str(order.get('shippingAddress') or ''), 42)

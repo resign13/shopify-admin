@@ -37,6 +37,20 @@ rollback() {
   trap - ERR
   # Never restart a legacy balance-resetting backend after negative balances exist.
   systemctl stop "$service" || true
+  if sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='secondary_order_no')" | grep -qx t; then
+    if ! tar -xOf "$backup/code.tar.gz" "$backend/order_numbering.py" | grep 'secondary_order_no' > /dev/null; then
+      echo "Legacy rollback blocked: primary/secondary order numbers require compatible code. Backup retained: $backup."
+      systemctl restart "$service" || true
+      exit "$status"
+    fi
+  fi
+  if sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM admin_users WHERE role='finance')" | grep -qx t; then
+    if ! tar -tf "$backup/code.tar.gz" | grep "^$backend/finance.py$" > /dev/null; then
+      echo "Legacy rollback blocked: finance accounts require compatible permissions. Backup retained: $backup."
+      systemctl restart "$service" || true
+      exit "$status"
+    fi
+  fi
   weights=$(sudo -u postgres psql -X -d smawell_admin -At -c "SELECT EXISTS(SELECT 1 FROM product_size_prices s WHERE to_jsonb(s)->>'weight_grams' IS NOT NULL)" 2>/dev/null) || weights=unknown
   if [ "$weights" != f ]; then
     if ! tar -xOf "$backup/code.tar.gz" "$backend/db.py" | grep 'existing_weights' > /dev/null || ! tar -tf "$backup/code.tar.gz" | grep "^$backend/product_weights.py$" > /dev/null; then
@@ -98,7 +112,7 @@ rsync -a --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --e
 rsync -a "$stage/scripts/" "$root/scripts/"
 rsync -a "$stage/db/" "$root/db/"
 cd "$root/$backend"
-.venv/bin/python -m py_compile app.py db.py product_weights.py inventory_policy.py inventory_overdelivery.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
+.venv/bin/python -m py_compile app.py db.py finance.py product_weights.py inventory_policy.py inventory_overdelivery.py workbench.py image_delivery.py order_management.py module_permissions.py order_matrix_export.py contracts.py order_notification_schema.py order_notifications.py
 .venv/bin/pip install --disable-pip-version-check -q -r requirements.txt gunicorn
 .venv/bin/python "$root/scripts/configure-order-voice.py" ensure --env "$root/$backend/.env"
 # Existing initialization applies additive migrations; data is never re-seeded.
@@ -119,6 +133,7 @@ for attempt in $(seq 1 20); do
     .venv/bin/python "$root/scripts/verify-inventory-overdelivery.py" "$backend"
     .venv/bin/python "$root/scripts/verify-product-weights.py" "$backend"
     .venv/bin/python "$root/scripts/verify-order-numbering.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-finance.py"
     # Approved permission upgrade is explicit, audited and one-time. Existing
     # account links and all other module grants are preserved.
     .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply

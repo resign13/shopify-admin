@@ -164,6 +164,7 @@ CREATE TABLE IF NOT EXISTS banner_translations (
 CREATE TABLE IF NOT EXISTS orders (
   id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   order_no VARCHAR(255) NOT NULL UNIQUE,
+  secondary_order_no VARCHAR(255) NOT NULL DEFAULT '',
   store_user_id BIGINT NOT NULL REFERENCES store_users(id),
   status VARCHAR(30) NOT NULL DEFAULT 'pending_payment'
     CHECK (status IN ('pending_payment', 'paid', 'shipped', 'completed', 'cancelled')),
@@ -268,3 +269,34 @@ CREATE TABLE IF NOT EXISTS presale_configs (
  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 INSERT INTO presale_configs(id) VALUES(1) ON CONFLICT DO NOTHING;
+
+-- Private finance data: logical variant identity, deliberately no cascading product foreign key.
+CREATE TABLE IF NOT EXISTS finance_cost_versions (
+      product_id BIGINT NOT NULL, size_code TEXT NOT NULL, revision BIGINT NOT NULL DEFAULT 0,
+      PRIMARY KEY(product_id,size_code));
+    CREATE TABLE IF NOT EXISTS finance_cost_history (
+      product_id BIGINT NOT NULL, size_code TEXT NOT NULL, effective_date DATE NOT NULL,
+      cost_cny NUMERIC(12,2) CHECK(cost_cny>=0), sku TEXT NOT NULL, style_code TEXT NOT NULL,
+      actor JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      PRIMARY KEY(product_id,size_code,effective_date));
+    DO $$ BEGIN
+      IF EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='finance_cost_history'::regclass
+                AND attname='cost_cny' AND attnotnull AND NOT attisdropped) THEN
+        ALTER TABLE finance_cost_history ALTER COLUMN cost_cny DROP NOT NULL;
+      END IF;
+    END $$;
+    CREATE TABLE IF NOT EXISTS finance_cost_audit (
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, product_id BIGINT NOT NULL,
+      size_code TEXT NOT NULL, effective_date DATE NOT NULL, before_data JSONB NOT NULL,
+      after_data JSONB NOT NULL, actor JSONB NOT NULL, request_id UUID NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());
+    CREATE TABLE IF NOT EXISTS finance_cost_receipts (
+      request_id UUID PRIMARY KEY, actor_id BIGINT NOT NULL, fingerprint TEXT NOT NULL,
+      result JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());
+    CREATE INDEX IF NOT EXISTS finance_cost_audit_variant ON finance_cost_audit(product_id,size_code,id DESC);
+CREATE TABLE IF NOT EXISTS finance_settings (
+  id SMALLINT PRIMARY KEY CHECK(id=1),
+  exchange_rate NUMERIC(16,6) NOT NULL CHECK(exchange_rate>0),
+  revision BIGINT NOT NULL DEFAULT 1,
+  updated_by BIGINT REFERENCES admin_users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());

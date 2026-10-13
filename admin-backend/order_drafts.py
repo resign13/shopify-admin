@@ -9,6 +9,7 @@ from psycopg.types.json import Jsonb
 
 import db
 import order_reorder
+import order_numbering
 import workbench
 
 
@@ -56,6 +57,7 @@ def clean_document(payload):
     if not isinstance(payload, dict):
         raise ValueError('草稿格式无效')
     result = {}
+    result['secondaryOrderNo'] = order_numbering.secondary_order_number(payload.get('secondaryOrderNo'))
     for key in TEXT_FIELDS:
         value = payload.get(key, '')
         if not isinstance(value, str) or len(value) > (5000 if key == 'note' else 500):
@@ -143,7 +145,7 @@ def listing(args):
     params = []
     if not all_users:
         where += ' AND d.creator_id=%s'; params.append(g.current_user['id'])
-    where += " AND concat_ws(' ',d.document->>'contactName',d.document->>'sourceOrderNo',u.name,u.company_name) ILIKE %s"
+    where += " AND concat_ws(' ',d.document->>'contactName',d.document->>'sourceOrderNo',d.document->>'secondaryOrderNo',u.name,u.company_name) ILIKE %s"
     params.append('%' + str(args.get('keyword', '')).strip() + '%')
     joins = " FROM admin_order_drafts d LEFT JOIN store_users u ON u.id=(d.document->>'userId')::bigint"
     total = db._fetch_one('SELECT COUNT(*) AS n' + joins + ' WHERE ' + where, params)['n']
@@ -167,7 +169,10 @@ def save(payload, draft_id=None):
         raise ValueError('草稿格式无效')
     row = get_row(draft_id, write=True) if draft_id else None
     if row: active(row)
-    document = clean_document(payload.get('draft'))
+    draft = payload.get('draft')
+    if row and isinstance(draft, dict) and 'secondaryOrderNo' not in draft:
+        draft = {**draft, 'secondaryOrderNo': row['document'].get('secondaryOrderNo', '')}
+    document = clean_document(draft)
     digest = hashlib.sha256(json.dumps(document,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
     if row:
         # An identical retry after a successful save is harmless, not another revision.

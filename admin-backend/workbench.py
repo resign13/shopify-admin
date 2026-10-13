@@ -908,7 +908,7 @@ def order_where(args, status=True, owner_id=None):
     if keyword:
         # EXISTS keeps one row per order even when several sizes/colors match.
         # The item SKU is a historical snapshot; retain matches after SKU edits.
-        where.append("(concat_ws(' ',o.order_no,o.contact_name,su.name,su.email,su.company_name,o.tracking_no) ILIKE %s "
+        where.append("(concat_ws(' ',o.order_no,o.secondary_order_no,o.contact_name,su.name,su.email,su.company_name,o.tracking_no) ILIKE %s "
                      "OR EXISTS(SELECT 1 FROM order_items ki LEFT JOIN products kp ON kp.id=ki.product_id "
                      "WHERE ki.order_id=o.id AND concat_ws(' ',ki.sku,kp.sku,kp.product_code,"
                      + _style_code_sql('kp') + ") ILIKE %s))")

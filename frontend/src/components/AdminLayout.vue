@@ -98,6 +98,7 @@ const toggle = () => {
   );
 };
 const definitions = [
+  { label: "财务核算", items: [["/finance", "财务管理", DataAnalysis, "admin,finance"]] },
   {
     label: "经营概览",
     items: [["/dashboard", "经营工作台", DataAnalysis, "admin,sales"]],

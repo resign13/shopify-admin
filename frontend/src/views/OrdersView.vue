@@ -40,7 +40,7 @@
       <ElInput
         v-model="filters.keyword"
         clearable
-        placeholder="订单号、客户名称、账号、公司、物流单号、商品款号"
+        placeholder="主／副单号、客户名称、账号、公司、物流单号、商品款号"
         aria-label="订单查询关键词"
         style="width: 300px; max-width: 100%"
       /><ElDatePicker
@@ -96,7 +96,7 @@
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       ><template #orderNo="{ row }"
-        ><OrderNumber :value="row.orderNo" clickable copyable @open="open(row.id)" /></template
+        ><OrderNumber :value="row.orderNo" :secondary="row.secondaryOrderNo" clickable @open="open(row.id)" /></template
       ><template #userName="{ row }"
         >{{ row.ownerAdminName || "未分配"
         }}<small style="display: block">{{

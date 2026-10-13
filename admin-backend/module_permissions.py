@@ -1,10 +1,10 @@
 """Explicit capabilities; NULL uses legacy defaults without implicitly granting presale."""
 MODULES = ['dashboard','products','inventory','orders','categories','presale',
-           'store-accounts','admin-users','audit-logs','contracts']
+           'store-accounts','admin-users','audit-logs','contracts','finance']
 CAPABILITIES = {
     'admin': MODULES,
     'sales': ['dashboard','products','inventory','orders','categories','contracts','presale'],
-    'warehouse': ['inventory','orders'], 'customer': ['inventory'],
+    'warehouse': ['inventory','orders'], 'customer': ['inventory'], 'finance': ['finance'],
 }
 DEFAULTS = {**CAPABILITIES, 'sales': [k for k in CAPABILITIES['sales'] if k != 'presale']}
 
@@ -28,6 +28,8 @@ def allows_request(user, path, method):
     granted = set(effective(user))
     if not path.startswith('/api/admin/'): return True
     module = path.split('/')[3]
+    if module == 'finance':
+        return user.get('role') in {'admin','finance'} and 'finance' in granted
     if module in {'home-config','activity-config','banners'}:
         return user.get('role') == 'admin' and 'presale' in granted and (method == 'GET' or module != 'banners')
     if module == 'presale':

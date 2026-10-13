@@ -200,6 +200,7 @@ const filters = reactive({
   error = ref("");
 const { markClean, canLeave } = useDirty(() => form);
 const roleHelp = {
+  finance: "商品成本、销量成本核算及财务导出；不开放订单编辑、库存和账号管理。",
   admin: "可分配全部后台模块，实际访问范围以下方勾选为准。",
   sales: "经营分析、商品、库存、订单及商城运营；不含账号与日志管理。",
   warehouse: "订单与库存管理，可编辑库存、合同未送并导入导出。",
@@ -239,6 +240,7 @@ function edit(row) {
   markClean();
 }
 function changeRole() {
+    if (form.role === "finance") { form.permissions = ["finance"]; return; }
   form.permissions = form.permissions.filter((key) =>
     roleModules(form.role).includes(key),
   );

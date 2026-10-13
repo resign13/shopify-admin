@@ -180,6 +180,8 @@ def _empty_bundle() -> dict[str, str]:
 
 def _apply_schema_migrations(cur: Any) -> None:
     from workbench import migrate
+    import finance
+    finance.migrate(cur)
     order_numbering.migrate(cur)
     for column in ('product_code', 'color_group', 'color_name', 'color_hex'):
         cur.execute(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} VARCHAR(160) NOT NULL DEFAULT ''")
@@ -2123,6 +2125,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
         SELECT
           o.id,
           o.order_no,
+          o.secondary_order_no,
           o.created_at,
           o.updated_at,
           o.status,
@@ -2195,6 +2198,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
             grouped[order_id] = {
                 "id": order_id,
                 "orderNo": row["order_no"],
+                "secondaryOrderNo": row["secondary_order_no"] or "",
                 "createdAt": _iso(row["created_at"]),
                 "updatedAt": _iso(row["updated_at"]),
                 "status": row["status"],
@@ -2356,8 +2360,9 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
             order_row = cur.fetchone()
             order_id = int(order_row["id"])
             cur.execute(
-                "UPDATE orders SET order_no = %s WHERE id = %s",
-                (order_numbering.make_order_number(order_id, order_row['created_at'], order_row['contact_name']), order_id),
+                "UPDATE orders SET order_no = %s,secondary_order_no=%s WHERE id = %s",
+                (order_numbering.make_order_number(order_id, order_row['created_at'], order_row['contact_name']),
+                 order_numbering.secondary_order_number(payload.get('secondaryOrderNo')), order_id),
             )
             cur.execute(
                 """

@@ -1,4 +1,5 @@
 export const moduleGroups = [
+  { label: "财务核算", items: [["finance", "财务管理"]] },
   { label: "经营概览", items: [["dashboard", "经营工作台"]] },
   {
     label: "商品与库存",
@@ -34,9 +35,8 @@ const all = moduleGroups.flatMap((group) => group.items.map(([key]) => key));
 export function roleModules(role) {
   if (role === "admin") return [...all];
   if (role === "sales")
-    return all.filter(
-      (key) => !["store-accounts", "admin-users", "audit-logs"].includes(key),
-    );
+    return ["dashboard", "products", "inventory", "orders", "categories", "contracts", "presale"];
+  if (role === "finance") return ["finance"];
   if (role === "warehouse") return ["inventory", "orders"];
   return role === "customer" ? ["inventory"] : [];
 }
