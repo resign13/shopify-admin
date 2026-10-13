@@ -16,6 +16,7 @@ ORDER_FIELDS = {
     'apartment': 'apartment', 'city': 'city', 'state': 'state',
     'note': 'note', 'tracking_no': 'trackingNo',
     'owner_admin_id': 'ownerAdminId',
+    'secondary_order_no': 'secondaryOrderNo',
     'shipping_fee': 'shippingFee', 'total_amount': 'totalAmount',
 }
 FINANCIAL_FIELDS = {'shippingFee', 'totalAmount', 'unitPrice'}

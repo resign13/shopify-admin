@@ -144,6 +144,8 @@ def save_order(payload, order_id=None):
     if not user or (user['status'] != 'active' and (not old or old['store_user_id'] != user_id)):
         raise ValueError('请选择有效商城客户')
     fields = {}
+    default_secondary = (old or {}).get('secondary_order_no', (stored_draft or {}).get('document', {}).get('secondaryOrderNo', ''))
+    secondary = order_numbering.secondary_order_number(payload.get('secondaryOrderNo', default_secondary))
     for key in ['contactName', 'phone', 'country', 'contactValue', 'address', 'apartment', 'city', 'state', 'zip', 'note']:
         value = payload.get(key, '')
         if not isinstance(value, str) or len(value) > (5000 if key == 'note' else 500):
@@ -209,8 +211,8 @@ def save_order(payload, order_id=None):
         db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id', (order_numbering.make_order_number(order_id, record['created_at'], record['contact_name']), order_id))
     db._fetch_one('''UPDATE orders SET store_user_id=%s,contact_name=%s,phone=%s,country=%s,contact_email=%s,
         address_line1=%s,apartment=%s,city=%s,state=%s,postal_code=%s,shipping_address=%s,note=%s,
-        shipping_fee=%s,total_amount=%s,updated_at=NOW() WHERE id=%s RETURNING id''',
-        (user_id, fields['contactName'], fields['phone'], fields['country'], fields['contactValue'], fields['address'], fields['apartment'], fields['city'], fields['state'], fields['zip'], address, fields['note'], shipping, total, order_id))
+        shipping_fee=%s,total_amount=%s,secondary_order_no=%s,updated_at=NOW() WHERE id=%s RETURNING id''',
+        (user_id, fields['contactName'], fields['phone'], fields['country'], fields['contactValue'], fields['address'], fields['apartment'], fields['city'], fields['state'], fields['zip'], address, fields['note'], shipping, total, secondary, order_id))
     if lines_changed:
         db._fetch_one('DELETE FROM order_items WHERE order_id=%s RETURNING id', (order_id,))
         previous_map = {(r['product_id'], r['size_code'] or ''): r for r in previous_rows}

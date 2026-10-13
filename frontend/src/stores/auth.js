@@ -55,7 +55,7 @@ export const useAdminAuthStore = defineStore("admin-auth", {
     },
     defaultRoute() {
       const preferred =
-        this.userRole === "warehouse"
+        this.userRole === "finance" ? "finance" : this.userRole === "warehouse"
           ? "orders"
           : this.userRole === "customer"
             ? "inventory"

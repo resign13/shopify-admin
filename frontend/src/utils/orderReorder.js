@@ -4,6 +4,7 @@ export function reorderForm(result) {
   const draft = result.draft;
   return {
     ...customerProfile(draft), ownerAdminId: draft.ownerAdminId ?? null,
+    secondaryOrderNo: draft.secondaryOrderNo || '',
     shippingFee: Number(draft.shippingFee || 0),
     status: 'pending_payment', trackingNo: '', paymentLink: '',
     labelImageUrls: [], labelPdfUrl: '',

@@ -944,7 +944,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet.sheet_view.zoomScaleNormal = 90
 
     # Header/customer fields: keep all original template formatting.
-    worksheet["B5"] = str(order.get("orderNo") or "")
+    worksheet["B5"] = order_numbering.export_label(order)
     # A full customer name is part of new numbers. Keep the printable value,
     # wrapping inside the existing header instead of shrinking the font.
     number_alignment = copy(worksheet['B5'].alignment)
@@ -1451,7 +1451,7 @@ def inventory_import_payload(raw: bytes) -> dict[str, Any]:
 
 
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
-ADMIN_USER_ROLES = {"admin", "sales", "warehouse", "customer"}
+ADMIN_USER_ROLES = {"admin", "sales", "warehouse", "customer", "finance"}
 CLOUDINARY_CLOUD_NAME = os.environ.get("CLOUDINARY_CLOUD_NAME", "").strip()
 CLOUDINARY_API_KEY = os.environ.get("CLOUDINARY_API_KEY", "").strip()
 CLOUDINARY_API_SECRET = os.environ.get("CLOUDINARY_API_SECRET", "").strip()
@@ -3291,6 +3291,9 @@ def salespeople():
         where += ' AND id=%s'; params = (g.current_user['id'],)
     items = workbench.db._fetch_all('SELECT id,name,email,status FROM admin_users WHERE '+where+' ORDER BY name,id', params)
     return jsonify({'items':items})
+
+import finance
+finance.register(app, require_auth)
 
 if __name__ == "__main__":
     app.run(debug=False, use_reloader=False, host="0.0.0.0", port=5002)

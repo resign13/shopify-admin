@@ -10,10 +10,10 @@ class NumberFormatTest(unittest.TestCase):
     def test_dates_unicode_spaces_and_sequence(self):
         for instant, date in [('2026-10-12T15:59:59+00:00','1012'),('2026-10-12T16:00:00+00:00','1013'),('2026-12-31T16:00:00+00:00','0101')]:
             name='张三 Élodie-Marie  Vargo'
-            self.assertEqual(numbering.make_order_number(1000001,datetime.fromisoformat(instant),name),f'PO{date}-{name}-1000001')
+            self.assertEqual(numbering.make_order_number(1000001,datetime.fromisoformat(instant),name),'LM-1000001')
         self.assertEqual(numbering.sheet_title('PO1013-Élodie-Marie-000188'),'PO1013-000188')
         self.assertEqual(numbering.sheet_title('LM-000188'),'LM-000188')
-        with self.assertRaises(ValueError): numbering.make_order_number(1,datetime(2026,1,1),'A')
+        self.assertEqual(numbering.make_order_number(1,None,None),'LM-000001')
 
 class OrderNumberIntegrationTest(unittest.TestCase):
     setUp=helpers.AdminOrdersTest.setUp
@@ -29,6 +29,7 @@ class OrderNumberIntegrationTest(unittest.TestCase):
 
     def test_admin_long_number_search_immutable_and_exports(self):
         body=self.payload(); body['contactName']='Jonathan  Vargo Élodie 张三-' + '长姓名'*25
+        body['secondaryOrderNo']='PO-'+body['contactName']
         response=self.call('orders','POST',body); self.assertEqual(response.status_code,200,response.json)
         oid=response.json['order']['id']; number=self.check_number(oid,body['contactName'])
         found=self.call('orders?keyword='+__import__('urllib.parse',fromlist=['quote']).quote(number)).json
@@ -46,7 +47,7 @@ class OrderNumberIntegrationTest(unittest.TestCase):
                 if builder==application.build_orders_sheet_export:self.assertEqual(sheet.title,numbering.sheet_title(number))
         with application.app.test_request_context('/api/admin/orders/export'):
             sheet=load_workbook(application.build_order_invoice_export(order)).active
-            self.assertEqual(sheet['B5'].value,number)
+            self.assertEqual(sheet['B5'].value,number+'\n'+body['secondaryOrderNo'])
             self.assertTrue(sheet['B5'].alignment.wrap_text)
             self.assertGreater(sheet.row_dimensions[5].height,24)
 
@@ -81,5 +82,66 @@ class OrderNumberIntegrationTest(unittest.TestCase):
         submitted=self.call('orders','POST',{**loaded,'contactName':'Final Customer','draftId':saved['id'],'draftVersion':saved['version'],'requestId':saved['submitRequestId']})
         self.assertEqual(submitted.status_code,200,submitted.json)
         self.check_number(submitted.json['order']['id'],'Final Customer')
+
+    def test_po_migration_retains_secondary_and_business_state(self):
+        order=self.create();oid=order['id'];original=f'PO1013-Alex Buyer-{oid:06d}'
+        db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id',(original,oid))
+        stocks=self.stock()
+        sequence=db._fetch_one('SELECT last_value FROM orders_id_seq')['last_value']
+        notifications=db._fetch_one('SELECT count(*) AS n FROM order_created_events')['n']
+        with db._connect() as conn:
+            numbering.migrate(conn.cursor());numbering.migrate(conn.cursor())
+        order=self.call(f'orders/{oid}').json['order']
+        self.assertEqual(order['orderNo'],f'LM-{oid:06d}')
+        self.assertEqual(order['secondaryOrderNo'],original)
+        self.assertEqual(self.stock(),stocks)
+        self.assertEqual(db._fetch_one('SELECT last_value FROM orders_id_seq')['last_value'],sequence)
+        self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM order_created_events')['n'],notifications)
+        found=self.call('orders?keyword='+original).json
+        self.assertEqual(found['items'][0]['id'],oid)
+
+    def test_secondary_create_edit_clear_and_permissions(self):
+        body=self.payload();body['secondaryOrderNo']='po客户 A-2026'
+        response=self.call('orders','POST',body)
+        self.assertEqual(response.status_code,200,response.json)
+        order=response.json['order'];oid=order['id']
+        order=self.call(f'orders/{oid}').json['order']
+        self.assertEqual(order['secondaryOrderNo'],'PO客户 A-2026')
+        self.assertTrue(self.call('orders','POST',body).json['replayed'])
+        stocks=self.stock()
+        legacy={**order,'note':'Legacy edit'};legacy.pop('secondaryOrderNo')
+        self.assertEqual(self.call(f'orders/{oid}/details','PUT',legacy).status_code,200)
+        order=self.call(f'orders/{oid}').json['order']
+        self.assertEqual(order['secondaryOrderNo'],'PO客户 A-2026')
+        self.assertEqual(self.call(f'orders/{oid}/details','PUT',{**order,'secondaryOrderNo':'POdifferent'},'warehouse').status_code,403)
+        self.assertEqual(self.call(f'orders/{oid}/details','PUT',{**order,'secondaryOrderNo':''}).status_code,200)
+        cleared=self.call(f'orders/{oid}').json['order']
+        self.assertEqual(cleared['secondaryOrderNo'],'');self.assertEqual(cleared['orderNo'],order['orderNo'])
+        self.assertEqual(self.stock(),stocks)
+        operations=self.call(f'orders/{oid}/operations').json['items']
+        self.assertTrue(any(c['field']=='secondaryOrderNo' for r in operations for c in r['changes']))
+
+    def test_secondary_draft_restores_but_reorder_starts_empty(self):
+        body=self.payload();body['secondaryOrderNo']='PO-DRAFT-1'
+        saved=self.call('orders/drafts','POST',{'draftKey':body['requestId'],'draft':body}).json
+        loaded=self.call(f"orders/drafts/{saved['id']}").json['draft']
+        self.assertEqual(loaded['secondaryOrderNo'],'PO-DRAFT-1')
+        loaded.pop('secondaryOrderNo')
+        updated=self.call(f"orders/drafts/{saved['id']}",'PUT',{'version':saved['version'],'draft':loaded})
+        self.assertEqual(updated.status_code,200,updated.json)
+        self.assertEqual(self.call(f"orders/drafts/{saved['id']}").json['draft']['secondaryOrderNo'],'PO-DRAFT-1')
+        response=self.call('orders','POST',{**loaded,'draftId':saved['id'],'draftVersion':updated.json['version'],'requestId':saved['submitRequestId']})
+        self.assertEqual(response.status_code,200,response.json)
+        oid=response.json['order']['id']
+        self.assertEqual(response.json['order']['secondaryOrderNo'],'PO-DRAFT-1')
+        self.assertEqual(self.call(f'orders/{oid}/reorder-draft').json['draft']['secondaryOrderNo'],'')
+
+    def test_bad_secondary_fails_without_order_or_stock_write(self):
+        stocks=self.stock();count=db._fetch_one('SELECT count(*) AS n FROM orders')['n']
+        for value in (123,True,'PO'+('a'*254),'POline\nother'):
+            body=self.payload();body['secondaryOrderNo']=value
+            self.assertEqual(self.call('orders','POST',body).status_code,400)
+        self.assertEqual(self.stock(),stocks)
+        self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM orders')['n'],count)
 
 if __name__=='__main__':unittest.main()

@@ -17,5 +17,8 @@ with db._connect() as conn:
     assert constraint, 'Unique order number constraint missing'
     if args.backend=='admin-backend':
         assert conn.execute("SELECT to_regclass('public.admin_order_drafts') AS table_name").fetchone()['table_name'], 'Order draft schema missing'
-assert order_numbering.make_order_number(188,datetime(2026,10,12,16,tzinfo=timezone.utc),'A  张三')=='PO1013-A  张三-000188'
+    secondary=conn.execute("SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='orders' AND column_name='secondary_order_no'").fetchone()
+    assert secondary, 'Secondary order number column missing'
+    assert not conn.execute("SELECT 1 FROM orders WHERE order_no ~ '^PO[0-9]{4}-.+-[0-9]{6,}$' AND substring(order_no from '([0-9]{6,})$')::numeric=id LIMIT 1").fetchone(), 'Legacy generated PO numbers not migrated'
+assert order_numbering.make_order_number(188,datetime(2026,10,12,16,tzinfo=timezone.utc),'A  张三')=='LM-000188'
 print('Read-only order numbering/schema compatibility checks passed.')

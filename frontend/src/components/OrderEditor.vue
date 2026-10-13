@@ -32,6 +32,9 @@
     <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
     <p v-if="ready && !id && !readOnly" class="small-note" role="status">{{ draftSavedAt ? `已保存至服务器 · ${dateTime(draftSavedAt)}${dirty ? ' · 有未保存修改' : ''}` : '尚未保存为草稿；可填写一部分后点击“保存草稿”，稍后从“我的草稿”继续。' }}</p>
     <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
+      <ElFormItem label="副单号（选填）" prop="secondaryOrderNo">
+        <SecondaryOrderInput v-model="form.secondaryOrderNo" />
+      </ElFormItem>
       <CustomerTemplates v-if="!id && !readOnly" :profile="form" :customer="customers.find(customer => customer.id === form.userId)" @apply="applyTemplate" @busy="templateBusy = $event" />
       <ElFormItem v-if="auth.isSuperAdmin" label="归属业务员">
         <ElSelect v-model="form.ownerAdminId" clearable filterable placeholder="未分配" class="full-width" @change="form.ownerConfirmed = true">
@@ -299,6 +302,7 @@ import { ElDrawer, ElMessage } from "element-plus";
 import { InfoFilled } from "@element-plus/icons-vue";
 import ImageUploader from "./ImageUploader.vue";
 import ProductPicker from "./ProductPicker.vue";
+import SecondaryOrderInput from "./SecondaryOrderInput.vue";
 import CustomerTemplates from "./CustomerTemplates.vue";
 import PdfAttachment from "./PdfAttachment.vue";
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
@@ -327,6 +331,7 @@ const props = defineProps({
   emit = defineEmits(["update:open", "saved"]);
 const form = reactive({
   userId: null,
+  secondaryOrderNo: "",
   ownerAdminId: null,
   contactName: "",
   phone: "",
@@ -623,6 +628,7 @@ watch(
       } else {
         Object.assign(form, {
           userId: null,
+          secondaryOrderNo: "",
           ownerAdminId: null,
           contactName: "",
           phone: "",

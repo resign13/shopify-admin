@@ -4,7 +4,12 @@
     :title="order ? `订单详情 · ${order.orderNo}` : '订单详情'"
     size="min(800px, 100vw)"
     :before-close="close"
-    ><ElSkeleton v-if="loading" :rows="10" animated /><template v-if="order">
+    ><template #header="{titleId,titleClass}">
+      <div :id="titleId" :class="[titleClass,'order-drawer-heading']">
+        <small>订单详情</small>
+        <OrderNumber v-if="order" :value="order.orderNo" :secondary="order.secondaryOrderNo" expanded />
+      </div>
+    </template><ElSkeleton v-if="loading" :rows="10" animated /><template v-if="order">
       <OrderEditor
         v-if="fullEditing"
         ref="editor"
@@ -41,6 +46,11 @@
             <div>
               <span>备注</span>
               <p style="white-space: pre-wrap">{{ order.note || "—" }}</p>
+            </div>
+            <div>
+              <span>副单号（选填）</span>
+              <p>{{ order.secondaryOrderNo || "未填写" }}</p>
+              <ElButton v-if="!warehouseStatusOnly" link type="primary" @click="editDetails">{{ order.secondaryOrderNo ? '修改副单号' : '填写副单号' }}</ElButton>
             </div>
           </div>
         </div>
@@ -218,6 +228,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { orderWeightText } from "../utils/productWeights";
 import { ElMessage } from "element-plus";
 import OrderEditor from "./OrderEditor.vue";
+import OrderNumber from "./OrderNumber.vue";
 import OrderOperations from "./OrderOperations.vue";
 import ProductImage from "./ProductImage.vue";
 import { imageUrl } from "../utils/imageUrl";
@@ -395,6 +406,10 @@ async function exportInvoice() {
 }
 </script>
 <style scoped>
+.order-drawer-heading { min-width:0; flex:1; }
+.order-drawer-heading > small { display:block; color:#6b7b90; font-size:12px; margin-bottom:5px; }
+.order-drawer-heading :deep(.order-number-primary) { font-size:20px; }
+.order-drawer-heading :deep(.order-number-secondary) { font-size:12px; }
 .order-weight-summary { display: flex; flex-direction: column; gap: 8px; }
 .order-weight-summary span, .order-weight-summary small { color: #64748b; }
 .order-weight-summary strong { font-size: 16px; color: #0f172a; }

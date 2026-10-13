@@ -15,6 +15,7 @@ export const statusNames = {
   cancelled: "已取消",
 };
 export const roleNames = {
+  finance: "财务部",
   admin: "管理员",
   sales: "外贸部",
   warehouse: "仓库部",

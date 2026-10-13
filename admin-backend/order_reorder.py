@@ -104,6 +104,7 @@ def draft(order_id):
     profile = {key: origin.get(column) or '' for key, column in mapping.items()}
     profile['address'] = profile['address'] or origin.get('shipping_address') or ''
     profile.update(userId=customer['id'] if customer and customer['status'] == 'active' else None,
+                   secondaryOrderNo='',
                    ownerAdminId=owner['id'] if owner_valid else None,
                    shippingFee=db._num(origin.get('shipping_fee') or 0), items=items,
                    inheritedAttachmentUrls=attachments(origin), labelImageUrls=[], labelPdfUrl='')

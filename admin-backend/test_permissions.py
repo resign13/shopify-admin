@@ -2,11 +2,16 @@
 import unittest
 from test_workbench import seed, application, db
 from module_permissions import DEFAULTS
+from werkzeug.security import generate_password_hash
 
 
 class ModulePermissionsTest(unittest.TestCase):
     def setUp(self):
         self.tokens, _ = seed()
+        finance = db.create_admin_user({'name':'Finance fixture','email':'finance@gingtto.test',
+            'passwordHash':generate_password_hash('Fixture-only',method='pbkdf2:sha256:1000'),
+            'status':'active','role':'finance'})
+        self.tokens['finance'] = db.create_admin_session(finance['id'])
         application.app.config['TESTING'] = True
 
     def call(self, path, method='GET', body=None, role='admin'):
@@ -72,6 +77,19 @@ class ModulePermissionsTest(unittest.TestCase):
         self.assertEqual(self.call('orders/customers?page=1', role='sales').status_code, 200)
         self.assertEqual(self.call('products/1', role='sales').status_code, 200)
         self.assertEqual(self.call('products/batch', 'POST', {}, role='sales').status_code, 403)
+
+    def test_create_finance_account_defaults_and_explicit_revocation(self):
+        response=self.call('admin-users','POST',{'name':'New finance','email':'new-finance@test.local',
+            'password':'Fixture-only-password','role':'finance'})
+        self.assertEqual(response.status_code,201,response.json)
+        account=response.json['user']
+        self.assertEqual(account['permissions'],['finance'])
+        self.tokens['finance']=db.create_admin_session(account['id'])
+        self.assertEqual(self.call('finance/options',role='finance').status_code,200)
+        self.assertEqual(self.call('admin-users',role='finance').status_code,403)
+        self.assertEqual(self.call(f"admin-users/{account['id']}",'PUT',{'permissions':[]}).status_code,200)
+        self.assertEqual(self.call('finance/options',role='finance').status_code,403)
+        self.assertEqual(self.call('admin-users/2','PUT',{'permissions':['finance']}).status_code,400)
 
 
 if __name__ == '__main__': unittest.main()
