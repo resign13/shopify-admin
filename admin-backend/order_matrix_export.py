@@ -2,6 +2,7 @@
 from io import BytesIO
 import re
 import product_weights
+import order_numbering
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -97,7 +98,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             cache_bytes += len(data or b'')
         return image_cache[key]
     for index, order in enumerate(orders, 1):
-        name = re.sub(r'[\[\]:*?/\\]', '_', str(order.get('orderNo') or f'Order {index}'))[:31]
+        name = re.sub(r'[\[\]:*?/\\]', '_', order_numbering.sheet_title(order.get('orderNo') or f'Order {index}'))[:31]
         ws = book.create_sheet(name) if split else shared
         start = 1 if split else cursor
         rows = group_items(order.get('items') or [])
@@ -113,7 +114,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
         def full_line(row, value, height=28):
             ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=end_col)
             text_cell(ws, row, 1, value)
-            lines = sum(max(1, (len(part) + 69) // 70) for part in str(value).splitlines())
+            lines = order_numbering.wrapped_lines(value, 70)
             ws.row_dimensions[row].height = min(409, max(height, lines * 18))
 
         full_line(start, f"订单：{order.get('orderNo', '')}    业务员：{order.get('userName', '')}")

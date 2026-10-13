@@ -101,6 +101,7 @@ from db import (
 import workbench
 import presale
 import order_notifications
+import order_numbering
 from time import perf_counter
 
 app = Flask(__name__)
@@ -944,6 +945,16 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
     # Header/customer fields: keep all original template formatting.
     worksheet["B5"] = str(order.get("orderNo") or "")
+    # A full customer name is part of new numbers. Keep the printable value,
+    # wrapping inside the existing header instead of shrinking the font.
+    number_alignment = copy(worksheet['B5'].alignment)
+    number_alignment.wrap_text = True
+    number_alignment.shrink_to_fit = False
+    worksheet['B5'].alignment = number_alignment
+    worksheet.row_dimensions[5].height = max(
+        float(worksheet.row_dimensions[5].height or 24),
+        order_numbering.wrapped_lines(worksheet['B5'].value, 42) * 18 + 6,
+    )
     worksheet["I5"] = datetime.now().strftime("%Y.%m.%d")
     worksheet["B6"] = build_invoice_party_name(order)
     worksheet["I6"] = build_invoice_email(order)
@@ -2908,6 +2919,53 @@ def order_weight_preview_route():
 def create_admin_order():
     from order_management import save_order
     return jsonify(save_order(request.get_json(silent=True) or {}))
+
+
+@app.get('/api/admin/orders/<int:order_id>/reorder-draft')
+@require_auth
+@require_roles('admin', 'sales')
+def reorder_draft_route(order_id):
+    import order_reorder
+    return jsonify(order_reorder.draft(order_id))
+
+
+@app.get('/api/admin/orders/drafts')
+@require_auth
+@require_roles('admin', 'sales')
+def order_draft_list():
+    import order_drafts
+    try:
+        return jsonify(order_drafts.listing(request.args))
+    except ValueError as exc:
+        return jsonify({'message': str(exc)}), 400
+
+
+@app.get('/api/admin/orders/drafts/<int:draft_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def order_draft_detail(draft_id):
+    import order_drafts
+    try:
+        return jsonify(order_drafts.detail(draft_id))
+    except workbench.Conflict as exc:
+        return jsonify({'message': str(exc), 'code': 'version_conflict'}), 409
+
+
+@app.post('/api/admin/orders/drafts')
+@app.put('/api/admin/orders/drafts/<int:draft_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def order_draft_save(draft_id=None):
+    import order_drafts
+    return jsonify(order_drafts.save(request.get_json(silent=True) or {}, draft_id))
+
+
+@app.delete('/api/admin/orders/drafts/<int:draft_id>')
+@require_auth
+@require_roles('admin', 'sales')
+def order_draft_delete(draft_id):
+    import order_drafts
+    return jsonify(order_drafts.delete(draft_id, request.get_json(silent=True) or {}))
 
 
 @app.put('/api/admin/orders/<int:order_id>/details')

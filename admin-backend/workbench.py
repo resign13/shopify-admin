@@ -406,6 +406,8 @@ def migrate(cur):
     contracts.migrate(cur)
     import customer_templates
     customer_templates.migrate(cur)
+    import order_drafts
+    order_drafts.migrate(cur)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS admin_order_requests (
           request_id UUID PRIMARY KEY, actor_id BIGINT NOT NULL, payload_hash TEXT NOT NULL,
@@ -483,7 +485,7 @@ def version(table, object_id):
 def check_versions(payload):
     path = request.path.split('/')
     # Customer presets use their own revision checks, not an order ID/version.
-    if len(path) > 4 and path[3:5] == ['orders', 'templates']:
+    if len(path) > 4 and path[3] == 'orders' and path[4] in {'templates', 'drafts'}:
         return
     module = 'home-config' if path[3] == 'activity-config' else path[3]
     if module not in {'products', 'inventory', 'orders', 'home-config'}:
@@ -506,6 +508,7 @@ def check_versions(payload):
 
 def atomic_admin_call(func, args, kwargs):
     """All helpers and audit triggers commit together, including legacy multi-step routes."""
+    from order_reorder import PriceChanged
     with db._connect() as conn:
         token = db.REQUEST_CONNECTION.set(conn)
         try:
@@ -533,6 +536,9 @@ def atomic_admin_call(func, args, kwargs):
             else:
                 conn.commit()
             return response
+        except PriceChanged as exc:
+            conn.rollback()
+            return jsonify({'message': str(exc), 'code': 'reorder_price_changed', 'changes': exc.changes}), 409
         except Conflict as exc:
             conn.rollback()
             return jsonify({'message': str(exc), 'code': 'version_conflict'}), 409

@@ -7,6 +7,7 @@ import inventory_overdelivery
 import style_catalog
 import product_weights
 import order_notification_schema
+import order_numbering
 import os
 import secrets
 from contextlib import contextmanager
@@ -179,6 +180,7 @@ def _empty_bundle() -> dict[str, str]:
 
 def _apply_schema_migrations(cur: Any) -> None:
     from workbench import migrate
+    order_numbering.migrate(cur)
     for column in ('product_code', 'color_group', 'color_name', 'color_hex'):
         cur.execute(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} VARCHAR(160) NOT NULL DEFAULT ''")
     cur.execute("ALTER TABLE products ADD COLUMN IF NOT EXISTS style_code VARCHAR(160) NOT NULL DEFAULT ''")
@@ -334,7 +336,7 @@ def _serialize_label_image_urls(value: Any, fallback: str = "") -> str:
 
 
 def _parse_label_image_urls(row: dict[str, Any]) -> list[str]:
-    urls = _json_list(row.get("label_image_urls"))[:14]
+    urls = _json_list(row.get("label_image_urls"))
     if not urls and str(row.get("label_pdf_url") or "").strip():
         urls = [str(row.get("label_pdf_url") or "").strip()]
     return urls
@@ -2335,10 +2337,10 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                 VALUES (
                   %s, %s, %s, 'pending_payment', %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW()
                 )
-                RETURNING id
+                RETURNING id, created_at, contact_name
                 """,
                 (
-                    f"TEMP-{secrets.token_hex(6)}",
+                    f"TEMP-{secrets.token_hex(16)}",
                     payload["userId"],
                     user["linked_admin_user_id"],
                     payload["contactName"],
@@ -2355,7 +2357,7 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
             order_id = int(order_row["id"])
             cur.execute(
                 "UPDATE orders SET order_no = %s WHERE id = %s",
-                (f"LM-{order_id:06d}", order_id),
+                (order_numbering.make_order_number(order_id, order_row['created_at'], order_row['contact_name']), order_id),
             )
             cur.execute(
                 """

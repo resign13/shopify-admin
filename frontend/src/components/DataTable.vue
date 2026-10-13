@@ -46,7 +46,8 @@
       :key="column.prop"
       :prop="column.prop"
       :label="column.label"
-      :min-width="columnWidth(column)"
+      :width="column.fixedWidth"
+      :min-width="column.fixedWidth || columnWidth(column)"
       :sortable="column.sortable ? 'custom' : false"
       :align="column.numeric ? 'right' : 'left'"
     >

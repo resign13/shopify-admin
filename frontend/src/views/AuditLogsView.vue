@@ -157,7 +157,7 @@ const modules = {
     "store-users": "商城账号",
     banners: "海报",
   },
-  actions = { INSERT: "新增", UPDATE: "修改", DELETE: "删除" };
+  actions = { INSERT: "新增", UPDATE: "修改", DELETE: "删除", REORDER: "再来一单", DRAFT_SAVE: "保存草稿", DRAFT_DELETE: "删除草稿" };
 const columns = [
   { prop: "occurredAt", label: "时间", width: 170 },
   { prop: "actor", label: "操作人", width: 120 },

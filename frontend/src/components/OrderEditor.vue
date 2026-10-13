@@ -2,7 +2,7 @@
   <component
     :is="embedded ? 'div' : ElDrawer"
     :model-value="open"
-    :title="id ? '订单详情' : '新增订单'"
+    :title="id ? '订单详情' : sourceOrderId ? `再来一单 · 来源订单 ${sourceOrderNo || '加载中…'}` : draftId ? '订单草稿' : '新增订单'"
     size="min(900px, 100vw)"
     :before-close="close"
     :close-on-click-modal="false"
@@ -29,16 +29,22 @@
           label="单价" /></ElTable
       ><ElButton @click="adoptLatest">放弃草稿，使用最新资料</ElButton>
     </section>
-    <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving" label-position="top">
-      <CustomerTemplates v-if="!id" :profile="form" :customer="customers.find(customer => customer.id === form.userId)" @apply="applyTemplate" @busy="templateBusy = $event" />
+    <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
+    <p v-if="ready && !id && !readOnly" class="small-note" role="status">{{ draftSavedAt ? `已保存至服务器 · ${dateTime(draftSavedAt)}${dirty ? ' · 有未保存修改' : ''}` : '尚未保存为草稿；可填写一部分后点击“保存草稿”，稍后从“我的草稿”继续。' }}</p>
+    <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
+      <CustomerTemplates v-if="!id && !readOnly" :profile="form" :customer="customers.find(customer => customer.id === form.userId)" @apply="applyTemplate" @busy="templateBusy = $event" />
       <ElFormItem v-if="auth.isSuperAdmin" label="归属业务员">
-        <ElSelect v-model="form.ownerAdminId" clearable filterable placeholder="未分配" class="full-width">
+        <ElSelect v-model="form.ownerAdminId" clearable filterable placeholder="未分配" class="full-width" @change="form.ownerConfirmed = true">
           <ElOption v-for="person in salespeople" :key="person.id" :value="person.id" :label="person.name" :disabled="person.status !== 'active' && person.id !== form.ownerAdminId" />
         </ElSelect>
         <small>管理员代建可指定业务员；仅调整归属不影响库存。</small>
       </ElFormItem>
-      <p v-else class="small-note">归属业务员：{{ auth.user?.name }}（固定为本人）</p>
+      <ElAlert v-if="!form.ownerConfirmed" type="warning" title="原业务员已停用，请重新选择业务员或确认未分配。" :closable="false">
+        <ElButton text @click="form.ownerAdminId = null; form.ownerConfirmed = true">确认设为未分配</ElButton>
+      </ElAlert>
+      <p v-if="!auth.isSuperAdmin" class="small-note">归属业务员：{{ auth.user?.name }}（固定为本人）</p>
       <h3>客户与收货信息</h3>
+      <ElAlert v-if="customerUnavailable && !form.userId" type="warning" title="原商城客户已停用或不存在，请选择有效客户；原收货资料已保留。" :closable="false" />
       <ElFormItem
         label="商城客户"
         prop="userId"
@@ -113,11 +119,17 @@
                 :min="0"
                 :max="2147483647"
                 :precision="0"
-                :disabled="lockedLines"
+                :disabled="lockedLines || !sizeAvailable(row, sizeCode)"
                 :controls="false"
                 size="small"
                 @update:model-value="setMatrixQuantity(row, sizeCode, $event)"
               />
+              <small v-if="sizeAvailable(row, sizeCode)" class="order-size-stock"
+                :class="{ 'is-shortage': inventoryFor(row, sizeCode).after < 0 }"
+                :data-testid="`size-stock-${row.productId}-${sizeCode}`"
+                :title="`当前库存 ${inventoryFor(row, sizeCode).current}；预计保存后库存，实际以保存时为准`"
+              >库存 {{ inventoryFor(row, sizeCode).after }}{{ inventoryFor(row, sizeCode).after < 0 ? ' · 欠货' : '' }}</small>
+              <small v-else class="order-size-stock is-unavailable">—</small>
             </div></template
         ></ElTableColumn
         ><ElTableColumn label="总件数" width="85" align="right"
@@ -135,6 +147,14 @@
           ></ElTableColumn
         ></ElTable
       >
+      <section v-if="form.pendingItems.length" class="reorder-issues" data-testid="reorder-issues">
+        <strong>待处理商品 · {{ form.pendingItems.length }} 项</strong>
+        <p>以下商品未计入本次金额。请移除，或先移除后通过“添加商品”重新选择。</p>
+        <div v-for="(item, index) in form.pendingItems" :key="index" class="inherited-attachment">
+          <span>{{ item.sku || item.productName }} · {{ item.sizeCode || '未指定尺码' }} · {{ item.quantity }} 件 <small>{{ item.reason }}</small></span>
+          <ElButton link type="danger" @click="form.pendingItems.splice(index, 1)">移除待处理项</ElButton>
+        </div>
+      </section>
       <div class="order-goods-summary" data-testid="order-goods-summary">
         <div class="order-amount-summary">
           <ElFormItem
@@ -151,6 +171,17 @@
             <div><span>商品金额</span><strong>{{ money(subtotal) }}</strong></div>
             <h3>订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}</h3>
           </div>
+        </div>
+        <div v-if="sourceOrderId || activeDraftId" class="reorder-pricing">
+          <span>{{ sourceOrderId ? '运费沿用原单，请在创建前核对。' : '草稿已按当前商品资料恢复，请在创建前核对金额及运费。' }}</span>
+          <ElPopover v-if="priceChanges.length" trigger="click" placement="bottom" :width="380" :popper-style="{maxWidth:'calc(100vw - 32px)'}">
+            <template #reference><ElButton link type="primary">已按最新价格更新 {{ priceChanges.length }} 项</ElButton></template>
+            <div class="reorder-price-details" data-testid="reorder-price-details">
+              <strong>原单／保存时单价 → 当前单价</strong>
+              <p v-for="row in priceChanges" :key="`${row.productId}:${row.sizeCode}`">{{ row.sku }} · {{ row.sizeCode }}：{{ row.oldUnitPrices.map(money).join(' / ') }} → {{ money(row.unitPrice) }}</p>
+            </div>
+          </ElPopover>
+          <span v-else>商品按当前尺码价格计算。</span>
         </div>
         <div class="order-draft-weight" data-testid="order-draft-weight">
           <div class="order-weight-heading">
@@ -192,11 +223,6 @@
           <small class="order-weight-caption">按当前商品净重计算，不含包装。</small>
         </div>
       </div>
-      <ElTable :data="inventoryImpact" size="small" empty-text="添加商品后显示库存变化">
-        <ElTableColumn prop="sku" label="库存核对 / SKU"/><ElTableColumn prop="sizeCode" label="尺码"/>
-        <ElTableColumn prop="current" label="当前余额"/><ElTableColumn prop="change" label="此次库存增减"/>
-        <ElTableColumn label="预计保存后余额"><template #default="{row}"><ElTag :type="row.after < 0 ? 'danger' : 'info'">{{ row.after }}{{ row.after < 0 ? ' · 欠货' : '' }}</ElTag></template></ElTableColumn>
-      </ElTable>
       <ElAlert v-if="inventoryImpact.some(row => row.after < 0)" title="保存后存在欠货，仍可提交。入库时会抵减欠货余额。" type="warning" :closable="false"/>
       <div v-if="id" class="detail-grid">
         <ElFormItem label="订单状态"
@@ -224,10 +250,21 @@
       <ElFormItem label="备注图片（最多 9 张）"
         ><ImageUploader
           v-model="form.labelImageUrls"
-          :max="9"
+          :max="remainingImageSlots"
           @busy="imageUploading = $event"
       /></ElFormItem>
-      <ElFormItem label="PDF 附件"><PdfAttachment v-model="form.labelPdfUrl" @busy="pdfUploading = $event" /></ElFormItem>
+      <ElFormItem v-if="form.inheritedAttachmentUrls.length" label="已保留的辅料／历史附件">
+        <div class="inherited-attachments" data-testid="inherited-attachments">
+          <div v-for="(url, index) in form.inheritedAttachmentUrls" :key="url" class="inherited-attachment">
+            <ElImage v-if="isImage(url) && attachmentHref(url)" :src="attachmentHref(url)" :preview-src-list="form.inheritedAttachmentUrls.filter(isImage).map(attachmentHref).filter(Boolean)" fit="contain" preview-teleported />
+            <a v-if="attachmentHref(url)" :href="attachmentHref(url)" target="_blank" rel="noopener">附件 {{ index + 1 }} · {{ isImage(url) ? '图片' : /\.pdf(?:[?#]|$)/i.test(url) ? 'PDF' : '文件' }}</a>
+            <span v-else>附件 {{ index + 1 }}（地址暂不支持打开）</span>
+            <ElButton link type="danger" @click="form.inheritedAttachmentUrls.splice(index, 1)">移除附件</ElButton>
+          </div>
+          <small>仅修改本订单附件清单，不删除原文件或影响来源订单。</small>
+        </div>
+      </ElFormItem>
+      <ElFormItem label="PDF 附件"><small v-if="hasInheritedPdf">如需替换，请先移除上方保留的 PDF；历史附件可继续保留。</small><PdfAttachment v-else v-model="form.labelPdfUrl" @busy="pdfUploading = $event" /></ElFormItem>
       <ElAlert
         v-if="id && dirty"
         :title="`保存前核对：商品 ${originalCount} → ${units} 件；总额 ${money(originalTotal)} → ${money(subtotal + Number(form.shippingFee || 0))}`"
@@ -237,10 +274,12 @@
     </ElForm>
     <template v-if="!embedded" #footer
       ><ElButton :disabled="saving || uploading" @click="close()">取消</ElButton
+      ><ElButton v-if="!id && !readOnly" :loading="saving" :disabled="!ready || uploading" @click="saveDraft">保存草稿</ElButton
       ><ElButton
+        v-if="!readOnly"
         type="primary"
         :loading="saving"
-        :disabled="!ready || uploading || (!!id && !dirty)"
+        :disabled="!ready || uploading || (!!id && !dirty) || !!form.pendingItems.length || !form.ownerConfirmed"
         @click="submit"
         >{{ id ? "保存订单修改" : "创建待付款订单" }}</ElButton
       ></template
@@ -265,8 +304,9 @@ import PdfAttachment from "./PdfAttachment.vue";
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
 import { useAdminAuthStore } from "../stores/auth";
-import { orderProductQuantity } from "../utils/orderQuantities";
+import { orderProductQuantity, orderVariantInventory } from "../utils/orderQuantities";
 import { formatWeightKg, orderWeightPreviewItems } from "../utils/productWeights";
+import { reorderForm, reorderPriceChanges, applyReorderPrices, attachmentHref } from "../utils/orderReorder";
 import {
   api,
   save,
@@ -274,11 +314,14 @@ import {
   confirm,
   productName,
   money,
+  dateTime,
   statusNames,
 } from "../composables/workbench";
 const props = defineProps({
     open: Boolean,
     id: [Number, String],
+    sourceOrderId: [Number, String],
+    draftId: [Number, String],
     embedded: Boolean,
   }),
   emit = defineEmits(["update:open", "saved"]);
@@ -297,6 +340,9 @@ const form = reactive({
   note: "",
   labelImageUrls: [],
   labelPdfUrl: "",
+  inheritedAttachmentUrls: [],
+  pendingItems: [],
+  ownerConfirmed: true,
   status: "pending_payment",
   trackingNo: "",
   paymentLink: "",
@@ -306,10 +352,15 @@ const form = reactive({
 const auth = useAdminAuthStore(), salespeople = ref([]);
 const fields = customerFields;
 const originalItems = ref([]);
+const sourceOrderNo = ref(''), customerUnavailable = ref(false);
+const activeDraftId = ref(null), draftVersion = ref(''), draftKey = ref(''), draftSavedAt = ref(''), readOnly = ref(false);
+const priceChanges = computed(() => reorderPriceChanges(form.items));
 const imageUploading = ref(false), pdfUploading = ref(false), templateBusy = ref(false);
 const uploading = computed(() => imageUploading.value || pdfUploading.value || templateBusy.value);
 const isImage = (url) =>
   /\.(jpg|jpeg|png|webp|gif|avif|bmp)(?:[?#]|$)/i.test(url);
+const remainingImageSlots = computed(() => Math.max(0, 9 - form.inheritedAttachmentUrls.filter(isImage).length));
+const hasInheritedPdf = computed(() => form.inheritedAttachmentUrls.some(url => /\.pdf(?:[?#]|$)/i.test(url)));
 const ready = ref(false),
   loading = ref(false),
   saving = ref(false),
@@ -437,8 +488,11 @@ function priceFor(row, sizeCode) {
 function quantityFor(row, sizeCode) {
   return Number(lineFor(row, sizeCode)?.quantity || 0);
 }
+function sizeAvailable(row, sizeCode) {
+  return !!lineFor(row, sizeCode) || products[row.productId]?.sizePrices?.some(size => size.sizeCode === sizeCode);
+}
 function setMatrixQuantity(row, sizeCode, value) {
-  if (lockedLines.value) return;
+  if (lockedLines.value || !sizeAvailable(row, sizeCode)) return;
   const next = Math.max(0, Math.min(2147483647, Math.trunc(Number(value) || 0)));
   let line = lineFor(row, sizeCode);
   if (!line && next > 0) {
@@ -468,10 +522,15 @@ const inventoryImpact = computed(() => {
   for (const row of form.items) rows.get(`${row.productId}:${row.sizeCode}`).next += Number(row.quantity || 0);
   return [...rows.values()].sort((a, b) => compareProductCategories(products[a.productId], products[b.productId])).map(row => {
     const stock = products[row.productId]?.sizePrices?.find(s => s.sizeCode === row.sizeCode)?.stock;
-    const change = (status.value === 'cancelled' ? 0 : row.before) - (form.status === 'cancelled' ? 0 : row.next);
-    return {...row, current: stock ?? '待刷新', change: change > 0 ? `+${change}` : change, after: stock == null ? '待刷新' : stock + change};
+    return {...row, ...orderVariantInventory(stock, row.before, row.next, status.value, form.status)};
   });
 });
+function inventoryFor(row, sizeCode) {
+  const impact = inventoryImpact.value.find(item => item.productId === row.productId && item.sizeCode === sizeCode);
+  if (impact) return impact;
+  const stock = products[row.productId]?.sizePrices?.find(item => item.sizeCode === sizeCode)?.stock;
+  return orderVariantInventory(stock);
+}
 let serial = 0,
   customerSerial = 0;
 async function searchCustomers(keyword = "") {
@@ -509,8 +568,9 @@ async function populate(item) {
     ),
     {
       address: item.address || item.shippingAddress || "",
-      labelImageUrls: (item.labelImageUrls || []).filter(isImage),
-      labelPdfUrl: (item.labelImageUrls || []).find(url => /\.pdf(?:[?#]|$)/i.test(url)) || '',
+      labelImageUrls: [], labelPdfUrl: '',
+      inheritedAttachmentUrls: [...new Set([...(item.labelImageUrls || []), item.labelPdfUrl].filter(Boolean))],
+      pendingItems: [], ownerConfirmed: true,
       items: item.items.map((row) => ({ ...row })),
     },
   );
@@ -532,19 +592,30 @@ async function populate(item) {
   );
 }
 watch(
-  () => [props.open, props.id],
-  async ([open, id]) => {
-    if (!open) return;
+  () => [props.open, props.id, props.sourceOrderId, props.draftId],
+  async ([open, id, sourceId, savedId]) => {
     const current = ++serial;
+    if (!open) { ++customerSerial; return; }
     loading.value = true;
     ready.value = false;
     imageUploading.value = false; pdfUploading.value = false; templateBusy.value = false;
     error.value = "";
     conflict.value = false;
     latest.value = null;
+    sourceOrderNo.value = ''; customerUnavailable.value = false;
+    activeDraftId.value = null; draftVersion.value = ''; draftSavedAt.value = ''; readOnly.value = false;
+    draftKey.value = crypto.randomUUID();
+    Object.keys(products).forEach(key => delete products[key]);
+    customers.value = [];
     try {
-      categories.value = (await api("catalog-options")).items;
-      if (auth.isSuperAdmin) salespeople.value = (await api("salespeople")).items;
+      const catalog = await api("catalog-options");
+      if (current !== serial) return;
+      categories.value = catalog.items;
+      if (auth.isSuperAdmin) {
+        const people = await api("salespeople");
+        if (current !== serial) return;
+        salespeople.value = people.items;
+      }
       if (id) {
         const item = (await api(`orders/${id}`)).order;
         if (current !== serial) return;
@@ -565,6 +636,7 @@ watch(
           note: "",
           labelImageUrls: [],
           labelPdfUrl: "",
+          inheritedAttachmentUrls: [], pendingItems: [], ownerConfirmed: true,
           status: "pending_payment",
           trackingNo: "",
           paymentLink: "",
@@ -575,11 +647,33 @@ watch(
         status.value = "pending_payment";
         requestId.value = crypto.randomUUID();
         markClean();
+        if (savedId) {
+          const result = await api(`orders/drafts/${savedId}`);
+          if (current !== serial) return;
+          Object.assign(form, reorderForm({...result, issues:result.draft.pendingItems, ownerNeedsConfirmation:!result.draft.ownerConfirmed}));
+          form.labelImageUrls = [...result.draft.labelImageUrls]; form.labelPdfUrl = result.draft.labelPdfUrl;
+          sourceOrderNo.value = result.sourceOrderNo;
+          customerUnavailable.value = result.customerUnavailable;
+          result.products.forEach(product => { products[product.id] = product; });
+          if (result.customer && !result.customerUnavailable) customers.value = [result.customer];
+          activeDraftId.value = result.id; draftVersion.value = result.version;
+          draftSavedAt.value = result.updatedAt; requestId.value = result.submitRequestId;
+          readOnly.value = !result.canEdit;
+          markClean();
+        } else if (sourceId) {
+          const result = await api(`orders/${sourceId}/reorder-draft`);
+          if (current !== serial) return;
+          Object.assign(form, reorderForm(result));
+          sourceOrderNo.value = result.sourceOrderNo;
+          customerUnavailable.value = result.customerUnavailable;
+          result.products.forEach(product => { products[product.id] = product; });
+          if (result.customer && !result.customerUnavailable) customers.value = [result.customer];
+        }
         ready.value = true;
       }
       await searchCustomers();
     } catch (e) {
-      error.value = e.message;
+      if (current === serial) error.value = e.message;
     } finally {
       if (current === serial) loading.value = false;
     }
@@ -598,6 +692,7 @@ async function applyTemplate(item) {
   const hasCustomerInfo = current.userId || current.labelImageUrls.length || Object.values(current).some(value => typeof value === 'string' && value.trim());
   if (hasCustomerInfo && !(await confirm('填入模板将替换当前客户资料、备注及附件，商品明细和金额保持不变。是否继续？'))) return;
   applyCustomerProfile(form, item.profile);
+  form.inheritedAttachmentUrls = [];
   if (!customers.value.some(customer => customer.id === item.customer.id)) customers.value.unshift({ ...item.customer });
   formRef.value?.clearValidate();
   ElMessage.success(`已填入客户模板：${item.name}`);
@@ -653,14 +748,14 @@ function validateFee(_r, value, callback) {
 }
 async function canClose() {
   if (saving.value || uploading.value) return false;
-  if (!(await canLeave())) return false;
+  if (!readOnly.value && !(await canLeave())) return false;
   markClean();
   return true;
 }
 defineExpose({ submit, canClose, saving, uploading, ready, dirty });
 async function close(done) {
   if (saving.value || uploading.value) return;
-  if (await canLeave()) {
+  if (readOnly.value || await canLeave()) {
     markClean();
     emit("update:open", false);
     if (typeof done === "function") done();
@@ -668,11 +763,16 @@ async function close(done) {
 }
 async function submit() {
   if (
+    readOnly.value ||
     saving.value ||
     uploading.value ||
     !(await formRef.value.validate().catch(() => false))
   )
     return;
+  if (form.pendingItems.length || !form.ownerConfirmed) {
+    error.value = '请先处理异常商品并确认业务员归属';
+    return;
+  }
   const invalidRow = form.items.find(
     (r) =>
       !Number.isInteger(r.quantity) ||
@@ -695,7 +795,7 @@ async function submit() {
   }
   if (
     !(await confirm(
-      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}。保存后同步调整现货库存。`,
+      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}。${props.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}保存后同步调整现货库存。`,
     ))
   )
     return;
@@ -704,6 +804,8 @@ async function submit() {
   try {
     const payload = {
       ...form,
+      ...(props.sourceOrderId ? { sourceOrderId: props.sourceOrderId } : {}),
+      ...(activeDraftId.value ? {draftId:activeDraftId.value, draftVersion:draftVersion.value} : {}),
       ownerAdminId: auth.isSuperAdmin ? (form.ownerAdminId || null) : auth.user.id,
       items: items.map(({ productId, sizeCode, quantity, unitPrice }) => ({
         productId,
@@ -726,10 +828,28 @@ async function submit() {
     ElMessage.success(props.id ? "订单修改已保存" : "订单已创建");
   } catch (e) {
     error.value = e.message;
-    conflict.value = e.status === 409;
+    if (e.data?.code === 'reorder_price_changed') {
+      applyReorderPrices(form.items, products, e.data.changes || []);
+      ElMessage.warning(e.message);
+    }
+    conflict.value = !!props.id && e.status === 409;
   } finally {
     saving.value = false;
   }
+}
+async function saveDraft() {
+  if (props.id || readOnly.value || saving.value || uploading.value || !ready.value) return;
+  saving.value = true; error.value = '';
+  try {
+    const result = await save(activeDraftId.value ? `orders/drafts/${activeDraftId.value}` : 'orders/drafts', {
+      draftKey:draftKey.value, version:draftVersion.value, submitRequestId:requestId.value,
+      draft:{...form, sourceOrderId:props.sourceOrderId || null},
+    }, activeDraftId.value ? 'PUT' : 'POST');
+    activeDraftId.value = result.id; draftVersion.value = result.version;
+    draftSavedAt.value = result.updatedAt; requestId.value = result.submitRequestId;
+    markClean(); ElMessage.success('草稿已保存，可从“我的草稿”继续编辑');
+  } catch(e) { error.value = e.message; }
+  finally { saving.value = false; }
 }
 async function readLatest() {
   try {
@@ -748,6 +868,19 @@ async function adoptLatest() {
 }
 </script>
 <style scoped>
+.order-size-stock { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.order-size-stock.is-shortage { color: var(--el-color-danger); }
+.order-size-stock.is-unavailable { color: #a8abb2; }
+
+.reorder-pricing { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: #64748b; font-size: 12px; padding: 0 0 12px; }
+.reorder-price-details { max-height: 240px; overflow-y: auto; font-size: 12px; }
+.reorder-issues { margin-top: 12px; padding: 12px; background: #fff7ed; border-radius: 6px; color: #9a3412; font-size: 13px; }
+.reorder-issues p { margin: 6px 0; }
+.inherited-attachments { width: 100%; }
+.inherited-attachment { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid #e8edf3; }
+.inherited-attachment .el-image { width: 54px; height: 54px; }
+.inherited-attachment > .el-button { margin-left: auto; }
+.inherited-attachment small { display: block; color: #b45309; }
 .order-goods-summary {
   padding: 16px 8px;
   color: var(--muted);

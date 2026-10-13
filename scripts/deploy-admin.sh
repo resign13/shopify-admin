@@ -118,6 +118,7 @@ for attempt in $(seq 1 20); do
     .venv/bin/python "$root/scripts/verify-defective-inventory.py" "$backend"
     .venv/bin/python "$root/scripts/verify-inventory-overdelivery.py" "$backend"
     .venv/bin/python "$root/scripts/verify-product-weights.py" "$backend"
+    .venv/bin/python "$root/scripts/verify-order-numbering.py" "$backend"
     # Approved permission upgrade is explicit, audited and one-time. Existing
     # account links and all other module grants are preserved.
     .venv/bin/python "$root/scripts/enable-sales-dashboard.py" --apply

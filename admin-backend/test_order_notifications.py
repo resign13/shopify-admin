@@ -68,7 +68,7 @@ class OrderNotificationsTest(unittest.TestCase):
         db._fetch_one("UPDATE orders SET status='allocated',owner_admin_id=2 WHERE id=%s RETURNING id", (order_id,))
         self.assertEqual(db._fetch_one('SELECT COUNT(*) AS n FROM order_created_events')['n'], before)
         events = self.poll(cursor).json['events']; self.assertEqual(len(events),1)
-        self.assertTrue(events[0]['orderNo'].startswith('LM-')); self.assertNotIn('TEMP-',str(events))
+        self.assertTrue(events[0]['orderNo'].startswith('PO')); self.assertNotIn('TEMP-',str(events))
 
     def test_commit_inversion_does_not_skip_late_transaction(self):
         cursor = self.start()

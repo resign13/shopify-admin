@@ -100,8 +100,22 @@ async (page) => {
   const summary = editor.locator('[data-testid="order-goods-summary"]');
   const weightSummary = summary.locator('[data-testid="order-draft-weight"]');
   check((await summary.innerText()).includes('$89.70'), 'Goods amount calculated incorrectly');
-  check(await summary.evaluate(el => el.previousElementSibling?.classList.contains('el-table') &&
-    el.nextElementSibling?.classList.contains('el-table')), 'Goods amount not between matrix and inventory preview');
+  check(await summary.evaluate(el => el.previousElementSibling?.classList.contains('el-table')), 'Goods amount not below matrix');
+  check(await editor.getByRole('columnheader',{name:'库存核对 / SKU',exact:true}).count()===0,'Separate stock table remains');
+  const currentSizes=(await api('inventory/1')).product.sizePrices;
+  for(const [size,qty] of [['M',2],['L',1]]) {
+    const stock=currentSizes.find(item=>item.sizeCode===size).stock;
+    check((await editor.getByTestId(`size-stock-1-${size}`).innerText()).includes(`库存 ${stock-qty}`),'Inline stock delta incorrect');
+  }
+  const firstStock=currentSizes.find(item=>item.sizeCode===sizes[1]).stock;
+  const firstQuantity=matrix.getByRole('spinbutton').first();
+  const oldQuantity=await firstQuantity.inputValue();
+  await firstQuantity.fill(String(Math.max(0,firstStock)+3)); await firstQuantity.press('Tab');
+  const shortage=editor.getByTestId(`size-stock-1-${sizes[1]}`);
+  check((await shortage.innerText()).includes('欠货') && (await shortage.getAttribute('class')).includes('is-shortage'),'Shortage not highlighted');
+  await firstQuantity.fill('0'); await firstQuantity.press('Tab');
+  check((await shortage.innerText()).includes(`库存 ${firstStock}`),'Zero quantity did not restore preview');
+  await firstQuantity.fill(oldQuantity); await firstQuantity.press('Tab');
   check((await editor.getByRole('heading', {name: /订单总额/}).innerText()).includes('$102.20'), 'Shipping or total changed');
   check(await editor.getByText('商品金额', {exact: true}).count() === 1, 'Duplicate goods amount remains at footer');
   check(await summary.getByRole('spinbutton', {name:'运费（USD）',exact:true}).count() === 1 &&
@@ -142,6 +156,7 @@ async (page) => {
   check((await missingHint().innerText()).includes('3 件未设置'), 'All-missing count incorrect');
   await page.setViewportSize({width:390,height:844});
   await weightSummary.scrollIntoViewIfNeeded(); await settleDrawer();
+  await page.waitForFunction(() => { const el=document.querySelector('[data-testid=order-draft-weight]'); if(!el)return false; const box=el.getBoundingClientRect(); return box.left>=-1 && box.right<=innerWidth+1 && el.scrollWidth<=el.clientWidth+1; });
   check(await weightSummary.evaluate(el=>el.getBoundingClientRect().left>=-1 &&
     el.getBoundingClientRect().right<=window.innerWidth+1 && el.scrollWidth<=el.clientWidth+1), 'Weight area overflows narrow drawer');
   await missingHint().click(); await weightDetails.waitFor();
