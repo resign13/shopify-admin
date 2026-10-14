@@ -34,6 +34,7 @@ export function applyReorderPrices(items, products, changes) {
 
 export function attachmentHref(url) {
   if (typeof url !== 'string') return '';
+  if (/^\/api\/attachments\/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\/content(?:\/[^/?#\\]+)?$/i.test(url)) return url;
   if (url.startsWith('/uploads/') && !url.includes('\\')) return url;
   try { return ['http:', 'https:'].includes(new URL(url).protocol) ? url : ''; }
   catch { return ''; }

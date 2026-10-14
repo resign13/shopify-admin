@@ -23,6 +23,11 @@ class ModulePermissionsTest(unittest.TestCase):
         user = db.get_admin_user_by_email(role + '@gingtto.test')
         response = self.call(f"admin-users/{user['id']}", 'PUT', {'permissions': permissions})
         self.assertEqual(response.status_code, 200, response.json)
+        # Permission changes retire the old cookie; a fresh login then sees
+        # the new grant. Both boundaries must be exercised, not just 403.
+        self.assertIsNone(db.get_admin_user_by_session_token(self.tokens[role]))
+        self.assertEqual(self.call('orders', role=role).status_code, 401)
+        self.tokens[role] = db.create_admin_session(user['id'])
         return response.json['user']
 
     def test_legacy_defaults_and_explicit_empty_existing_session(self):
@@ -88,6 +93,8 @@ class ModulePermissionsTest(unittest.TestCase):
         self.assertEqual(self.call('finance/options',role='finance').status_code,200)
         self.assertEqual(self.call('admin-users',role='finance').status_code,403)
         self.assertEqual(self.call(f"admin-users/{account['id']}",'PUT',{'permissions':[]}).status_code,200)
+        self.assertEqual(self.call('finance/options',role='finance').status_code,401)
+        self.tokens['finance']=db.create_admin_session(account['id'])
         self.assertEqual(self.call('finance/options',role='finance').status_code,403)
         self.assertEqual(self.call('admin-users/2','PUT',{'permissions':['finance']}).status_code,400)
 

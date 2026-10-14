@@ -6,6 +6,8 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 .env
+.env.*
+admin-backend/data/
 *.log
 *.out
 *.err
@@ -17,3 +19,5 @@ admin-backend/__pycache__/
 admin-backend/data/image-cache/
 .playwright-cli/
 output/
+
+.venv*/

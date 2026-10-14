@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import catalog_order
@@ -52,6 +52,8 @@ def load_env_file(path: Path) -> None:
             os.environ[key] = value
 
 
+if os.environ.get('APP_ENV') != 'test':
+    load_env_file(BASE_DIR / '.env.security')
 load_env_file(BASE_DIR / ".env")
 
 DB_HOST = os.environ.get("PGHOST", "127.0.0.1")
@@ -82,11 +84,20 @@ def _connect(dbname: str | None = None, *, autocommit: bool = False):
         "user": DB_USER,
         "row_factory": dict_row,
         "autocommit": autocommit,
+        "connect_timeout": 5,
     }
     if DB_PASSWORD:
         kwargs["password"] = DB_PASSWORD
+    timeout = int(os.environ.get('DB_STATEMENT_TIMEOUT_MS', '15000'))
+    from flask import g, has_request_context
+    if has_request_context() and getattr(g, 'security_exporting', False):
+        timeout = int(os.environ.get('DB_EXPORT_STATEMENT_TIMEOUT_MS', '60000'))
+    lock_timeout = int(os.environ.get('DB_LOCK_TIMEOUT_MS', '5000'))
+    if not 100 <= timeout <= 300000 or not 100 <= lock_timeout <= 30000:
+        raise RuntimeError('Invalid database timeout configuration')
+    kwargs['options'] = f'-c statement_timeout={timeout} -c lock_timeout={lock_timeout} -c idle_in_transaction_session_timeout=60000'
     if os.environ.get("ORDER_NOTIFICATION_MAINTENANCE", "").lower() in {"1", "true", "on"}:
-        kwargs["options"] = "-c gingtto.notifications_paused=on"
+        kwargs["options"] += " -c gingtto.notifications_paused=on"
     return connect(**kwargs)
 
 
@@ -312,7 +323,31 @@ def _apply_schema_migrations(cur: Any) -> None:
                  WHERE o.id = r.order_id AND o.created_by_admin_id IS NULL""")
     import sales_ownership
     sales_ownership.migrate(cur)
+    import security_core
+    security_core.migrate(cur)
 
+
+
+def ensure_database_ready() -> None:
+    if os.environ.get('DB_SCHEMA_AUTO_MIGRATE') == '1':
+        import security_core
+        if not security_core.test_database():
+            raise RuntimeError('Runtime auto-migration is restricted to isolated local test databases')
+        migrate_database()
+        return
+    with _connect() as conn:
+        conn.execute('SET TRANSACTION READ ONLY')
+        row = conn.execute("SELECT to_regclass('public.security_schema_versions') AS name").fetchone()
+        if not row or not row['name']:
+            raise RuntimeError('Database migration required; run scripts/migrate-database.py with migration credentials')
+        import security_core
+        if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (security_core.VERSION,)).fetchone():
+            raise RuntimeError('Database security schema version is not ready')
+    if os.environ.get('APP_ENV','production') == 'production':
+        with _connect() as conn:
+            role = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
+            ddl = conn.execute("SELECT has_schema_privilege(current_user,'public','CREATE') AS allowed").fetchone()['allowed']
+            if any(role.values()) or ddl: raise RuntimeError('Runtime database role has excessive privileges')
 
 
 def _json_list(value: Any) -> list[str]:
@@ -343,7 +378,7 @@ def _parse_label_image_urls(row: dict[str, Any]) -> list[str]:
         urls = [str(row.get("label_pdf_url") or "").strip()]
     return urls
 
-def ensure_database_ready() -> None:
+def migrate_database() -> None:
     try:
         with _connect():
             pass
@@ -861,6 +896,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
         """,
         (payload.get("sizeChartImage", ""), payload.get("descriptionImage", ""), product_id),
     )
+    _bind_product_media(product_id, payload)
 
 
 def _insert_product_row(cur: Any, payload: dict[str, Any]) -> int:
@@ -958,6 +994,7 @@ def create_product(payload: dict[str, Any]) -> dict[str, Any]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             product_id = _insert_product_row(cur, payload)
+            _bind_product_media(product_id, payload)
         conn.commit()
     return get_product_by_id(product_id)  # type: ignore[return-value]
 
@@ -1024,6 +1061,7 @@ def update_product(product_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                 ),
             )
             _write_product_details(cur, product_id, {**payload, **details, "price": price, "sizePrices": size_prices})
+            _bind_product_media(product_id, payload)
         conn.commit()
     return get_product_by_id(product_id)
 
@@ -1979,8 +2017,12 @@ def update_admin_user(user_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                 params.append(json.dumps(payload["permissions"]))
             params.append(user_id)
             cur.execute(f"UPDATE admin_users SET {', '.join(fields)} WHERE id = %s", tuple(params))
+            cur.execute("UPDATE admin_sessions SET revoked_at=clock_timestamp() WHERE admin_user_id=%s AND revoked_at IS NULL", (user_id,))
+            from flask import has_request_context, g
+            if has_request_context() and getattr(g,'current_user',{}).get('id') == user_id: g.security_session_revoked = True
         conn.commit()
     return get_admin_user_by_id(user_id, include_password_hash=True)
+
 
 
 def delete_admin_user(user_id: int) -> bool:
@@ -2041,8 +2083,9 @@ def create_store_user(payload: dict[str, Any]) -> dict[str, Any]:
 def update_store_user(user_id: int, payload: dict[str, Any]) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id FROM store_users WHERE id = %s", (user_id,))
-            if not cur.fetchone():
+            cur.execute("SELECT id,email,password_hash,status FROM store_users WHERE id = %s FOR UPDATE", (user_id,))
+            old_user = cur.fetchone()
+            if not old_user:
                 return None
             fields = [
                 "name = %s",
@@ -2062,8 +2105,12 @@ def update_store_user(user_id: int, payload: dict[str, Any]) -> dict[str, Any] |
                 params.append(payload["passwordHash"])
             params.append(user_id)
             cur.execute(f"UPDATE store_users SET {', '.join(fields)} WHERE id = %s", tuple(params))
+            if payload['status'] != old_user['status'] or payload['email'] != old_user['email'] or (payload.get('passwordHash') and payload['passwordHash'] != old_user['password_hash']):
+                cur.execute("UPDATE store_sessions SET revoked_at=clock_timestamp() WHERE store_user_id=%s AND revoked_at IS NULL", (user_id,))
         conn.commit()
     return get_store_user_by_id(user_id, include_password_hash=True)
+
+
 
 
 def delete_store_user(user_id: int) -> bool:
@@ -2076,46 +2123,25 @@ def delete_store_user(user_id: int) -> bool:
 
 
 def create_admin_session(user_id: int) -> str:
-    token = secrets.token_urlsafe(24)
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM admin_sessions WHERE admin_user_id = %s", (user_id,))
-            cur.execute(
-                """
-                INSERT INTO admin_sessions (admin_user_id, token, created_at)
-                VALUES (%s, %s, NOW())
-                """,
-                (user_id, token),
-            )
-        conn.commit()
-    return token
+    import security_core, sys
+    return security_core.new_session(sys.modules[__name__], 'admin', user_id)
 
 
 def get_admin_user_by_session_token(token: str) -> dict[str, Any] | None:
-    row = _fetch_one(
-        """
-        SELECT au.id, au.name, au.email, au.password_hash, au.role, au.permissions, au.status, au.created_at
-        FROM admin_sessions s
-        JOIN admin_users au ON au.id = s.admin_user_id
-        WHERE s.token = %s AND au.status = 'active'
-        """,
-        (token,),
-    )
-    return _build_user_dict(row, include_password_hash=True, company_name=False) if row else None
+    import security_core, sys
+    row = security_core.session(sys.modules[__name__], 'admin', token)
+    if not row: return None
+    return _build_user_dict(row, include_password_hash=False, company_name=False)
 
 
 def delete_admin_session(token: str) -> None:
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM admin_sessions WHERE token = %s", (token,))
-        conn.commit()
+    import security_core, sys
+    security_core.revoke(sys.modules[__name__], 'admin', token=token)
 
 
 def delete_admin_sessions_for_user(user_id: int) -> None:
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM admin_sessions WHERE admin_user_id = %s", (user_id,))
-        conn.commit()
+    import security_core, sys
+    security_core.revoke(sys.modules[__name__], 'admin', user_id=user_id)
 
 
 def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None, include_weight: bool = False) -> list[dict[str, Any]]:
@@ -2511,3 +2537,11 @@ def prepare_inventory_import(row, state=None):
     originals.update(state or {})
     p,i,b,extra=inventory_overdelivery.transition(originals,changes)
     row.update(contractPending=p,pendingInspection=i,pendingInbound=b,_stagePrepared=True,_overdelivery=extra)
+
+
+def _bind_product_media(product_id, payload):
+    from flask import has_request_context, current_app
+    if not has_request_context(): return
+    from private_media import file_id
+    urls = [payload.get(k) for k in ('image','sizeChartImage','descriptionImage')] + list(payload.get('gallery') or [])
+    current_app.extensions['media'].bind('product', product_id, [u for u in urls if file_id(u)])

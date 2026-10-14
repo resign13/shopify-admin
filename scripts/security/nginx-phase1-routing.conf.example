@@ -1,0 +1,117 @@
+# APPROVED CUTOVER ONLY. Preserve existing verified certificate paths in each
+# domain block; do not assume the gingtto certificate also covers smawell.shop.
+# Install nginx-http.conf in http context and nginx-site.conf in the snippet
+# path below. Validate the assembled configuration with nginx -t before reload.
+# Replace *_CERT_PATH / *_KEY_PATH with existing certificate paths; never keys.
+
+server {
+    listen 443 ssl default_server;
+    listen [::]:443 ssl default_server;
+    server_name _;
+    ssl_certificate GINGTTO_CERT_PATH;
+    ssl_certificate_key GINGTTO_KEY_PATH;
+    return 444;
+}
+server {
+    listen 443 ssl;
+    server_name gingtto.store www.gingtto.store api.gingtto.store;
+    ssl_certificate GINGTTO_CERT_PATH;
+    ssl_certificate_key GINGTTO_KEY_PATH;
+    if ($gingtto_origin_peer_allowed = 0) { return 403; }
+    if (-f /etc/gingtto/maintenance) { return 503; }
+    set $gingtto_upstream 127.0.0.1:5301;
+    include /etc/nginx/snippets/gingtto-security-phase1-site.conf;
+    # Preserve this site's existing /uploads location verbatim; if it currently
+    # proxies to the application, keep that upstream, cache and headers.
+    include /etc/nginx/snippets/LEGACY_UPLOADS_FOR_THIS_SITE.conf;
+    root /opt/smawell/current/store/frontend/dist;
+    location /assets/ {
+        alias /opt/smawell/public-assets/store/;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control no-store always;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name smawell.shop www.smawell.shop api.smawell.shop;
+    ssl_certificate SMAWELL_CERT_PATH;
+    ssl_certificate_key SMAWELL_KEY_PATH;
+    if ($gingtto_origin_peer_allowed = 0) { return 403; }
+    if (-f /etc/gingtto/maintenance) { return 503; }
+    set $gingtto_upstream 127.0.0.1:5301;
+    include /etc/nginx/snippets/gingtto-security-phase1-site.conf;
+    # Preserve this site's existing /uploads location verbatim; if it currently
+    # proxies to the application, keep that upstream, cache and headers.
+    include /etc/nginx/snippets/LEGACY_UPLOADS_FOR_THIS_SITE.conf;
+    root /opt/smawell/current/store/frontend/dist;
+    location /assets/ {
+        alias /opt/smawell/public-assets/store/;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control no-store always;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name admin.gingtto.store api-admin.gingtto.store;
+    ssl_certificate GINGTTO_CERT_PATH;
+    ssl_certificate_key GINGTTO_KEY_PATH;
+    if ($gingtto_origin_peer_allowed = 0) { return 403; }
+    if (-f /etc/gingtto/maintenance) { return 503; }
+    set $gingtto_upstream 127.0.0.1:5302;
+    include /etc/nginx/snippets/gingtto-security-phase1-site.conf;
+    # Preserve this site's existing /uploads location verbatim; if it currently
+    # proxies to the application, keep that upstream, cache and headers.
+    include /etc/nginx/snippets/LEGACY_UPLOADS_FOR_THIS_SITE.conf;
+    root /opt/smawell/current/admin/frontend/dist;
+    location /assets/ {
+        alias /opt/smawell/public-assets/admin/;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control no-store always;
+    }
+}
+server {
+    listen 443 ssl;
+    server_name admin.smawell.shop api-admin.smawell.shop;
+    ssl_certificate SMAWELL_CERT_PATH;
+    ssl_certificate_key SMAWELL_KEY_PATH;
+    if ($gingtto_origin_peer_allowed = 0) { return 403; }
+    if (-f /etc/gingtto/maintenance) { return 503; }
+    set $gingtto_upstream 127.0.0.1:5302;
+    include /etc/nginx/snippets/gingtto-security-phase1-site.conf;
+    # Preserve this site's existing /uploads location verbatim; if it currently
+    # proxies to the application, keep that upstream, cache and headers.
+    include /etc/nginx/snippets/LEGACY_UPLOADS_FOR_THIS_SITE.conf;
+    root /opt/smawell/current/admin/frontend/dist;
+    location /assets/ {
+        alias /opt/smawell/public-assets/admin/;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        include /etc/nginx/snippets/gingtto-security-response-headers.conf;
+        add_header Cache-Control no-store always;
+    }
+}
+
+
+# Keep img.smawell.shop / img.gingtto.store in their existing files, unchanged.

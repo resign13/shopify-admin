@@ -1,3 +1,4 @@
+import safe_excel
 """Order packing exports: one color SKU per row, paired sizes across columns."""
 from io import BytesIO
 import re
@@ -145,6 +146,9 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
                 image = make_image(data, width=110, height=104) if data else None
                 if image:
                     ws.add_image(image, f'B{row_no}')
+                else:
+                    cell = text_cell(ws, row_no, 2, '图片暂不可用\nImage unavailable')
+                    cell.font = Font(size=9, color='64748B')
             row_no += 1
         text_cell(ws, row_no, 1, '总件数')
         for col, label in enumerate(labels, 3):
@@ -162,11 +166,18 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
         cursor = row_no + 5
         if include_images:
             attachment_images = []
+            missing_images = 0
             for url in image_urls:
                 data = image_bytes(url, attachment=True)
                 image = make_image(data, width=480, height=480, pixels=1600) if data else None
                 if image:
                     attachment_images.append(image)
+                else:
+                    missing_images += 1
+            if missing_images:
+                cell = ws.cell(row_no + 2, 1)
+                cell.value = str(cell.value or '') + f'\n附件图片未载入：{missing_images} / Attachment images unavailable: {missing_images}'
+                ws.row_dimensions[row_no + 2].height = min(409, max(48, order_numbering.wrapped_lines(cell.value, 70) * 18))
             cursor = add_attachment_strip(ws, cursor, attachment_images)
         cursor += 2
         ws.freeze_panes = 'A6'
@@ -180,6 +191,6 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
     if not orders:
         book.active['A1'] = '暂无订单'
     out = BytesIO()
-    book.save(out)
+    safe_excel.prepare(book).save(out)
     out.seek(0)
     return out

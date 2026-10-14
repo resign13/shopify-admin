@@ -35,11 +35,11 @@ def _clock():
 
 
 def _identity(token):
-    row = db._fetch_one('SELECT s.id FROM admin_sessions s JOIN admin_users u ON u.id=s.admin_user_id '
-                        "WHERE s.token=%s AND u.status='active'", (token,))
+    import security_core
+    row = security_core.session(db, 'admin', token)
     if not row:
         raise NotificationError('登录已失效，请重新登录', 401, 'notification_session_invalid')
-    return row['id']
+    return row['session_id']
 
 
 def _pack(data):

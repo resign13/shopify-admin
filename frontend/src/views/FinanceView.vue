@@ -127,6 +127,8 @@
 </template>
 
 <script setup>
+import { authenticatedFetch } from '../authTransport';
+
 import {computed,onMounted,onBeforeUnmount,reactive,ref} from 'vue';
 import {onBeforeRouteLeave} from 'vue-router';
 import {ElMessage} from 'element-plus';
@@ -256,8 +258,8 @@ async function queryReport(page=1,existing=false){
 async function exportReport(){
   if(!result.value||reportOutdated.value||reportLoading.value||exporting.value)return;
   exporting.value=true;error.value='';
-  try{const response=await fetch(`${API_BASE}/api/admin/finance/reports/export`,{method:'POST',headers:{Authorization:`Bearer ${auth.token}`,'Content-Type':'application/json'},body:JSON.stringify(result.value.filters)});
-    if(!response.ok){if(response.status===401)window.dispatchEvent(new Event('admin-session-expired'));throw new Error((await response.json().catch(()=>({}))).message||'导出失败');}
+  try{const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/reports/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result.value.filters)});
+    if(!response.ok){if(response.status===401)throw new Error((await response.json().catch(()=>({}))).message||'导出失败');}
     const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='财务成本核算.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }catch(e){error.value=e.message;}finally{exporting.value=false;}
 }

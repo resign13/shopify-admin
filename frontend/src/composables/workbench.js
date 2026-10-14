@@ -1,3 +1,4 @@
+import { authenticatedFetch, csrfHeaders } from '../authTransport';
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -40,7 +41,7 @@ export function api(path, options = {}) {
   const auth = useAdminAuthStore();
   return request("/api/admin/" + path, {
     ...options,
-    headers: { Authorization: `Bearer ${auth.token}`, ...options.headers },
+    headers: {  ...options.headers },
   });
 }
 export const save = (path, payload, method = "PUT") =>
@@ -71,8 +72,8 @@ export async function copy(value) {
   }
 }
 export async function download(path, filename) {
-  const response = await fetch(`${API_BASE}/api/admin/${path}`, {
-    headers: { Authorization: `Bearer ${useAdminAuthStore().token}` },
+  const response = await authenticatedFetch(`${API_BASE}/api/admin/${path}`, {
+    headers: { },
   });
   if (!response.ok)
     throw new Error(
@@ -220,31 +221,23 @@ export function useDirty(value) {
   return { dirty, markClean, canLeave };
 }
 
-export function uploadImage(file, onProgress = () => {}, endpoint = 'uploads') {
+export async function uploadImage(file, onProgress = () => {}, endpoint = 'uploads', purpose = 'order') {
+  const headers = await csrfHeaders();
+  const session = useAdminAuthStore().sessionId;
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${API_BASE}/api/admin/${endpoint}`);
-    xhr.setRequestHeader(
-      "Authorization",
-      `Bearer ${useAdminAuthStore().token}`,
-    );
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable)
-        onProgress(Math.round((e.loaded / e.total) * 100));
-    };
-    xhr.onerror = () => reject(new Error("附件上传失败，请重试"));
+    xhr.open('POST', `${API_BASE}/api/admin/${endpoint}`);
+    for (const [key, value] of Object.entries(headers)) xhr.setRequestHeader(key, value);
+    if (session) xhr.setRequestHeader('X-Auth-Session', session);
+    xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(e.loaded/e.total*100)); };
+    xhr.onerror = () => reject(new Error('附件上传失败，请重试'));
     xhr.onload = () => {
-      let data;
-      try {
-        data = JSON.parse(xhr.responseText);
-      } catch {
-        data = {};
-      }
+      if (session !== useAdminAuthStore().sessionId) { reject(new Error('登录账号已改变，请重新打开表单')); return; }
+      let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 401) window.dispatchEvent(new Event('auth-session-expired'));
       if (xhr.status >= 200 && xhr.status < 300 && data.urls?.[0]) resolve(data.urls[0]);
-      else reject(new Error(data.message || "附件上传失败"));
+      else reject(Object.assign(new Error(data.message || '附件上传失败'), {status:xhr.status, retryAfter:Number(xhr.getResponseHeader('Retry-After') || 0)}));
     };
-    const body = new FormData();
-    body.append("files", file);
-    xhr.send(body);
+    const body = new FormData(); body.append('files', file); body.append('purpose', purpose); xhr.send(body);
   });
 }

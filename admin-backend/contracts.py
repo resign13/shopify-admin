@@ -1,3 +1,4 @@
+import safe_excel
 """Purchase contracts: immutable snapshots and atomic pending inventory increments."""
 import hashlib
 import json
@@ -32,7 +33,7 @@ def image_url(value):
     value = text(value, '图片地址', 2048, False)
     if value:
         parsed = urlsplit(value)
-        if not ((parsed.scheme in {'http', 'https'} and parsed.netloc) or (not parsed.scheme and not parsed.netloc and parsed.path.startswith('/uploads/'))):
+        if not ((parsed.scheme in {'http', 'https'} and parsed.netloc) or (not parsed.scheme and not parsed.netloc and parsed.path.startswith(('/uploads/', '/api/attachments/', '/media/products/')))):
             raise ValueError('图片地址格式错误')
     return value
 
@@ -152,6 +153,8 @@ def create(payload, existing=None):
         row = db._fetch_one("""INSERT INTO purchase_contracts(request_id,actor_id,payload_hash,factory_name,delivery_date,quantity,snapshot)
             VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING *""",
             (request_id,g.current_user['id'],digest,factory,delivery,total,Jsonb(snapshot)))
+    from private_media import bind_current
+    bind_current('contract', row['id'], attachments + [global_style, global_chart])
     return {'item': serialize(row, True), 'replayed': False}
 
 
@@ -282,4 +285,4 @@ def export(contract, fetch_image, make_image):
     ws.sheet_view.showGridLines = False; ws.freeze_panes = None
     ws.page_setup.orientation = 'landscape'; ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.sheet_properties.pageSetUpPr.fitToPage = True; ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 0
-    stream = BytesIO(); book.save(stream); stream.seek(0); return stream
+    stream = BytesIO(); safe_excel.prepare(book).save(stream); stream.seek(0); return stream

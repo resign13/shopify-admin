@@ -1,9 +1,10 @@
 """Order editing tests use the guarded synthetic database from test_workbench."""
 import copy
+import os
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from test_workbench import seed, application, db
+from test_workbench import seed, application, db, fixture_file
 
 
 class AdminOrdersTest(unittest.TestCase):
@@ -11,7 +12,7 @@ class AdminOrdersTest(unittest.TestCase):
         order = self.create()
         body = copy.deepcopy(order)
         body['note'] = 'Packing note: keep all nine photos'
-        body['labelImageUrls'] = [f'/uploads/photo-{i}.jpg' for i in range(9)]
+        body['labelImageUrls'] = [fixture_file(f'/uploads/photo-{i}.jpg') for i in range(9)]
         body['status'] = 'allocated'
         response = self.call(f"orders/{order['id']}/details", 'PUT', body)
         self.assertEqual(response.status_code, 200, response.json)
@@ -36,15 +37,19 @@ class AdminOrdersTest(unittest.TestCase):
 
     def test_image_removal_and_legacy_file_preservation(self):
         order = self.create(); oid = order['id']
+        fixture_file('/uploads/legacy.pdf', 'order', oid)
+        fixture_file('/uploads/old.jpg', 'order', oid)
         db._fetch_one('UPDATE orders SET label_pdf_url=%s,label_image_urls=%s WHERE id=%s RETURNING id',
                       ('/uploads/legacy.pdf', '["/uploads/legacy.pdf","/uploads/old.jpg"]', oid))
-        body = self.call(f'orders/{oid}').json['order']; body['labelImageUrls'] = ['/uploads/new.jpg']
+        body = self.call(f'orders/{oid}').json['order']; body['labelImageUrls'] = [fixture_file('/uploads/new.jpg')]
         self.assertEqual(self.call(f'orders/{oid}/details', 'PUT', body).status_code, 200)
         updated = self.call(f'orders/{oid}').json['order']
-        self.assertEqual(updated['labelImageUrls'], ['/uploads/new.jpg', '/uploads/legacy.pdf'])
+        self.assertEqual(updated['labelImageUrls'], [fixture_file('/uploads/new.jpg'), fixture_file('/uploads/legacy.pdf','order',oid)])
         updated['labelImageUrls'] = []
         self.assertEqual(self.call(f'orders/{oid}/details', 'PUT', updated).status_code, 200)
-        self.assertEqual(self.call(f'orders/{oid}').json['order']['labelImageUrls'], ['/uploads/legacy.pdf'])
+        self.assertEqual(self.call(f'orders/{oid}').json['order']['labelImageUrls'], [fixture_file('/uploads/legacy.pdf','order',oid)])
+        fixture_file('/uploads/legacy.pdf', 'order', oid)
+        fixture_file('/uploads/old.jpg', 'order', oid)
         db._fetch_one('UPDATE orders SET label_pdf_url=%s,label_image_urls=%s WHERE id=%s RETURNING id',
                       ('/uploads/old.jpg', '[]', oid))
         body = self.call(f'orders/{oid}').json['order']; body['labelImageUrls'] = []
@@ -63,8 +68,9 @@ class AdminOrdersTest(unittest.TestCase):
                 {'productId': 1, 'sku': 'BLUE', 'sizeCode': size, 'quantity': qty,
                  'image': 'https://img.smawell.shop/uploads/matrix.jpg'}
                 for size, qty in [('S', 2), ('30/M', 3), ('XXL', 4)]]}
+            application.media.register_legacy('https://img.smawell.shop/uploads/matrix.jpg',(Path(directory)/'matrix.jpg').read_bytes(),purpose='product',entity_type='product',entity_id=1)
             for builder in [application.build_orders_export, application.build_orders_sheet_export]:
-                with patch.object(application, 'UPLOAD_DIR', Path(directory)), application.app.test_request_context('/api/admin/orders/export'):
+                with patch.dict(application.media.uploads, {'admin': Path(directory)}), patch.dict(os.environ, {'SECURITY_ADMIN_LEGACY_ORIGINS': 'https://img.smawell.shop'}), application.app.test_request_context('/api/admin/orders/export'):
                     sheet = load_workbook(builder([order])).active
                     self.assertEqual(len(sheet._images), 1)
                     self.assertEqual([sheet.cell(6, c).value for c in [3, 4, 7, 8]], [2, 3, 4, 9])

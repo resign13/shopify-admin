@@ -526,6 +526,16 @@ def atomic_admin_call(func, args, kwargs):
                 or request.path.endswith('/details')
             )):
                 conn.execute('SELECT pg_advisory_xact_lock(7192027)')
+            # Recheck inside the transaction; lock the actor through commit.
+            import module_permissions
+            current = conn.execute('SELECT id,name,email,role,status,permissions FROM admin_users WHERE id=%s FOR SHARE',(g.current_user['id'],)).fetchone()
+            identity = getattr(g,'current_session',None)
+            valid = identity and conn.execute('SELECT 1 FROM admin_sessions WHERE id=%s AND revoked_at IS NULL AND expires_at>clock_timestamp()',(identity['session_id'],)).fetchone()
+            if not current or current['status']!='active' or not valid:
+                return jsonify({'code':'session_invalid','message':'Please sign in again.'}),401
+            if not module_permissions.allows_request(current,request.path,request.method):
+                return jsonify({'message':'Forbidden'}),403
+            g.current_user = {**g.current_user,**current}
             if kwargs.get('order_id') and request.path.startswith('/api/admin/orders/'):
                 sales_ownership.assert_access(kwargs['order_id'], lock=True)
             if not request.path.endswith('/receive') and not (request.path.startswith('/api/admin/inventory/') and request.path.endswith('/defective/return')):

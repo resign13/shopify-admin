@@ -34,9 +34,13 @@ class PresaleTest(unittest.TestCase):
     def test_default_sales_denied_explicit_grant_and_revocation(self):
         self.assertEqual(self.call('presale',role='sales').status_code,403)
         self.assertEqual(self.call('admin-users/2','PUT',{'permissions':['presale']}).status_code,200)
+        self.assertEqual(self.call('presale',role='sales').status_code,401)
+        self.tokens['sales']=db.create_admin_session(2)
         self.assertEqual(self.call('presale',role='sales').status_code,200)
         self.assertEqual(self.save(['GT-2026'],role='sales').status_code,200)
         self.assertEqual(self.call('admin-users/2','PUT',{'permissions':[]}).status_code,200)
+        self.assertEqual(self.call('presale',role='sales').status_code,401)
+        self.tokens['sales']=db.create_admin_session(2)
         self.assertEqual(self.save([],role='sales').status_code,403)
         for role in ('warehouse','customer'):
             self.assertEqual(self.call('presale',role=role).status_code,403)
@@ -54,7 +58,9 @@ class PresaleTest(unittest.TestCase):
         with db._connect() as conn:
             conn.execute("ALTER TABLE admin_audit_logs ADD CONSTRAINT presale_fixture_fail CHECK(entity_table <> 'presale_configs')")
         try:
-            with self.assertRaises(CheckViolation): self.save(['GT-2026'])
+            response=self.save(['GT-2026'])
+            self.assertEqual(response.status_code,500)
+            self.assertNotIn('presale_fixture_fail',str(response.json))
             self.assertEqual(presale.get_config(),{'styleCodes':[],'sortMode':'automatic','version':0})
         finally:
             with db._connect() as conn: conn.execute('ALTER TABLE admin_audit_logs DROP CONSTRAINT presale_fixture_fail')

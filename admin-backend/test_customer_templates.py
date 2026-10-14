@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
-from test_workbench import seed, application, db
+from test_workbench import seed, application, db, fixture_file
 import customer_templates
 
 
@@ -21,16 +21,18 @@ class CustomerTemplatesTest(unittest.TestCase):
             return client.open('/api/admin/' + path, method=method, json=body,
                                headers={'Authorization': 'Bearer ' + self.tokens[role]}, **kwargs)
 
-    def payload(self):
+    def payload(self, role="admin"):
+        import security_core
+        owner_id=security_core.session(db,"admin",self.tokens[role])["id"]
         return {'name': '德国客户 · 常用地址', 'profile': {
             'userId': 1, 'contactName': 'Alex Customer', 'phone': '123456',
             'country': 'Germany', 'contactValue': 'alex@example.test',
             'address': '18 Market Street', 'apartment': 'Room 10', 'city': 'Berlin',
             'state': 'Berlin', 'zip': '10000', 'note': 'Keep separate labels',
-            'labelImageUrls': ['/uploads/a.jpg', '/uploads/b.jpg'], 'labelPdfUrl': '/uploads/packing.pdf'}}
+            'labelImageUrls': [fixture_file('/uploads/a.jpg',owner_id=owner_id),fixture_file('/uploads/b.jpg',owner_id=owner_id)], 'labelPdfUrl': fixture_file('/uploads/packing.pdf',owner_id=owner_id)}}
 
     def create(self, role='admin'):
-        response = self.call('orders/templates', 'POST', self.payload(), role)
+        response = self.call('orders/templates', 'POST', self.payload(role), role)
         self.assertEqual(response.status_code, 200, response.json)
         return response.json['template']
 
@@ -43,7 +45,7 @@ class CustomerTemplatesTest(unittest.TestCase):
         before = self.balances()
         item = self.create('sales')
         for role in ('admin', 'sales'):
-            self.assertEqual(self.call(f"orders/templates/{item['id']}", role=role).json['template']['profile'], self.payload()['profile'])
+            self.assertEqual(self.call(f"orders/templates/{item['id']}", role=role).json['template']['profile'], self.payload('sales')['profile'])
         listing = self.call('orders/templates?page=1&pageSize=25&keyword=Northline').json
         self.assertEqual(listing['total'], 1)
         self.assertNotIn('profile', listing['items'][0])
@@ -79,7 +81,7 @@ class CustomerTemplatesTest(unittest.TestCase):
                 self.assertEqual(self.call(path, 'PUT', {**self.payload(), 'version': version}, 'sales').status_code, 404)
                 self.assertEqual(self.call(path, 'DELETE', {'version': version}, 'sales').status_code, 404)
         self.assertEqual(self.call(f"orders/templates/{own['id']}", 'PUT',
-            {**self.payload(), 'version': own['version'], 'createdByAdminId': second['id']}, 'sales').status_code, 200)
+            {**self.payload('sales'), 'version': own['version'], 'createdByAdminId': second['id']}, 'sales').status_code, 200)
         self.assertEqual(self.call(f"orders/templates/{own['id']}", role='sales').json['template']['creatorId'], own['creatorId'])
         self.assertEqual(self.balances(), before)
 
@@ -97,7 +99,7 @@ class CustomerTemplatesTest(unittest.TestCase):
     def test_own_scope_pagination_and_forged_creator_on_create(self):
         self.create('admin')
         for number in range(26):
-            response = self.call('orders/templates', 'POST', {**self.payload(), 'name': f'Own {number}',
+            response = self.call('orders/templates', 'POST', {**self.payload('sales'), 'name': f'Own {number}',
                 'createdByAdminId': 1, 'creatorId': 1}, 'sales')
             self.assertEqual(response.json['template']['creatorId'], 2)
         first = self.call('orders/templates?page=1&pageSize=25', role='sales').json
@@ -164,7 +166,7 @@ class CustomerTemplatesTest(unittest.TestCase):
         self.assertEqual(created.status_code, 200, created.json)
         order = self.call(f"orders/{created.json['order']['id']}").json['order']
         self.assertEqual(order['note'], item['profile']['note'])
-        self.assertEqual(order['labelImageUrls'], ['/uploads/a.jpg', '/uploads/b.jpg', '/uploads/packing.pdf'])
+        self.assertEqual(order['labelImageUrls'], [fixture_file('/uploads/a.jpg'),fixture_file('/uploads/b.jpg'),fixture_file('/uploads/packing.pdf')])
         after_order = self.balances()
         changed = self.payload(); changed['profile'].update(note='New template note', labelImageUrls=[])
         updated = self.call(f"orders/templates/{item['id']}", 'PUT', {**changed, 'version': item['version']}).json['template']
@@ -184,13 +186,13 @@ class CustomerTemplatesTest(unittest.TestCase):
         edit = copy.deepcopy(order); edit.pop('labelPdfUrl'); edit['labelImageUrls'] = []
         response = self.call(f"orders/{order['id']}/details", 'PUT', edit)
         self.assertEqual(response.status_code, 200, response.json)
-        self.assertEqual(response.json['order']['labelImageUrls'], ['/uploads/packing.pdf'])
+        self.assertEqual(response.json['order']['labelImageUrls'], [fixture_file('/uploads/packing.pdf')])
         edit = self.call(f"orders/{order['id']}").json['order']; edit['labelPdfUrl'] = ''; edit['labelImageUrls'] = []
         self.assertEqual(self.call(f"orders/{order['id']}/details", 'PUT', edit).json['order']['labelImageUrls'], [])
 
     def test_pdf_upload_and_invalid_files(self):
         before = self.balances()
-        with TemporaryDirectory() as directory, patch.object(application, 'UPLOAD_DIR', Path(directory)):
+        with TemporaryDirectory() as directory, patch.dict(application.media.roots,{'admin':Path(directory)}), patch.dict(application.media.uploads,{'admin':Path(directory)}):
             def upload(raw, name='packing.pdf'):
                 with application.app.test_client() as client:
                     return client.post('/api/admin/orders/templates/attachments',
@@ -199,7 +201,9 @@ class CustomerTemplatesTest(unittest.TestCase):
             self.assertEqual(upload(b'not PDF').status_code, 400)
             self.assertEqual(upload(b'%PDF-1.4\n', 'bad.html').status_code, 400)
             self.assertEqual(upload(b'%PDF-' + b'x' * (32 * 1024 * 1024)).status_code, 400)
-            response = upload(b'%PDF-1.4\nfixture\n%%EOF')
+            from pypdf import PdfWriter
+            valid=io.BytesIO(); writer=PdfWriter(); writer.add_blank_page(width=100,height=100); writer.write(valid)
+            response = upload(valid.getvalue())
             self.assertEqual(response.status_code, 200, response.json)
             self.assertTrue(response.json['urls'][0].endswith('.pdf'))
             self.assertEqual(len(list(Path(directory).glob('*.pdf'))), 1)

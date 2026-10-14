@@ -77,7 +77,7 @@
             show-word-limit
         /></ElFormItem>
         <ElFormItem label="备注附件（最多9张）"
-          ><ImageUploader
+          ><ImageUploader purpose="contract"
             v-model="form.attachments"
             :max="9"
             @busy="busy.attachments = $event"
@@ -173,7 +173,7 @@
         :key="key"
       >
         <h4>{{ label }}</h4>
-        <ImageUploader
+        <ImageUploader purpose="contract"
           v-if="!detail && step === 1"
           :model-value="form[key] ? [form[key]] : []"
           :max="1"

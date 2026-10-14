@@ -1,3 +1,4 @@
+import { authenticatedFetch } from '../authTransport';
 import { defineStore } from 'pinia'
 
 import { API_BASE, request } from '../api'
@@ -5,7 +6,7 @@ import { useAdminAuthStore } from './auth'
 import { compareProductCategories } from '../utils/catalogOrder'
 
 function authHeaders(token) {
-  return { Authorization: `Bearer ${token}` }
+  return { }
 }
 
 function normalizeOrderItem(item = {}) {
@@ -164,24 +165,24 @@ export const useAdminStore = defineStore('admin-data', {
         }
       })
       const query = params.toString() ? `?${params.toString()}` : ''
-      const data = await request(`/api/admin/dashboard${query}`, { headers: authHeaders(auth.token) })
+      const data = await request(`/api/admin/dashboard${query}`, { headers: authHeaders(auth.sessionId) })
       this.dashboard = data
     },
     async loadProducts() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/products', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/products', { headers: authHeaders(auth.sessionId) })
       this.products = data.items
     },
     async loadInventory() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/inventory', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/inventory', { headers: authHeaders(auth.sessionId) })
       this.inventoryItems = data.items
     },
     async saveInventory(productId, sizeStocks, contractPendingBySize = {}) {
       const auth = useAdminAuthStore()
       const data = await request(`/api/admin/inventory/${productId}`, {
         method: 'PUT',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify({ sizeStocks, contractPendingBySize }),
       })
       const updated = data.product
@@ -202,9 +203,9 @@ export const useAdminStore = defineStore('admin-data', {
       Object.entries(filters || {}).forEach(([key, value]) => {
         if (value !== undefined && value !== null && value !== '') params.set(key, String(value))
       })
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `${API_BASE}/api/admin/inventory/export${params.toString() ? `?${params.toString()}` : ''}`,
-        { headers: authHeaders(auth.token) }
+        { headers: authHeaders(auth.sessionId) }
       )
       if (!response.ok) {
         let message = '库存导出失败'
@@ -220,9 +221,9 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       const formData = new FormData()
       formData.append('file', file)
-      const response = await fetch(`${API_BASE}/api/admin/inventory/import/preview`, {
+      const response = await authenticatedFetch(`${API_BASE}/api/admin/inventory/import/preview`, {
         method: 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: formData,
       })
       const data = await response.json().catch(() => ({}))
@@ -234,9 +235,9 @@ export const useAdminStore = defineStore('admin-data', {
       const formData = new FormData()
       formData.append('file', file)
       formData.append('fileHash', fileHash)
-      const response = await fetch(`${API_BASE}/api/admin/inventory/import/confirm`, {
+      const response = await authenticatedFetch(`${API_BASE}/api/admin/inventory/import/confirm`, {
         method: 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: formData,
       })
       const data = await response.json().catch(() => ({}))
@@ -247,7 +248,7 @@ export const useAdminStore = defineStore('admin-data', {
     },
     async loadCategories() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/categories', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/categories', { headers: authHeaders(auth.sessionId) })
       this.categories = data.items
     },
     async saveCategory(payload) {
@@ -255,7 +256,7 @@ export const useAdminStore = defineStore('admin-data', {
       const isEdit = Boolean(payload.id)
       await request(`/api/admin/categories${isEdit ? `/${payload.id}` : ''}`, {
         method: isEdit ? 'PUT' : 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify(payload),
       })
       await this.loadCategories()
@@ -264,7 +265,7 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       await request(`/api/admin/categories/${id}`, {
         method: 'DELETE',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
       })
       await this.loadCategories()
     },
@@ -276,7 +277,7 @@ export const useAdminStore = defineStore('admin-data', {
       }
       const data = await request('/api/admin/uploads', {
         method: 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: formData,
         skipGlobalLoading: true,
       })
@@ -287,7 +288,7 @@ export const useAdminStore = defineStore('admin-data', {
       const isEdit = Boolean(payload.id)
       const data = await request(`/api/admin/products${isEdit ? `/${payload.id}` : ''}`, {
         method: isEdit ? 'PUT' : 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify(payload),
       })
       const savedProducts = Array.isArray(data.product) ? data.product : [data.product].filter(Boolean)
@@ -307,7 +308,7 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       await request(`/api/admin/products/${id}`, {
         method: 'DELETE',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
       })
       await this.loadProducts()
       await this.loadHomeConfig()
@@ -315,7 +316,7 @@ export const useAdminStore = defineStore('admin-data', {
     },
     async loadBanners() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/banners', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/banners', { headers: authHeaders(auth.sessionId) })
       this.banners = data.items
     },
     async saveBanner(payload) {
@@ -323,7 +324,7 @@ export const useAdminStore = defineStore('admin-data', {
       const isEdit = Boolean(payload.id)
       await request(`/api/admin/banners${isEdit ? `/${payload.id}` : ''}`, {
         method: isEdit ? 'PUT' : 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify(payload),
       })
       await this.loadBanners()
@@ -331,14 +332,14 @@ export const useAdminStore = defineStore('admin-data', {
     },
     async loadHomeConfig() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/home-config', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/home-config', { headers: authHeaders(auth.sessionId) })
       this.homeConfig = data.config
     },
     async saveHomeConfig(payload) {
       const auth = useAdminAuthStore()
       const data = await request('/api/admin/home-config', {
         method: 'PUT',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify(payload),
       })
       this.homeConfig = data.config
@@ -347,14 +348,14 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       await request(`/api/admin/banners/${id}`, {
         method: 'DELETE',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
       })
       await this.loadBanners()
       await this.loadDashboard()
     },
     async loadStoreUsers() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/store-users', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/store-users', { headers: authHeaders(auth.sessionId) })
       this.storeUsers = data.items
     },
     async saveStoreUser(payload) {
@@ -362,7 +363,7 @@ export const useAdminStore = defineStore('admin-data', {
       const isEdit = Boolean(payload.id)
       await request(`/api/admin/store-users${isEdit ? `/${payload.id}` : ''}`, {
         method: isEdit ? 'PUT' : 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify(payload),
       })
       await this.loadStoreUsers()
@@ -372,14 +373,14 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       await request(`/api/admin/store-users/${id}`, {
         method: 'DELETE',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
       })
       await this.loadStoreUsers()
       await this.loadDashboard()
     },
     async loadAdminUsers() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/admin-users', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/admin-users', { headers: authHeaders(auth.sessionId) })
       this.adminUsers = data.items
     },
     async saveAdminUser(payload) {
@@ -387,7 +388,7 @@ export const useAdminStore = defineStore('admin-data', {
       const isEdit = Boolean(payload.id)
       await request(`/api/admin/admin-users${isEdit ? `/${payload.id}` : ''}`, {
         method: isEdit ? 'PUT' : 'POST',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify(payload),
       })
       await this.loadAdminUsers()
@@ -397,14 +398,14 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       await request(`/api/admin/admin-users/${id}`, {
         method: 'DELETE',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
       })
       await this.loadAdminUsers()
       await this.loadDashboard()
     },
     async loadOrders() {
       const auth = useAdminAuthStore()
-      const data = await request('/api/admin/orders', { headers: authHeaders(auth.token) })
+      const data = await request('/api/admin/orders', { headers: authHeaders(auth.sessionId) })
       this.orders = normalizeOrders(data.items)
     },
     async deleteOrders(orderIds = []) {
@@ -421,7 +422,7 @@ export const useAdminStore = defineStore('admin-data', {
       }
       await request('/api/admin/orders', {
         method: 'DELETE',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify({ orderIds: normalizedIds }),
       })
       await this.loadOrders()
@@ -435,13 +436,13 @@ export const useAdminStore = defineStore('admin-data', {
           params.set(key, String(value))
         }
       })
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `/api/admin/orders/export${params.toString() ? `?${params.toString()}` : ''}`.replace(
           /^\/api/,
           `${API_BASE}/api`
         ),
         {
-          headers: authHeaders(auth.token),
+          headers: authHeaders(auth.sessionId),
         }
       )
       if (!response.ok) {
@@ -464,13 +465,13 @@ export const useAdminStore = defineStore('admin-data', {
           params.set(key, String(value))
         }
       })
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `/api/admin/orders/export-by-sheet${params.toString() ? `?${params.toString()}` : ''}`.replace(
           /^\/api/,
           `${API_BASE}/api`
         ),
         {
-          headers: authHeaders(auth.token),
+          headers: authHeaders(auth.sessionId),
         }
       )
       if (!response.ok) {
@@ -487,10 +488,10 @@ export const useAdminStore = defineStore('admin-data', {
     },
     async exportOrderInvoice(orderId) {
       const auth = useAdminAuthStore()
-      const response = await fetch(
+      const response = await authenticatedFetch(
         `/api/admin/orders/${orderId}/invoice`.replace(/^\/api/, `${API_BASE}/api`),
         {
-          headers: authHeaders(auth.token),
+          headers: authHeaders(auth.sessionId),
         }
       )
       if (!response.ok) {
@@ -509,10 +510,12 @@ export const useAdminStore = defineStore('admin-data', {
       const auth = useAdminAuthStore()
       await request(`/api/admin/orders/${id}`, {
         method: 'PUT',
-        headers: authHeaders(auth.token),
+        headers: authHeaders(auth.sessionId),
         body: JSON.stringify({ status, trackingNo, paymentLink, shippingFee }),
       })
       await this.loadOrders()
     },
   },
 })
+
+if (typeof window !== "undefined") window.addEventListener("auth-identity-cleared", () => { try { useAdminStore().$reset(); } catch {} });

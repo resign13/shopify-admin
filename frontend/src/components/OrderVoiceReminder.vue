@@ -31,7 +31,7 @@ const unsupported = !window.isSecureContext ? '请通过 HTTPS 或本机地址�
     '当前浏览器缺少提醒所需能力，请使用新版 Chrome／Edge' : '';
 const controller = shallowRef(null); let revision = 0;
 const storage = unsupported ? null : createNotificationStorage();
-watch(() => [auth.token, auth.user?.id, allowed.value], async ([token, userId, access], previous) => {
+watch(() => [auth.sessionId, auth.user?.id, allowed.value], async ([token, userId, access], previous) => {
   const current = ++revision;
   const old = controller.value; controller.value = null;
   await old?.dispose(!!previous && (previous[0] !== token || !access));
@@ -42,7 +42,6 @@ watch(() => [auth.token, auth.user?.id, allowed.value], async ([token, userId, a
   controller.value = new OrderVoiceController({ key, storage, player: createVoiceAudio(recording),
     api: async (operation, body, signal) => { try { return await request(`/api/admin/order-notifications/${operation}`, {
       method: 'POST', body: JSON.stringify(body), signal, skipGlobalLoading: true,
-      headers: { Authorization: `Bearer ${token}` },
     }); } catch (error) {
       if (error.status === 403) await auth.initialize();
       throw error;
@@ -51,14 +50,7 @@ watch(() => [auth.token, auth.user?.id, allowed.value], async ([token, userId, a
   controller.value.refresh().catch(error => controller.value?.fail(error));
 }, { immediate: true });
 
-async function tokenChanged(event) {
-  if (event.key !== 'lumiere-admin-token' || event.newValue === auth.token) return;
-  await controller.value?.dispose(true);
-  auth.token = event.newValue || ''; auth.user = null;
-  if (auth.token) await auth.initialize();
-}
-window.addEventListener('storage', tokenChanged);
-onBeforeUnmount(() => { ++revision; controller.value?.dispose(false); window.removeEventListener('storage', tokenChanged); });
+onBeforeUnmount(() => { ++revision; controller.value?.dispose(false); });
 </script>
 <style scoped>
 .order-voice-reminder { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:6px; max-width:720px; margin-left:auto; margin-right:18px; }

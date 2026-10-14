@@ -67,7 +67,7 @@ class OrderOperationsTest(unittest.TestCase):
         body['items'][0]['unitPrice'] = 22
         body['contactName'] = 'Updated Buyer'
         body['note'] = 'Packing note\nSecond line'
-        body['labelImageUrls'] = ['/uploads/fixture-photo.jpg']
+        body['labelImageUrls'] = [fixtures.fixture_file('/uploads/fixture-photo.jpg')]
         body['status'] = 'allocated'
         response = self.call(f"orders/{order['id']}/details", 'PUT', body)
         self.assertEqual(response.status_code, 200, response.json)

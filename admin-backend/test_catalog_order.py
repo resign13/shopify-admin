@@ -86,8 +86,9 @@ class CatalogOrderTest(unittest.TestCase):
             return fetch(query, *args, **kwargs)
 
         with patch.object(db, '_fetch_one', side_effect=fail_second_update):
-            with self.assertRaises(RuntimeError):
-                self.reorder([2, 1], before['orderVersion'])
+            response = self.reorder([2, 1], before['orderVersion'])
+            self.assertEqual(response.status_code, 500)
+            self.assertNotIn('Injected', str(response.json))
         self.assertEqual(self.categories(), before)
         self.assertEqual(self.call('audit-logs?module=categories').json['total'], 0)
 

@@ -101,7 +101,7 @@
                 ><ElInput v-model.trim="variant.sku"
               /></ElFormItem>
             </div>
-            <ImageUploader
+            <ImageUploader purpose="product"
               v-model="variant.images"
               @busy="uploadBusy[variant.localId] = $event"
             />
@@ -185,7 +185,7 @@
           <div class="detail-grid">
             <div>
               <h3>尺码表</h3>
-              <ImageUploader
+              <ImageUploader purpose="product"
                 v-model="form.chartImages"
                 :max="1"
                 @busy="uploadBusy.chart = $event"
@@ -193,7 +193,7 @@
             </div>
             <div>
               <h3>商品详情图</h3>
-              <ImageUploader
+              <ImageUploader purpose="product"
                 v-model="form.descriptionImages"
                 :max="1"
                 @busy="uploadBusy.description = $event"

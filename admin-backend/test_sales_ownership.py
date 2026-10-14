@@ -2,6 +2,7 @@
 import copy
 import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -188,7 +189,8 @@ class SalesOwnershipTest(unittest.TestCase):
 
     def test_compatibility_service_does_not_expose_internal_links_or_owners(self):
         self.scoped_fixture()
-        with application.app.test_client() as client:
+        with application.app.test_client() as client, patch.dict(os.environ, {'INTERNAL_COMPAT_ENABLED':'1'}), \
+                patch.object(application, 'SERVICE_TOKEN', 'fixture-internal-key-' + '0123456789abcdef'):
             headers = {'X-Service-Token': application.SERVICE_TOKEN}
             for path in ['store-users/1', 'orders?userId=1', 'orders?page=1']:
                 response = client.get('/api/internal/' + path, headers=headers)

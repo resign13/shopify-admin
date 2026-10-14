@@ -21,16 +21,25 @@ SOURCE_TTL = 3600
 CACHE_BUDGET = 1024 * 1024 * 1024
 
 
-@lru_cache(maxsize=1)
 def r2_client():
+    if os.environ.get('APP_ENV') == 'test':
+        raise RuntimeError('External object storage is disabled for isolated fixtures')
+    return _r2_client()
+
+
+@lru_cache(maxsize=1)
+def _r2_client():
     return boto3.client(
         "s3", region_name="auto",
         endpoint_url=f"https://{os.environ['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
         aws_access_key_id=os.environ['R2_ACCESS_KEY_ID'],
         aws_secret_access_key=os.environ['R2_SECRET_ACCESS_KEY'],
-        config=Config(connect_timeout=3, read_timeout=8,
+        config=Config(request_checksum_calculation="when_required", response_checksum_validation="when_required", connect_timeout=3, read_timeout=8,
                       retries={"total_max_attempts": 2}, max_pool_connections=16),
     )
+
+
+r2_client.cache_clear = _r2_client.cache_clear
 
 
 def atomic_write(path, writer):
@@ -148,9 +157,9 @@ def deliver_image(upload_dir, cache, filename, logger):
     except ClientError as exc:
         if exc.response.get("Error", {}).get("Code") in {"NoSuchKey", "404", "NotFound"}:
             return error_response("Not found", 404)
-        logger.exception("R2 image retrieval failed")
+        logger.warning("image_delivery_failed exception_type=%s", type(exc).__name__)
     except (Image.DecompressionBombError, ValueError):
         return error_response("Image exceeds processing limits", 413)
-    except Exception:
-        logger.exception("Image delivery failed")
+    except Exception as exc:
+        logger.warning("image_delivery_failed exception_type=%s", type(exc).__name__)
     return error_response("Image storage temporarily unavailable", 503)

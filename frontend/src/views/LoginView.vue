@@ -44,7 +44,7 @@
             >登录工作台</ElButton
           ></ElForm
         >
-        <ElButton v-if="auth.token && !auth.isAuthenticated" style="width:100%; margin-top:12px"
+        <ElButton v-if="auth.sessionId && !auth.isAuthenticated" style="width:100%; margin-top:12px"
           :loading="retrying" @click="retryConnection">重试连接</ElButton>
         <p class="small-note" style="margin-top: 26px">
           账号由管理员分配。如需帮助，请联系您的管理员。

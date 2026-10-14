@@ -2,6 +2,8 @@
 import os
 if not os.environ.get('PGDATABASE','').endswith('_test') or os.environ.get('PGHOST') != '127.0.0.1':
     raise RuntimeError('Set PGHOST=127.0.0.1 and an isolated PGDATABASE ending in _test')
+os.environ.setdefault('APP_ENV', 'test')
+os.environ.setdefault('DB_SCHEMA_AUTO_MIGRATE', '1')
 import io
 import json
 import unittest
@@ -11,12 +13,15 @@ from unittest.mock import patch
 from werkzeug.security import generate_password_hash
 from openpyxl import load_workbook
 import app as application
+import test_cookie_client
+test_cookie_client.install(application.app)
 import db
 import workbench
 
 
 def _seed():
     with db.get_connection() as conn:
+        conn.execute('TRUNCATE security_file_refs,security_files,security_rate_buckets,security_audit_events,security_request_metrics')
         conn.execute('TRUNCATE inventory_registration_logs,purchase_contracts,admin_order_requests,admin_audit_logs,inventory_receipts,inventory_import_receipts,admin_users,store_users,products,product_categories,orders,homepage_configs,banners RESTART IDENTITY CASCADE')
     tokens={}
     for role,name in [('admin','陈管理员'),('sales','林外贸'),('warehouse','王仓管'),('customer','测试客户')]:
@@ -35,6 +40,13 @@ def _seed():
         db.update_product_inventory(product['id'],{}, {'M':12,'L':6,'Tall XL':3})
         db._fetch_one("UPDATE product_size_prices SET pending_inbound=4,pending_inspection=6 WHERE product_id=%s AND size_code='M' RETURNING id",(product['id'],))
         db._fetch_one("UPDATE product_size_prices SET pending_inbound=2,pending_inspection=3 WHERE product_id=%s AND size_code='L' RETURNING id",(product['id'],))
+    from PIL import Image
+    photo=io.BytesIO();Image.new('RGB',(4,4),'white').save(photo,format='JPEG')
+    for product in products:
+        application.media.register_legacy('/uploads/fixture.jpg',photo.getvalue(),purpose='product',entity_type='product',entity_id=product['id'])
+    if application.media.mode == 'legacy':
+        application.media.uploads['admin'].mkdir(parents=True, exist_ok=True)
+        (application.media.uploads['admin'] / 'fixture.jpg').write_bytes(photo.getvalue())
     buyer=db.create_store_user({'name':'Alex Morgan','companyName':'Northline Apparel','email':'buyer@gingtto.test','passwordHash':generate_password_hash('Fixture-Only'),'status':'active'})
     for index,(status,created,country) in enumerate([('paid','2026-09-17 16:30:00+00','Germany'),('pending_payment','2026-09-18 09:00:00+00','United States'),('cancelled','2026-09-18 10:00:00+00','Germany'),('completed','2026-09-16 12:00:00+00','France')],start=1):
         order=db._fetch_one('INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,country,shipping_address,total_amount,shipping_fee,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id',
@@ -46,8 +58,10 @@ def _seed():
 
 def seed():
     # Historical fixtures do not create live notification events.
-    with patch.dict(os.environ, {'ORDER_NOTIFICATION_MAINTENANCE':'1'}):
-        return _seed()
+    with patch.dict(os.environ, {'ORDER_NOTIFICATION_MAINTENANCE':'1'}), db._connect() as conn:
+        marker = db.REQUEST_CONNECTION.set(conn)
+        try: return _seed()
+        finally: db.REQUEST_CONNECTION.reset(marker)
 
 
 class WorkbenchTest(unittest.TestCase):
@@ -313,8 +327,7 @@ class WorkbenchTest(unittest.TestCase):
         with db.get_connection() as conn:
             conn.execute("ALTER TABLE admin_audit_logs ADD CONSTRAINT fixture_failure CHECK(action='IMPOSSIBLE')")
         try:
-            with self.assertRaises(Exception):
-                self.call('inventory/1','PUT',{'sizeStocks':{'M':22}})
+            self.assertEqual(self.call('inventory/1','PUT',{'sizeStocks':{'M':22}}).status_code,500)
             self.assertEqual(self.detail()['stock'],30)
         finally:
             with db.get_connection() as conn:conn.execute('ALTER TABLE admin_audit_logs DROP CONSTRAINT fixture_failure')
@@ -322,3 +335,28 @@ class WorkbenchTest(unittest.TestCase):
 
 if __name__=='__main__':
     unittest.main()
+
+
+def fixture_file(url, entity_type=None, entity_id=None, owner_id=1):
+    from private_media import url_for
+    from pathlib import Path
+    suffix=Path(url).suffix.lower()
+    if suffix=='.pdf':
+        from pypdf import PdfWriter
+        writer=PdfWriter();writer.add_blank_page(width=100,height=100);out=io.BytesIO();writer.write(out);raw=out.getvalue()
+    elif suffix=='.doc': raw=bytes.fromhex('d0cf11e0a1b11ae1')+b'fixture-office-document'
+    else:
+        from PIL import Image
+        out=io.BytesIO();Image.new('RGB',(4,4),'white').save(out,format='PNG' if suffix=='.png' else 'JPEG');raw=out.getvalue()
+    if application.media.mode == 'legacy':
+        from urllib.parse import urlsplit, unquote
+        name = Path(unquote(urlsplit(url).path)).name
+        root = application.media.uploads['admin']; root.mkdir(parents=True, exist_ok=True)
+        (root / name).write_bytes(raw)
+        return url
+    row=application.media.register_legacy(url,raw,purpose='fixture-upload-'+str(owner_id),entity_type=entity_type or 'fixture',entity_id=entity_id or 0)
+    if not entity_type:
+        with db.get_connection() as conn:
+            conn.execute("DELETE FROM security_file_refs WHERE file_id=%s AND entity_type='fixture'",(row['id'],))
+            conn.execute("UPDATE security_files SET owner_channel='admin',owner_id=%s WHERE id=%s",(owner_id,row['id']))
+    return url_for(row)

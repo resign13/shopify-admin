@@ -4,7 +4,18 @@ After=postgresql.service
 
 [Service]
 Type=oneshot
-WorkingDirectory=/opt/smawell/shopify-admin/admin-backend
-ExecStart=/opt/smawell/shopify-admin/admin-backend/.venv/bin/python /opt/smawell/shopify-admin/scripts/cleanup-order-notifications.py
+User=gingtto-maintenance
+Group=gingtto-maintenance
+EnvironmentFile=/etc/gingtto/maintenance.env
+WorkingDirectory=/opt/smawell/current/admin
+ExecStart=/opt/smawell/current/admin/admin-backend/.venv/bin/python scripts/cleanup-order-notifications.py --expected-db smawell_admin
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+RuntimeMaxSec=60
+TimeoutStartSec=60
+MemoryMax=256M
+TasksMax=32
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

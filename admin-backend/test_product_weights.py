@@ -191,8 +191,12 @@ class ProductWeightTest(unittest.TestCase):
         user = db.get_admin_user_by_email('sales@gingtto.test')
         values = {'name':user['name'],'email':user['email'],'role':'sales','status':'active','permissions':['orders']}
         db.update_admin_user(user['id'], values)
+        self.assertEqual(self.call('orders/weights/preview','POST',{'items':[row]},role='sales').status_code,401)
+        self.tokens['sales']=db.create_admin_session(user['id'])
         self.assertEqual(self.call('orders/weights/preview','POST',{'items':[row]},role='sales').status_code,200)
         db.update_admin_user(user['id'], {**values,'permissions':[]})
+        self.assertEqual(self.call('orders/weights/preview','POST',{'items':[row]},role='sales').status_code,401)
+        self.tokens['sales']=db.create_admin_session(user['id'])
         self.assertEqual(self.call('orders/weights/preview','POST',{'items':[row]},role='sales').status_code,403)
         with self.app.test_client() as client:
             self.assertEqual(client.post('/api/admin/orders/weights/preview',json={'items':[row]}).status_code,401)
@@ -241,6 +245,8 @@ class ProductWeightTest(unittest.TestCase):
             self.assertTrue(all('weightGrams' not in s for s in value['sizePrices']))
         user=db.get_admin_user_by_email('sales@gingtto.test')
         db.update_admin_user(user['id'], {'name':user['name'],'email':user['email'],'role':'sales','status':'active','permissions':[]})
+        self.assertEqual(self.call('orders/1',role='sales').status_code,401)
+        self.tokens['sales']=db.create_admin_session(user['id'])
         self.assertEqual(self.call('orders/1',role='sales').status_code,403)
 
     def test_repeated_both_migrations_and_constraint(self):
