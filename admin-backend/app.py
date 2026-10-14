@@ -1586,8 +1586,7 @@ def require_roles(*roles: str) -> Callable[[F], F]:
     def decorator(func: F) -> F:
         @wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            current_role = str(g.current_user.get("role", "admin")).strip().lower()
-            if current_role not in allowed_roles or not module_permissions.allows_request(g.current_user, request.path, request.method):
+            if not module_permissions.allows_operation(g.current_user, request.path, request.method, allowed_roles):
                 return jsonify({"message": "Forbidden"}), 403
             if request.path.startswith('/api/admin/') and request.method in {'POST', 'PUT', 'DELETE', 'PATCH'} and not request.path.endswith(('/uploads', '/preview')):
                 return workbench.atomic_admin_call(func, args, kwargs)
@@ -2651,7 +2650,8 @@ def update_admin_user_route(user_id: int) -> Any:
 
     try:
         next_role = normalize_admin_role(payload.get("role", user.get("role", "admin")))
-        permissions = module_permissions.validate(payload.get("permissions", [p for p in user["permissions"] if p in module_permissions.DEFAULTS[next_role]]), next_role)
+        selected = payload.get("permissions", user["permissions"] if next_role == user.get("role") else module_permissions.DEFAULTS[next_role])
+        permissions = module_permissions.validate(selected, next_role)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     next_status = str(payload.get("status", user["status"])).strip() or user["status"]

@@ -1,10 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {financeCodes,financeActiveStates,financeReportDates,financeReportKey,batchTargets,clearBatchTargets,costChanges,costValue} from './finance.js';
-import {roleModules} from '../permissions.js';
+import {roleModules,defaultRoleModules,editableRolePermissions,moduleGroups} from '../permissions.js';
 test('finance is an explicit capability, never inferred for sales',()=>{
-  assert.deepEqual(roleModules('finance'),['finance']);assert.ok(roleModules('admin').includes('finance'));
-  for(const r of ['sales','warehouse','customer'])assert.ok(!roleModules(r).includes('finance'));
+  assert.deepEqual(defaultRoleModules('finance'),['finance','contracts']);assert.ok(roleModules('admin').includes('finance'));
+  for(const r of ['sales','warehouse','customer'])assert.ok(!defaultRoleModules(r).includes('finance'));
+  assert.ok(roleModules('sales').includes('finance'));assert.ok(!roleModules('customer').includes('finance'));
+});
+
+test('all staff departments can opt into modules without silently receiving them',()=>{
+ const modules=moduleGroups.flatMap(group=>group.items.map(([key])=>key));
+ for(const role of ['admin','sales','warehouse','finance']){
+  assert.deepEqual(roleModules(role),modules);
+  assert.deepEqual(editableRolePermissions(role,['finance','contracts','admin-users']),['finance','contracts','admin-users']);
+  assert.deepEqual(editableRolePermissions(role,[]),[]);
+ }
+ assert.deepEqual(defaultRoleModules('warehouse'),['inventory','orders']);
+ assert.deepEqual(editableRolePermissions('finance',['finance']),['finance']);
+ assert.deepEqual(editableRolePermissions('customer',['finance','inventory','contracts']),['inventory']);
+ const selected=defaultRoleModules('finance');selected.push('orders');
+ assert.deepEqual(defaultRoleModules('finance'),['finance','contracts']);
 });
 test('real-size batch selection neither adds sizes nor touches unselected variants',()=>{
   const rows=[{id:1,sizes:[{sizeCode:'Tall XL',costCny:null,draftCost:undefined,version:'0'}]},

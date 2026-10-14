@@ -1,4 +1,4 @@
-"""Explicit module grants, role limits and account recovery protections."""
+"""Department defaults, explicit staff grants and account recovery protections."""
 import unittest
 from test_workbench import seed, application, db
 from module_permissions import DEFAULTS
@@ -45,7 +45,7 @@ class ModulePermissionsTest(unittest.TestCase):
         self.assertEqual(next(u for u in listed if u['role'] == 'sales')['permissions'], ['inventory'])
 
     def test_role_limits_and_management_denial(self):
-        self.assertEqual(self.call('admin-users/2', 'PUT', {'permissions': ['admin-users']}).status_code, 400)
+        self.assertEqual(self.call('admin-users/4', 'PUT', {'permissions': ['admin-users']}).status_code, 400)
         for value in [None, 'inventory', [1], ['unknown']]:
             self.assertEqual(self.call('admin-users/2', 'PUT', {'permissions': value}).status_code, 400)
         self.assertEqual(self.call('admin-users/2', 'PUT', {'permissions': []}, role='sales').status_code, 403)
@@ -88,7 +88,7 @@ class ModulePermissionsTest(unittest.TestCase):
             'password':'Fixture-only-password','role':'finance'})
         self.assertEqual(response.status_code,201,response.json)
         account=response.json['user']
-        self.assertEqual(account['permissions'],['finance'])
+        self.assertCountEqual(account['permissions'],['finance','contracts'])
         self.tokens['finance']=db.create_admin_session(account['id'])
         self.assertEqual(self.call('finance/options',role='finance').status_code,200)
         self.assertEqual(self.call('admin-users',role='finance').status_code,403)
@@ -96,7 +96,70 @@ class ModulePermissionsTest(unittest.TestCase):
         self.assertEqual(self.call('finance/options',role='finance').status_code,401)
         self.tokens['finance']=db.create_admin_session(account['id'])
         self.assertEqual(self.call('finance/options',role='finance').status_code,403)
-        self.assertEqual(self.call('admin-users/2','PUT',{'permissions':['finance']}).status_code,400)
+        self.assertEqual(self.call('admin-users/2','PUT',{'permissions':['finance']}).status_code,200)
+
+    def test_staff_extra_grants_preserve_account_role_and_do_not_leak_by_default(self):
+        for role in ['sales', 'warehouse', 'finance']:
+            original=db.get_admin_user_by_email(role+'@gingtto.test')
+            self.grant(role, ['finance','contracts'])
+            self.assertEqual(self.call('finance/options',role=role).status_code,200)
+            self.assertEqual(self.call('contracts',role=role).status_code,200)
+            self.assertEqual(self.call('admin-users',role=role).status_code,403)
+            self.assertEqual(db.get_admin_user_by_email(role+'@gingtto.test')['role'],original['role'])
+            self.grant(role, [])
+            self.assertEqual(self.call('finance/options',role=role).status_code,403)
+            self.assertEqual(self.call('contracts',role=role).status_code,403)
+
+    def test_omitted_permissions_preserve_explicit_extra_grants(self):
+        self.grant('finance',['finance','contracts','presale'])
+        user=db.get_admin_user_by_email('finance@gingtto.test')
+        updated=self.call(f"admin-users/{user['id']}",'PUT',{'name':'Renamed finance'})
+        self.assertEqual(updated.status_code,200,updated.json)
+        self.assertEqual(updated.json['user']['permissions'],['presale','contracts','finance'])
+        # Explicit empty is still revocation, never restoration of defaults.
+        self.grant('finance',[])
+        self.assertEqual(self.call('contracts',role='finance').status_code,403)
+
+    def test_explicit_account_management_grant_is_not_implicit_or_self_selected(self):
+        self.assertEqual(self.call('admin-users',role='finance').status_code,403)
+        self.assertEqual(self.call('admin-users/1','PUT',{'permissions':['finance','admin-users']},role='finance').status_code,403)
+        self.grant('finance',['finance','admin-users'])
+        self.assertEqual(self.call('admin-users',role='finance').status_code,200)
+        sales=db.get_admin_user_by_email('sales@gingtto.test')
+        changed=self.call(f"admin-users/{sales['id']}",'PUT',{'permissions':['contracts']},role='finance')
+        self.assertEqual(changed.status_code,200,changed.json)
+        self.assertEqual(changed.json['user']['role'],'sales')
+
+    def test_finance_default_contract_workflow_keeps_stock_and_audit(self):
+        from test_contracts import ContractsTest
+        from unittest.mock import patch
+        from PIL import Image
+        from io import BytesIO
+        before=db._fetch_all('SELECT size_code,stock,contract_pending FROM product_size_prices WHERE product_id=1 ORDER BY id')
+        payload=ContractsTest.payload(self)
+        response=self.call('contracts','POST',payload,role='finance')
+        self.assertEqual(response.status_code,200,response.json)
+        item=response.json['item'];path=f"contracts/{item['id']}"
+        self.assertEqual(self.call(path,role='finance').status_code,200)
+        self.assertEqual(self.call('products/1',role='finance').status_code,200)
+        self.assertEqual(self.call('catalog-options',role='finance').status_code,200)
+        self.assertEqual(self.call('products/1','PUT',{},role='finance').status_code,403)
+        after=db._fetch_all('SELECT size_code,stock,contract_pending FROM product_size_prices WHERE product_id=1 ORDER BY id')
+        for old,new in zip(before,after):
+            self.assertEqual(new['stock'],old['stock'])
+            self.assertEqual(new['contract_pending'],old['contract_pending']+payload['items'][0]['quantities'].get(old['size_code'],0))
+        photo=BytesIO();Image.new('RGB',(4,4),'white').save(photo,format='JPEG')
+        with patch.object(application,'fetch_image_bytes',return_value=photo.getvalue()):
+            self.assertEqual(self.call(path+'/export',role='finance').status_code,200)
+        edited={**payload,'note':'Finance update','revision':item['revision']}
+        updated=self.call(path,'PUT',edited,role='finance')
+        self.assertEqual(updated.status_code,200,updated.json)
+        cancelled=self.call(path+'/cancel','POST',{'revision':updated.json['item']['revision']},role='finance')
+        self.assertEqual(cancelled.status_code,200,cancelled.json)
+        self.assertEqual(db._fetch_all('SELECT size_code,stock,contract_pending FROM product_size_prices WHERE product_id=1 ORDER BY id'),before)
+        logs=db._fetch_all("SELECT actor FROM admin_audit_logs WHERE module='contracts'")
+        self.assertTrue(logs)
+        self.assertTrue(all(row['actor']['role']=='finance' for row in logs))
 
 
 if __name__ == '__main__': unittest.main()

@@ -115,7 +115,7 @@ def draft(order_id):
     return {'sourceOrderId': order_id, 'sourceOrderNo': origin['order_no'], 'draft': profile,
             'customer': {'id': customer['id'], 'name': customer['name'], 'email': customer['email'], 'companyName': customer['company_name']} if customer else None,
             'customerUnavailable': not customer or customer['status'] != 'active',
-            'ownerNeedsConfirmation': g.current_user['role'] == 'admin' and bool(origin['owner_admin_id']) and not owner_valid,
+            'ownerNeedsConfirmation': g.current_user['role'] != 'sales' and bool(origin['owner_admin_id']) and not owner_valid,
             'products': products, 'issues': issues}
 
 

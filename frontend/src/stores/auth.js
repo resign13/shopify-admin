@@ -45,6 +45,12 @@ export const useAdminAuthStore = defineStore('admin-auth',{
     canManageAccounts() {
       return this.can("admin-users");
     },
+    canEditOrders() {
+      return this.can("orders") && ["admin", "sales", "finance"].includes(this.userRole);
+    },
+    canAssignOrderOwner() {
+      return this.canEditOrders && this.userRole !== "sales";
+    },
     permissions: (state) =>
       (state.user?.permissions ?? defaultRoleModules(state.user?.role)).filter((key) =>
         roleModules(state.user?.role).includes(key),
@@ -114,7 +120,7 @@ export const useAdminAuthStore = defineStore('admin-auth',{
           setAuthSession(data.sessionId,data.csrfToken); remember(data.sessionId); announce('changed',data.sessionId);
           return true;
         });
-      } catch (error) { if (revision === this.revision) this.error = error.message; return false; }
+      } catch (error) { if (revision === this.revision) this.error = error.code === 'login_failed' ? '账号或密码错误' : error.message; return false; }
       finally { this.loading = false; }
     },
     async logout() {

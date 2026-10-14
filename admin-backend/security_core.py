@@ -159,6 +159,9 @@ class Security:
         self.secure = self.mode == 'production'
         self.attachment_mode = attachment_mode()
         self.login_protection = login_protection_enabled()
+        captcha_setting = os.environ.get('SECURITY_ADMIN_CAPTCHA_ENABLED', '0')
+        if captcha_setting not in {'0', '1'}: raise RuntimeError('Invalid admin captcha setting')
+        self.captcha_enabled = self.channel == 'admin' and captcha_setting == '1'
         if self.secure and self.attachment_mode == 'private':
             if os.environ.get('SECURITY_LEGACY_SOURCES_CLOSED') != '1': raise RuntimeError('Legacy private object and CDN closure must be confirmed before cutover')
             with db._connect() as conn:
@@ -181,6 +184,8 @@ class Security:
         app.after_request(self.after)
         app.teardown_request(self.teardown)
         app.add_url_rule('/api/auth/csrf', 'security_csrf', self.csrf_response, methods=['GET'])
+        if channel == 'admin':
+            app.add_url_rule('/api/auth/admin/captcha', 'admin_login_captcha', self.captcha_response, methods=['GET'])
         app.add_url_rule('/api/security/csp-report', 'security_csp_report', self.csp_report, methods=['POST'])
         app.register_error_handler(HTTPException, self.http_error)
         app.register_error_handler(Exception, self.server_error)
@@ -237,6 +242,11 @@ class Security:
 
     def sign_in(self, email, password, sanitize):
         from werkzeug.security import check_password_hash, generate_password_hash
+        if self.captcha_enabled:
+            import login_captcha
+            body = request.get_json(silent=True) or {}
+            if not login_captcha.verify(self.db, self.key, body.get('captchaToken'), body.get('captchaCode')):
+                return self.error(400, 'captcha_invalid', '验证码错误或已过期，请刷新后重试。')
         retry = self.login_cooldown(email)
         if retry:
             return self.error(429, 'login_rate_limited', 'Too many sign-in attempts. Try again later.', retry)
@@ -290,6 +300,11 @@ class Security:
         response = jsonify({'csrfToken': signed})
         response.set_cookie(self.pre_cookie, signed, max_age=900, httponly=True, secure=self.secure, samesite='Lax', path='/')
         return response
+
+    def captcha_response(self):
+        if not self.captcha_enabled: return jsonify({'enabled':False})
+        import login_captcha
+        return jsonify(login_captcha.issue(self.key))
 
     def valid_csrf(self):
         value = request.headers.get('X-CSRF-Token', '')
@@ -394,13 +409,14 @@ class Security:
             retry = self.reserve('login-ip', request.remote_addr or '', 100, 600)
             if retry:
                 return self.error(429, 'login_rate_limited', 'Too many sign-in attempts. Try again later.', retry)
-        elif not login and path != '/api/auth/csrf' and not path.startswith('/api/attachments/') and request.url_rule and not row and not path.startswith('/api/internal/'):
+        elif not login and path not in {'/api/auth/csrf', '/api/auth/admin/captcha'} and not path.startswith('/api/attachments/') and request.url_rule and not row and not path.startswith('/api/internal/'):
             return self.error(401, 'session_invalid', 'Please sign in again.')
         if request.method not in SAFE and not path.startswith('/api/internal/'):
             if not self.origin_valid() or not self.valid_csrf():
                 return self.error(403, 'csrf_invalid', 'Reload this page before trying again.')
         if not login:
             category = 'read'
+            if self.channel == 'admin' and path == '/api/auth/admin/captcha': category = 'captcha'
             if '/order-notifications/' in path:
                 category = 'voice'
             elif 'export' in path or path.endswith('/invoice'):
@@ -410,7 +426,7 @@ class Security:
             elif request.method not in SAFE and not path.endswith(('/preview', '/query', '/validate')):
                 category = 'write'
             if self.channel == 'store' and path == '/api/products': category = 'inventory'
-            limit = {'read': 180, 'voice': 120, 'export': 5, 'upload': 20, 'write': 60, 'inventory': 6}[category]
+            limit = {'read': 180, 'voice': 120, 'export': 5, 'upload': 20, 'write': 60, 'inventory': 6, 'captcha': 20}[category]
             limit = int(os.environ.get('SECURITY_LIMIT_' + category.upper(), limit))
             if not 1 <= limit <= 10000: raise RuntimeError('Invalid security quota configuration')
             subject = str(row['id']) if category == 'export' and row else str(row['public_id']) if row else 'ip:' + (request.remote_addr or '')

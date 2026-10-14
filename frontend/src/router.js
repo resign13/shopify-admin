@@ -4,7 +4,7 @@ import { pinia } from "./stores";
 import { useAdminAuthStore } from "./stores/auth";
 const definitions = [
   ["finance", "FinanceView", "财务管理", ["admin", "finance"]],
-  ["contracts", "ContractsView", "合同管理", ["admin", "sales"]],
+  ["contracts", "ContractsView", "合同管理", ["admin", "sales", "finance", "warehouse"]],
   ["dashboard", "DashboardView", "经营工作台", ["admin", "sales"]],
   ["products", "ProductsView", "商品管理", ["admin", "sales"]],
   ["products/new", "ProductEditorView", "新建商品", ["admin", "sales"]],
@@ -45,10 +45,10 @@ const router = createRouter({
           component: () => import("./views/NoAccessView.vue"),
           meta: { title: "模块权限" },
         },
-        ...definitions.map(([path, view, title, roles]) => ({
+        ...definitions.map(([path, view, title]) => ({
           path,
           component: views[`./views/${view}.vue`],
-          meta: { title, roles, module: routeModule(path), requiresAuth: true },
+          meta: { title, module: routeModule(path), requiresAuth: true },
         })),
         { path: "accounts", redirect: "/store-accounts" },
 
