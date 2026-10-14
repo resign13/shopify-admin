@@ -171,6 +171,11 @@ class Files:
         if not path.exists():
             self.trusted(path.parent, directory=True)
             path.mkdir(mode=mode)
+            # Root controllers commonly run with umask 077. Code directories
+            # still need traversal by the isolated builder/runtime identities.
+            # Validate before chmod; never widen an existing protected directory.
+            self.trusted(path, directory=True)
+            path.chmod(mode)
         self.trusted(path, directory=True)
         return path
 

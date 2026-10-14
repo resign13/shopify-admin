@@ -213,12 +213,30 @@ for name in {protected!r}:
         app['security_env'].write_text(raw)
     fs.json_write(cfg.config / 'security-cutover-approved', {'profile': PROFILE, 'maintenanceAcknowledged': True, 'productionChangesApproved': True, 'expiresAt': (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat()})
     (cfg.config / 'maintenance').write_text('synthetic maintenance')
-    control = Controller(cfg, ops, fs); control.initialize()
+    control = Controller(cfg, ops, fs)
+    previous_umask = os.umask(0o077)
+    try:
+        control.initialize()
+        protected = fs.directory(cfg.state / 'protected', 0o700)
+        fs.directory(protected)  # Existing private directories must stay private.
+        assert protected.stat().st_mode & 0o777 == 0o700
+        for channel in ['admin', 'store']:
+            assert cfg.app(channel)['releases'].stat().st_mode & 0o777 == 0o755
+        for name in ['spool', 'prepared', 'backups']:
+            assert (cfg.state / name).stat().st_mode & 0o777 == 0o700
+    finally:
+        os.umask(previous_umask)
     old = package(cfg, 'old', 'GOOD-OLD')
     new = package(cfg, 'new', 'GOOD-NEW')
     shutil.copyfile(old, cfg.config / 'rollback/admin.tar.gz')
     (cfg.config / 'rollback/admin.tar.gz').chmod(0o600)
-    result = control.deploy('admin', incoming(cfg, 1, new))
+    first_incoming = incoming(cfg, 1, new)
+    previous_umask = os.umask(0o077)
+    try:
+        # Exercise actual extraction and non-root traversal, not a chmod mock.
+        result = control.deploy('admin', first_incoming)
+    finally:
+        os.umask(previous_umask)
     assert result['status'] == 'healthy'
     old_pointer = cfg.app('admin')['current'].resolve()
     # Read-only permissions probing must detect the root-owned lock files that
