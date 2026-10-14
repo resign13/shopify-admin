@@ -45,7 +45,10 @@ class PresaleTest(unittest.TestCase):
         for role in ('warehouse','customer'):
             self.assertEqual(self.call('presale',role=role).status_code,403)
             self.assertEqual(self.save([],role=role).status_code,403)
-        self.assertEqual(self.call('admin-users/3','PUT',{'permissions':['presale']}).status_code,400)
+        self.assertEqual(self.call('admin-users/3','PUT',{'permissions':['presale']}).status_code,200)
+        self.tokens['warehouse']=db.create_admin_session(3)
+        self.assertEqual(self.call('presale',role='warehouse').status_code,200)
+        self.assertEqual(self.call('admin-users/4','PUT',{'permissions':['presale']}).status_code,400)
 
     def test_concurrent_save_one_winner_one_conflict(self):
         with ThreadPoolExecutor(2) as pool:

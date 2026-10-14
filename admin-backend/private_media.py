@@ -170,16 +170,16 @@ class Media:
             allowed = set(module_permissions.effective(user))
             role = user.get('role')
             order_ids = [r['entity_id'] for r in refs if r['entity_type'] == 'order']
-            if 'orders' in allowed and role in {'admin','sales','warehouse'} and order_ids:
+            if 'orders' in allowed and role in module_permissions.STAFF_ROLES and order_ids:
                 if role != 'sales' and conn.execute('SELECT 1 FROM orders WHERE id=ANY(%s) LIMIT 1',(order_ids,)).fetchone(): return True
                 if conn.execute('SELECT 1 FROM orders WHERE id=ANY(%s) AND owner_admin_id=%s LIMIT 1', (order_ids,user['id'])).fetchone(): return True
             draft_ids = [r['entity_id'] for r in refs if r['entity_type'] == 'draft']
-            if 'orders' in allowed and role in {'admin','sales'} and draft_ids:
+            if 'orders' in allowed and role in {'admin','sales','finance'} and draft_ids:
                 clause, args = ("", (draft_ids,)) if role == 'admin' else (' AND creator_id=%s',(draft_ids,user['id']))
                 if conn.execute("SELECT 1 FROM admin_order_drafts WHERE id=ANY(%s) AND state='active'" + clause + ' LIMIT 1', args).fetchone(): return True
-            if 'contracts' in allowed and role in {'admin','sales'} and any(r['entity_type']=='contract' for r in refs): return True
+            if 'contracts' in allowed and role in module_permissions.STAFF_ROLES and any(r['entity_type']=='contract' for r in refs): return True
             templates = [r['entity_id'] for r in refs if r['entity_type'] == 'template']
-            if templates and 'orders' in allowed and role in {'admin','sales'}:
+            if templates and 'orders' in allowed and role in {'admin','sales','finance'}:
                 if role=='admin': return True
                 if conn.execute('SELECT 1 FROM order_customer_templates WHERE id=ANY(%s) AND created_by_admin_id=%s LIMIT 1',(templates,user['id'])).fetchone(): return True
         return False

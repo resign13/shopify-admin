@@ -1,4 +1,4 @@
-import { authenticatedFetch } from './authTransport';
+import { authenticatedFetch } from './authTransport.js';
 export const API_BASE = "";
 export async function request(path, options = {}) {
   const { skipGlobalLoading, ...fetchOptions } = options;
@@ -7,7 +7,7 @@ export async function request(path, options = {}) {
     response = await authenticatedFetch(`${API_BASE}${path}`, {
       ...fetchOptions,
       headers: {
-        ...(options.body instanceof FormData
+        ...(options.body == null || options.body instanceof FormData
           ? {}
           : { "Content-Type": "application/json" }),
         ...options.headers,

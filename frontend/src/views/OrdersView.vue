@@ -190,7 +190,7 @@ const auth = useAdminAuthStore(),
 const statusBusy = ref(false);
 const templatesOpen = ref(false);
 function statusOptions(row) {
-  if (!auth.can("orders") || !["admin", "sales", "warehouse"].includes(auth.userRole)) return [];
+  if (!auth.can("orders") || !["admin", "sales", "warehouse", "finance"].includes(auth.userRole)) return [];
   return Object.keys(statusNames).filter(status =>
     status !== row.status,
   );
@@ -230,9 +230,7 @@ async function updateStatus(row, status) {
     statusBusy.value = false;
   }
 }
-const canEditDetails = computed(() =>
-    ["admin", "sales"].includes(auth.userRole),
-  ),
+const canEditDetails = computed(() => auth.canEditOrders),
   // The route is already protected by the orders module permission. Reuse that
   // capability here so warehouse accounts with the module grant see exports.
   canExportOrders = computed(() => auth.can("orders")),

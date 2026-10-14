@@ -105,6 +105,35 @@ jobs:
           grep -q '"multiTabOnce":true' "$RUNNER_TEMP/voice-result.log"
           grep -q '"authTransportRetryRetainsEpisode":true' "$RUNNER_TEMP/voice-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=voiceci close
+      - name: Isolated login CAPTCHA and department permission lifecycle
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_department_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+          SECURITY_ADMIN_CAPTCHA_ENABLED: '1'
+        run: |
+          set -euo pipefail
+          python scripts/department-permissions-browser-fixture.py > "$RUNNER_TEMP/department-browser.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5364/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/department-browser.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5364/api/health >/dev/null
+          npx --yes --package @playwright/cli playwright-cli -s=departmentci open http://127.0.0.1:5364/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=departmentci snapshot
+          npx --yes --package @playwright/cli playwright-cli -s=departmentci run-code --filename scripts/verify-login-captcha-browser.js | tee "$RUNNER_TEMP/captcha-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/captcha-result.log"; then exit 1; fi
+          grep -q '"logoutRevokesSession":true' "$RUNNER_TEMP/captcha-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=departmentci snapshot
+          npx --yes --package @playwright/cli playwright-cli -s=departmentci run-code --filename scripts/verify-department-permissions-browser.js | tee "$RUNNER_TEMP/department-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/department-result.log"; then exit 1; fi
+          grep -q '"extraGrantSavedAndPersisted":true' "$RUNNER_TEMP/department-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=departmentci close
       - name: Isolated cumulative overdelivery browser lifecycle
         env:
           PGHOST: 127.0.0.1

@@ -58,7 +58,8 @@ class FinanceTest(unittest.TestCase):
             for path in ('costs/preview','costs/save','reports/query','reports/export'):
                 self.assertEqual(self.post(path,{},role).status_code,403)
         self.assertEqual(self.call('finance/options',role='finance').status_code,200)
-        for path in ('orders','inventory','products','admin-users','store-users'):
+        self.assertEqual(self.call('products',role='finance').status_code,200)  # Contract picker dependency only.
+        for path in ('orders','inventory','admin-users','store-users'):
             self.assertEqual(self.call(path,role='finance').status_code,403)
         self.assertEqual(self.call('orders','POST',self.payload(),'finance').status_code,403)
         db._fetch_one("UPDATE admin_users SET permissions='[]'::jsonb WHERE id=%s RETURNING id",(self.finance_id,))

@@ -32,12 +32,15 @@ export const moduleGroups = [
   },
 ];
 const all = moduleGroups.flatMap((group) => group.items.map(([key]) => key));
+const defaults = {
+  admin: all,
+  sales: ["dashboard", "products", "inventory", "orders", "categories", "contracts"],
+  warehouse: ["inventory", "orders"],
+  finance: ["finance", "contracts"],
+  customer: ["inventory"],
+};
 export function roleModules(role) {
-  if (role === "admin") return [...all];
-  if (role === "sales")
-    return ["dashboard", "products", "inventory", "orders", "categories", "contracts", "presale"];
-  if (role === "finance") return ["finance"];
-  if (role === "warehouse") return ["inventory", "orders"];
+  if (["admin", "sales", "warehouse", "finance"].includes(role)) return [...all];
   return role === "customer" ? ["inventory"] : [];
 }
 export function routeModule(path) {
@@ -46,7 +49,7 @@ export function routeModule(path) {
 }
 
 export function defaultRoleModules(role) {
- return roleModules(role).filter(key => role !== "sales" || key !== "presale");
+ return [...(defaults[role] || [])];
 }
 
 export function editableRolePermissions(role, permissions) {

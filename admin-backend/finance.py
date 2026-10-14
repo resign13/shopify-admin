@@ -441,7 +441,7 @@ def register(app, require_auth):
             @wraps(fn)
             @require_auth
             def wrapped(*args,**kwargs):
-                if g.current_user.get('role') not in {'admin','finance'} or 'finance' not in module_permissions.effective(g.current_user):
+                if not module_permissions.allows_request(g.current_user, request.path, request.method):
                     return jsonify({'message':'Forbidden'}),403
                 try:
                     response=(workbench.atomic_admin_call if write else workbench.snapshot_admin_call)(fn,args,kwargs)

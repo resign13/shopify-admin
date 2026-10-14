@@ -102,11 +102,12 @@
       ><ElFormItem v-if="admin" label="模块权限">
         <div class="module-permissions">
           <p class="small-note">
-            勾选允许访问的模块；角色决定模块内的操作范围。未勾选的模块不显示，也不能调用对应接口。
+              部门只决定默认勾选项，可按账号启用其他模块；未勾选的模块不显示，也不允许调用接口。业务归属等规则保持不变。
           </p>
           <div>
             <ElButton text @click="form.permissions = roleModules(form.role)"
               >全选可用模块</ElButton
+            ><ElButton text @click="form.permissions = defaultRoleModules(form.role)">恢复部门默认</ElButton
             ><ElButton text @click="form.permissions = []">清空</ElButton>
           </div>
           <ElCheckboxGroup v-model="form.permissions">
@@ -128,7 +129,7 @@
             {{
               form.permissions?.length || 0
             }}
-            个模块。灰色选项超出当前角色的操作范围。
+              个模块。客户角色仍仅开放库存查看。
           </p>
         </div> </ElFormItem
       ><ElFormItem label="账号状态"
@@ -164,7 +165,7 @@
   >
 </template>
 <script setup>
-import { moduleGroups, roleModules, editableRolePermissions } from "../permissions";
+import { moduleGroups, roleModules, defaultRoleModules, editableRolePermissions } from "../permissions";
 import { useRouter } from "vue-router";
 import { reactive, ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
@@ -200,10 +201,10 @@ const filters = reactive({
   error = ref("");
 const { markClean, canLeave } = useDirty(() => form);
 const roleHelp = {
-  finance: "商品成本、销量成本核算及财务导出；不开放订单编辑、库存和账号管理。",
+  finance: "默认财务管理和合同管理；可额外勾选其他后台模块。",
   admin: "可分配全部后台模块，实际访问范围以下方勾选为准。",
-  sales: "经营分析、商品、库存、订单及商城运营；不含账号与日志管理。",
-  warehouse: "订单与库存管理，可编辑库存、合同未送并导入导出。",
+  sales: "默认经营分析、商品、库存、订单、分类和合同；其他模块可勾选，订单归属仍按本人隔离。",
+  warehouse: "默认订单与库存；其他模块可勾选，订单金额隐藏和现有仓库操作范围保持不变。",
   customer: "仅查看库存；不显示合同未送，不允许编辑或导入导出。",
 };
 const columns = [
@@ -240,10 +241,7 @@ function edit(row) {
   markClean();
 }
 function changeRole() {
-    if (form.role === "finance") { form.permissions = ["finance"]; return; }
-  form.permissions = form.permissions.filter((key) =>
-    roleModules(form.role).includes(key),
-  );
+    form.permissions = defaultRoleModules(form.role);
 }
 function validatePassword(_r, value, cb) {
   cb(!form.id && !value ? new Error("请设置登录密码") : undefined);

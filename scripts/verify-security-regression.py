@@ -24,6 +24,7 @@ if args.modules and any(m not in available for m in args.modules):
 env = os.environ.copy()
 env.update(APP_ENV='test', DB_SCHEMA_AUTO_MIGRATE='1', INTERNAL_COMPAT_ENABLED='0', PRIVATE_STORAGE_BUCKET='')
 env.update(SECURITY_ATTACHMENT_MODE='legacy', SECURITY_LOGIN_PROTECTION_ENABLED='0')
+env['SECURITY_ADMIN_CAPTCHA_ENABLED'] = '0'  # Dedicated CAPTCHA tests explicitly enable it.
 for key in list(env):
     if key.startswith('SECURITY_LIMIT_'): env.pop(key)
 if args.suite in {'all', 'security'}:

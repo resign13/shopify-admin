@@ -42,10 +42,15 @@ with db._connect() as conn:
         groups = presale.catalog()
         if set(group['styleCode'] for group in groups) != set(dates):
             raise RuntimeError('Admin style picker incomplete')
-        if 'presale' in module_permissions.effective({'role':'sales','permissions':None}):
-            raise RuntimeError('Presale permission implicitly granted to sales')
-        if 'presale' in module_permissions.effective({'role':'warehouse','permissions':['presale']}):
-            raise RuntimeError('Warehouse presale permission exposed')
+        for role in ['sales','warehouse','finance']:
+            if 'presale' in module_permissions.effective({'role':role,'permissions':None}):
+                raise RuntimeError('Presale permission implicitly granted to a department')
+            if not module_permissions.allows_request({'role':role,'permissions':['presale']},'/api/admin/presale','GET'):
+                raise RuntimeError('Explicit staff presale grant is blocked')
+            if module_permissions.allows_request({'role':role,'permissions':[]},'/api/admin/presale','GET'):
+                raise RuntimeError('Revoked staff presale grant is still active')
+        if 'presale' in module_permissions.effective({'role':'customer','permissions':['presale']}):
+            raise RuntimeError('Customer presale maintenance permission exposed')
         checks += ['complete-style-picker','explicit-presale-permission']
     else:
         products = db.list_products()

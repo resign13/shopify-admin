@@ -36,7 +36,7 @@
         <SecondaryOrderInput v-model="form.secondaryOrderNo" />
       </ElFormItem>
       <CustomerTemplates v-if="!id && !readOnly" :profile="form" :customer="customers.find(customer => customer.id === form.userId)" @apply="applyTemplate" @busy="templateBusy = $event" />
-      <ElFormItem v-if="auth.isSuperAdmin" label="归属业务员">
+      <ElFormItem v-if="auth.canAssignOrderOwner" label="归属业务员">
         <ElSelect v-model="form.ownerAdminId" clearable filterable placeholder="未分配" class="full-width" @change="form.ownerConfirmed = true">
           <ElOption v-for="person in salespeople" :key="person.id" :value="person.id" :label="person.name" :disabled="person.status !== 'active' && person.id !== form.ownerAdminId" />
         </ElSelect>
@@ -45,7 +45,7 @@
       <ElAlert v-if="!form.ownerConfirmed" type="warning" title="原业务员已停用，请重新选择业务员或确认未分配。" :closable="false">
         <ElButton text @click="form.ownerAdminId = null; form.ownerConfirmed = true">确认设为未分配</ElButton>
       </ElAlert>
-      <p v-if="!auth.isSuperAdmin" class="small-note">归属业务员：{{ auth.user?.name }}（固定为本人）</p>
+      <p v-if="!auth.canAssignOrderOwner" class="small-note">归属业务员：{{ auth.user?.name }}（固定为本人）</p>
       <h3>客户与收货信息</h3>
       <ElAlert v-if="customerUnavailable && !form.userId" type="warning" title="原商城客户已停用或不存在，请选择有效客户；原收货资料已保留。" :closable="false" />
       <ElFormItem
@@ -616,7 +616,7 @@ watch(
       const catalog = await api("catalog-options");
       if (current !== serial) return;
       categories.value = catalog.items;
-      if (auth.isSuperAdmin) {
+      if (auth.canAssignOrderOwner) {
         const people = await api("salespeople");
         if (current !== serial) return;
         salespeople.value = people.items;
@@ -812,7 +812,7 @@ async function submit() {
       ...form,
       ...(props.sourceOrderId ? { sourceOrderId: props.sourceOrderId } : {}),
       ...(activeDraftId.value ? {draftId:activeDraftId.value, draftVersion:draftVersion.value} : {}),
-      ownerAdminId: auth.isSuperAdmin ? (form.ownerAdminId || null) : auth.user.id,
+      ownerAdminId: auth.canAssignOrderOwner ? (form.ownerAdminId || null) : auth.user.id,
       items: items.map(({ productId, sizeCode, quantity, unitPrice }) => ({
         productId,
         sizeCode,

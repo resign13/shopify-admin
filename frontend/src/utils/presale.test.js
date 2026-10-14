@@ -12,10 +12,11 @@ test('manual cross-category move and append are non-mutating',()=>{
  assert.deepEqual(selectedStyles(source,items,'manual').map(r=>r.styleCode),source)
  assert.deepEqual(moveStyle(source,0,-1),source)
 })
-test('presale is an opt-in sales capability, not a default or a warehouse/customer module',()=>{
+test('presale is opt-in for staff departments, not a default or a customer module',()=>{
  assert.ok(roleModules('sales').includes('presale'));assert.ok(!defaultRoleModules('sales').includes('presale'))
  assert.ok(defaultRoleModules('admin').includes('presale'))
- for(const role of ['warehouse','customer'])assert.ok(!roleModules(role).includes('presale'))
+ for(const role of ['warehouse','finance']){assert.ok(roleModules(role).includes('presale'));assert.ok(!defaultRoleModules(role).includes('presale'))}
+ assert.ok(!roleModules('customer').includes('presale'))
  const keys=moduleGroups.flatMap(g=>g.items.map(([key])=>key))
  for(const old of ['home-config','activity-zone/apply','activity-zone/manage'])assert.ok(!keys.includes(old))
 })
@@ -24,5 +25,5 @@ test('editing legacy accounts drops retired hidden permissions without granting 
  assert.deepEqual(editableRolePermissions('sales',['orders','home-config','activity-zone/apply','products']),['orders','products'])
  assert.ok(!editableRolePermissions('sales',null).includes('presale'))
  assert.deepEqual(editableRolePermissions('sales',['orders','presale']),['orders','presale'])
- assert.deepEqual(editableRolePermissions('warehouse',['orders','presale']),['orders'])
+ assert.deepEqual(editableRolePermissions('warehouse',['orders','presale']),['orders','presale'])
 })
