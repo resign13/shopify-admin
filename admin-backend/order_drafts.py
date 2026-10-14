@@ -204,6 +204,8 @@ def save(payload, draft_id=None):
             raise workbench.Conflict('该提交编号已用于其他草稿，请从“我的草稿”继续编辑。')
         row = db._fetch_one('''INSERT INTO admin_order_drafts(creator_id,draft_key,submit_request_id,document,last_save_hash)
             VALUES(%s,%s,%s,%s,%s) RETURNING *''', (g.current_user['id'],key,submit_id,Jsonb(document),digest))
+    from private_media import bind_current, attachment_urls
+    bind_current('draft', row['id'], attachment_urls(document))
     audit(row, 'DRAFT_SAVE')
     return {**metadata(row), 'submitRequestId':str(row['submit_request_id'])}
 

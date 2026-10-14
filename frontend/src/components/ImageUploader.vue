@@ -68,6 +68,7 @@ import { ElMessage } from "element-plus";
 import { uploadImage } from "../composables/workbench";
 import { imageUrl } from "../utils/imageUrl";
 const props = defineProps({
+    purpose: { type: String, default: "order" },
     modelValue: { type: Array, default: () => [] },
     max: { type: Number, default: 10 },
   }),
@@ -96,7 +97,7 @@ async function run(entry) {
   entry.state = "loading";
   entry.progress = 0;
   try {
-    const url = await uploadImage(entry.file, (p) => (entry.progress = p));
+    const url = await uploadImage(entry.file, (p) => (entry.progress = p), "uploads", props.purpose);
     emit("update:modelValue", [...props.modelValue, url].slice(0, props.max));
     queue.value = queue.value.filter((q) => q.id !== entry.id);
   } catch (e) {

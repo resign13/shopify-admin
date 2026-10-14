@@ -27,9 +27,10 @@ async (page) => {
   await page.getByRole('button', { name: '开启语音提醒', exact: true }).click();
   await page.getByText('正常监听', { exact: true }).waitFor({ timeout: 15000 });
   const create = async tab => {
-    const token = await tab.evaluate(() => localStorage.getItem('lumiere-admin-token'));
+    const csrf = await tab.request.get('http://127.0.0.1:5358/api/auth/csrf');
+    const metadata = await csrf.json();
     const response = await tab.request.post('http://127.0.0.1:5358/api/admin/orders', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: { Origin:'http://127.0.0.1:5358', 'X-CSRF-Token':metadata.csrfToken, 'X-Auth-Session':metadata.sessionId },
       data: { requestId: crypto.randomUUID(), userId: 1, contactName: 'Voice Fixture', phone: '123',
         country: 'DE', address: 'Isolated fixture', items: [{ productId: 2, sizeCode: 'M', quantity: 1, unitPrice: 29.9 }] },
     });
@@ -82,7 +83,7 @@ async (page) => {
   await context.route('**/api/auth/logout', async route => { await logoutGate; await route.continue(); });
   await follower.locator('.profile-button').click();
   await follower.getByText('退出登录', { exact: true }).click();
-  await follower.waitForFunction(() => localStorage.getItem('lumiere-admin-token') === null);
+  await follower.waitForFunction(() => !localStorage.getItem('gingtto-admin-session-hint'));
   const episodes = await follower.evaluate(() => new Promise((resolve, reject) => {
     const open = indexedDB.open('gingtto-order-voice', 1);
     open.onerror = () => reject(open.error);

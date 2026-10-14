@@ -3,7 +3,7 @@ async (page) => {
   if(!page.url().startsWith(base+'/')) throw new Error('Isolated fixture required');
   const check=(v,m)=>{if(!v)throw new Error(m);};
   const api=(path,method='GET',body)=>page.evaluate(async({path,method,body})=>{
-    const r=await fetch('/api/admin/'+path,{method,headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+    const r=await fetch('/api/admin/'+path,{method,headers:{...(await fetch('/api/auth/csrf').then(r=>r.json()).then(d=>({'X-CSRF-Token':d.csrfToken}))),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
     return {status:r.status,data:await r.json().catch(()=>({}))};
   },{path,method,body});
   const login=async role=>{

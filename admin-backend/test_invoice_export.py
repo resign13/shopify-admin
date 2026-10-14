@@ -8,10 +8,15 @@ from zipfile import ZipFile
 from unittest.mock import patch
 from openpyxl import load_workbook
 from PIL import Image
+from flask.testing import FlaskClient
 from test_workbench import application, db, seed
 
 
 class InvoiceExportTest(unittest.TestCase):
+    def setUp(self):
+        # Registered/private storage tests remain for the later media phase.
+        self.media_mode = patch.object(application.media, 'mode', 'private')
+        self.media_mode.start(); self.addCleanup(self.media_mode.stop)
     def test_invoice_route_formats_file_without_changing_stock_or_access(self):
         tokens, _ = seed()
         owner_id = db.get_admin_user_by_email('sales@gingtto.test')['id']
@@ -31,7 +36,8 @@ class InvoiceExportTest(unittest.TestCase):
             for role in ('warehouse', 'customer'):
                 self.assertEqual(client.get('/api/admin/orders/1/invoice', headers={'Authorization': 'Bearer ' + tokens[role]}).status_code, 403)
             self.assertEqual(client.get('/api/admin/orders/2/invoice', headers={'Authorization': 'Bearer ' + tokens['sales']}).status_code, 404)
-            self.assertEqual(client.get('/api/admin/orders/1/invoice').status_code, 401)
+            anonymous = FlaskClient(application.app, application.app.response_class)
+            self.assertEqual(anonymous.get('/api/admin/orders/1/invoice').status_code, 401)
         self.assertEqual(db._fetch_all('SELECT product_id,size_code,stock FROM product_size_prices ORDER BY product_id,size_code'), before)
 
     def test_all_exports_include_note_and_all_nine_attachments(self):
@@ -56,8 +62,11 @@ class InvoiceExportTest(unittest.TestCase):
 
 
     def test_both_exports_embed_clear_images_and_reuse_downloads(self):
+        seed()
         with TemporaryDirectory() as directory:
             Image.new('RGB', (2400, 3200), '#335577').save(Path(directory) / 'fixture.jpg')
+            application.media.register_legacy('https://img.smawell.shop/uploads/fixture.jpg',
+                (Path(directory) / 'fixture.jpg').read_bytes(), purpose='product', entity_type='product', entity_id=1)
             order = {'orderNo': 'IMAGE-FIXTURE', 'items': [
                 {'sku': 'SKU-1', 'productName': 'Fixture', 'image': 'https://img.smawell.shop/uploads/fixture.jpg',
                  'sizeCode': size, 'quantity': 1, 'unitPrice': 20}
@@ -66,8 +75,7 @@ class InvoiceExportTest(unittest.TestCase):
             for builder in (application.build_orders_export, application.build_orders_sheet_export):
                 with self.subTest(export=builder.__name__), patch.object(application, 'UPLOAD_DIR', Path(directory)), \
                         application.app.test_request_context('/api/admin/orders/export'):
-                    from image_delivery import deliver_image
-                    with patch('image_delivery.deliver_image', wraps=deliver_image) as read:
+                    with patch.object(application.media, 'read', wraps=application.media.read) as read:
                         stream = builder([order])
                         self.assertEqual(read.call_count, 1)
                     with ZipFile(stream) as archive:
@@ -81,13 +89,18 @@ class InvoiceExportTest(unittest.TestCase):
                                 self.assertEqual(image.height, 640)
 
     def test_attachment_quality_is_independent_of_product_thumbnail(self):
+        tokens, _ = seed()
         with TemporaryDirectory() as directory:
             Image.new('RGB', (2400, 3200), '#335577').save(Path(directory) / 'large.jpg')
             url = '/uploads/large.jpg'
+            raw = (Path(directory) / 'large.jpg').read_bytes()
+            application.media.register_legacy(url, raw, purpose='product', entity_type='product', entity_id=1)
+            application.media.register_legacy(url, raw, purpose='legacy-private', entity_type='order', entity_id=1)
             order = {'orderNo': 'CLEAR-ATTACHMENT', 'shippingFee': 10, 'labelImageUrls': [url, url],
                      'items': [{'sku': 'ONE', 'image': url, 'quantity': 1, 'unitPrice': 20}]}
             for builder in (application.build_orders_export, application.build_orders_sheet_export, application.build_order_invoice_export):
-                with self.subTest(export=builder.__name__), patch.object(application, 'UPLOAD_DIR', Path(directory)), application.app.test_request_context('/'):
+                with self.subTest(export=builder.__name__), application.app.test_request_context('/',
+                        headers={'Cookie': application.security.cookie + '=' + tokens['admin']}):
                     stream = builder(order if builder == application.build_order_invoice_export else [order])
                     book = load_workbook(stream)
                     with ZipFile(stream) as archive:
@@ -132,29 +145,34 @@ class InvoiceExportTest(unittest.TestCase):
             book = load_workbook(application.build_order_invoice_export(order))
         self.assertTrue(any(pic.width == 640 and pic.height == 640 for pic in book.active._images))
 
-    def test_parallel_prefetch_and_disk_cache_reuse_originals(self):
+    def test_parallel_prefetch_reuses_authorized_private_storage(self):
         from threading import Barrier
-        from unittest.mock import MagicMock
+        from private_media import url_for
+        tokens, _ = seed()
         barrier = Barrier(2)
         photo = BytesIO(); Image.new('RGB', (1800, 1800), '#335577').save(photo, format='PNG')
-        urls = ['https://example.test/one.png', 'https://example.test/two.png']
-        order = {'items': [{'image': urls[0]}], 'labelImageUrls': urls}
-        def download(*args, **kwargs):
+        urls = [url_for(application.media.register_legacy('/uploads/prefetch-' + name + '.png',
+            photo.getvalue(), purpose='legacy-private', entity_type='order', entity_id=1)) for name in ['one','two']]
+        order = {'items': [], 'labelImageUrls': urls}
+        original_read = application.media.read
+        def read(row):
             barrier.wait(timeout=10)
-            response = MagicMock()
-            response.__enter__.return_value = response
-            response.headers = {'Content-Type': 'image/png'}
-            response.read.return_value = photo.getvalue()
-            return response
-        with TemporaryDirectory() as directory, patch.object(application, 'BASE_DIR', Path(directory)), \
-                patch.object(application.urllib_request, 'urlopen', side_effect=download) as network:
+            return original_read(row)
+        with patch.object(application.media, 'read', side_effect=read) as storage, \
+                patch('safe_images.fetch_image', side_effect=AssertionError('Private images must not use the network')) as network:
             for repeat in range(2):
-                with application.app.test_request_context('/'):
+                with application.app.test_request_context('/', headers={'Cookie': application.security.cookie + '=' + tokens['admin']}):
                     application.prefetch_export_images([order])
                     for url in urls:
                         self.assertEqual(application.fetch_image_bytes(url, attachment=True), photo.getvalue())
-                    self.assertEqual(application.fetch_image_bytes(urls[0]), photo.getvalue())
-            self.assertEqual(network.call_count, 2)
+            self.assertEqual(storage.call_count, 4)
+            network.assert_not_called()
+        # A different sales account is denied before any worker reads a file.
+        with application.app.test_request_context('/', headers={'Cookie': application.security.cookie + '=' + tokens['sales']}), \
+                patch.object(application.media, 'read') as denied:
+            application.prefetch_export_images([order])
+            self.assertIsNone(application.fetch_image_bytes(urls[0], attachment=True))
+            denied.assert_not_called()
 
     def test_invoice_with_few_and_many_product_rows(self):
         for count in (1, 8, 20, 60):

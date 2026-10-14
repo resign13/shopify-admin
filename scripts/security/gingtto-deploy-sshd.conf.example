@@ -1,0 +1,13 @@
+# Install/reload only after verified key login and preserving a recovery session.
+# This does NOT disable global root/password access; the fixed read-only export
+# channel must be verified with its intended credentials before that later step.
+Match User gingtto-deploy
+    AuthenticationMethods publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    PermitTunnel no
+    X11Forwarding no
+    PermitTTY no
+Match all

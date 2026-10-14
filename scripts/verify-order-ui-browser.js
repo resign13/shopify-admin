@@ -5,7 +5,7 @@ async (page) => {
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const api = (path, method = 'GET', body) => page.evaluate(async ({path, method, body}) => {
     const response = await fetch('/api/admin/' + path, {
-      method, headers: {Authorization: 'Bearer ' + localStorage.getItem('lumiere-admin-token'),
+      method, headers: {...(await fetch('/api/auth/csrf').then(r=>r.json()).then(d=>({'X-CSRF-Token':d.csrfToken}))),
         'Content-Type': 'application/json'}, ...(body ? {body: JSON.stringify(body)} : {}),
     });
     if (!response.ok) throw new Error('Fixture API ' + path + ': ' + response.status);

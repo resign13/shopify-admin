@@ -1,38 +1,37 @@
-import { roleModules, defaultRoleModules } from "../permissions";
-import { defineStore } from "pinia";
-
-import { request } from "../api";
-
-const TOKEN_KEY = "lumiere-admin-token";
-
-function readToken() {
-  try {
-    return localStorage.getItem(TOKEN_KEY) || "";
-  } catch {
-    return "";
-  }
-}
-
-function writeToken(token) {
-  try {
-    if (token) {
-      localStorage.setItem(TOKEN_KEY, token);
-    } else {
-      localStorage.removeItem(TOKEN_KEY);
+import { roleModules, defaultRoleModules } from '../permissions';
+import { defineStore } from 'pinia';
+import { request } from '../api';
+import { setAuthSession, withAuthTransition } from '../authTransport';
+const HINT_KEY = 'gingtto-admin-session-hint', OLD_TOKEN_KEY = 'lumiere-admin-token', CHANNEL = 'gingtto-admin-auth';
+const PENDING_LOGOUT = 'gingtto-admin-logout-pending';
+const EXPECTED_ROLE = 'admin', LOGIN_PATH = '/api/auth/admin/login';
+const NETWORK_MESSAGE = '连接暂时中断，当前输入和提醒进度已保留，请重试连接。';
+function hint() { try { return localStorage.getItem(HINT_KEY) || ''; } catch { return ''; } }
+function remember(value) { try { localStorage.removeItem(OLD_TOKEN_KEY); localStorage.setItem(HINT_KEY,value || ''); if (value) localStorage.removeItem(PENDING_LOGOUT); } catch {} }
+let bound = false, channel;
+function bind(store) {
+  if (bound || typeof window === 'undefined') return;
+  bound = true;
+  if (typeof BroadcastChannel !== 'undefined') channel = new BroadcastChannel(CHANNEL);
+  const change = async (message) => {
+    if (message?.type === 'logout') {
+      if (store.sessionId === message.sessionId) store.clearLocalAuth(false);
+    } else if (message?.sessionId !== store.sessionId) {
+      setAuthSession();
+      store.user = null;
+      window.dispatchEvent(new Event('auth-identity-cleared'));
+      await store.initialize();
     }
-  } catch {}
+  };
+  if (channel) channel.onmessage = event => change(event.data);
+  window.addEventListener('storage', event => { if (event.key === HINT_KEY) change({type:event.newValue?'changed':'logout',sessionId:event.newValue || store.sessionId}); });
+  window.addEventListener('auth-session-expired', () => store.clearLocalAuth(true));
 }
-
-export const useAdminAuthStore = defineStore("admin-auth", {
-  state: () => ({
-    token: readToken(),
-    user: null,
-    initialized: false,
-    loading: false,
-    error: "",
-  }),
+function announce(type, id) { channel?.postMessage({type,sessionId:id}); }
+export const useAdminAuthStore = defineStore('admin-auth',{
+  state: () => ({sessionId:hint(),user:null,expiresAt:null,initialized:false,loading:false,error:'',revision:0}),
   getters: {
-    isAuthenticated: (state) => Boolean(state.token && state.user),
+    isAuthenticated: (state) => Boolean(state.sessionId && state.user),
     userRole: (state) => state.user?.role || "",
     isSuperAdmin() {
       return this.userRole === "admin";
@@ -68,68 +67,64 @@ export const useAdminAuthStore = defineStore("admin-auth", {
     },
   },
   actions: {
+    clearLocalAuth(broadcast = true) {
+      const old = this.sessionId;
+      this.revision++; this.sessionId = ''; this.user = null;
+      setAuthSession(); remember('');
+      if (broadcast) announce('logout',old);
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('auth-identity-cleared'));
+    },
     async initialize() {
-      if (!this.token) {
-        this.initialized = true;
-        return;
-      }
-      const token = this.token;
-      try {
-        const data = await request("/api/auth/me", {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (this.token !== token) return;
-        if (data.role !== "admin") throw new Error("Role mismatch");
-        this.user = data.user;
-        this.error = "";
-      } catch (error) {
-        if (this.token !== token) return;
-        this.user = null;
-        if ([401, 403].includes(error.status) || error.message === "Role mismatch") {
-          this.token = "";
-          writeToken("");
-        } else {
-          // Transport errors are not a new login: retain the session and its voice queue.
-          // Protected views remain unavailable until /auth/me succeeds again.
-          this.error = "连接暂时中断，恢复网络后请点击重试连接；原登录进度已保留。";
+      bind(this);
+      const pendingLogout = localStorage.getItem(PENDING_LOGOUT);
+      if (pendingLogout) {
+        try {
+          await withAuthTransition(CHANNEL, () => request('/api/auth/logout', {method:'POST',headers:{'X-Auth-Session':pendingLogout}}));
+          localStorage.removeItem(PENDING_LOGOUT);
+        } catch (error) {
+          if ([401,409].includes(error.status)) localStorage.removeItem(PENDING_LOGOUT);
+          else { this.error = NETWORK_MESSAGE; this.initialized = true; return; }
         }
-      } finally {
-        this.initialized = true;
       }
+      const revision = ++this.revision, previousUser = this.user;
+      try {
+        const data = await request('/api/auth/me');
+        if (revision !== this.revision) return;
+        if (data.role !== EXPECTED_ROLE) throw Object.assign(new Error('Role mismatch'),{status:401});
+        const old = this.sessionId;
+        this.sessionId = data.sessionId; this.user = data.user; this.expiresAt = data.expiresAt;
+        setAuthSession(data.sessionId,data.csrfToken); remember(data.sessionId); this.error = '';
+        if (old !== data.sessionId) announce('changed',data.sessionId);
+      } catch (error) {
+        if (revision !== this.revision) return;
+        if ([401,403].includes(error.status)) this.clearLocalAuth();
+        else { this.user = previousUser; this.error = NETWORK_MESSAGE; }
+      } finally { this.initialized = true; }
     },
     async login(payload) {
-      this.loading = true;
-      this.error = "";
+      bind(this);
+      if (this.loading) return false;
+      const revision = ++this.revision;
+      this.loading = true; this.error = '';
       try {
-        const data = await request("/api/auth/admin/login", {
-          method: "POST",
-          body: JSON.stringify(payload),
+        return await withAuthTransition(CHANNEL, async () => {
+          const data = await request(LOGIN_PATH,{method:'POST',body:JSON.stringify(payload)});
+          if (revision !== this.revision) return false;
+          this.sessionId = data.sessionId; this.user = data.user; this.expiresAt = data.expiresAt;
+          setAuthSession(data.sessionId,data.csrfToken); remember(data.sessionId); announce('changed',data.sessionId);
+          return true;
         });
-        this.token = data.token;
-        this.user = data.user;
-        writeToken(data.token);
-        return true;
-      } catch (error) {
-        this.error = error.message || "Login failed";
-        return false;
-      } finally {
-        this.loading = false;
-      }
+      } catch (error) { if (revision === this.revision) this.error = error.message; return false; }
+      finally { this.loading = false; }
     },
     async logout() {
-      const token = this.token;
-      // Stop local listeners and notify other tabs before waiting for the network.
-      this.token = "";
-      this.user = null;
-      writeToken("");
-      try {
-        if (token) {
-          await request("/api/auth/logout", {
-            method: "POST",
-            headers: { Authorization: `Bearer ${token}` },
-          });
-        }
-      } catch {}
+      const id = this.sessionId, revision = ++this.revision;
+      if (id) localStorage.setItem(PENDING_LOGOUT,id);
+      this.sessionId = ''; this.user = null; remember(''); announce('logout',id);
+      setAuthSession();
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('auth-identity-cleared'));
+      try { await withAuthTransition(CHANNEL, () => request('/api/auth/logout',{method:'POST',headers:id?{'X-Auth-Session':id}:{}})); localStorage.removeItem(PENDING_LOGOUT); } catch (error) { if ([401,409].includes(error.status)) localStorage.removeItem(PENDING_LOGOUT); }
+      finally { if (revision === this.revision) setAuthSession(); }
     },
   },
 });

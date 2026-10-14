@@ -32,5 +32,7 @@ test('price conflict updates only matching draft prices, keeps quantities and or
 
 test('inherited file links never execute stored markup or scripts', () => {
   for (const url of ['javascript:alert(1)','data:text/html,hi','//other.test/a','/uploads/\\evil','bad']) assert.equal(attachmentHref(url),'');
-  for (const url of ['/uploads/old.pdf', 'https://example.test/a.jpg']) assert.equal(attachmentHref(url), url);
+  for (const url of ['/uploads/old.pdf', 'https://example.test/a.jpg',
+      '/api/attachments/12345678-1234-1234-1234-123456789abc/content/attachment.pdf']) assert.equal(attachmentHref(url), url);
+  for (const url of ['/api/attachments/bad/content/file.pdf','/api/attachments/12345678-1234-1234-1234-123456789abc/content/../file.pdf']) assert.equal(attachmentHref(url),'');
 });

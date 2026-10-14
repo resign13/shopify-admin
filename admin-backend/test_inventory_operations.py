@@ -74,8 +74,9 @@ class InventoryOperationsTest(unittest.TestCase):
             record(*args)
             raise RuntimeError('Injected history persistence failure')
         with patch.object(workbench, 'record_inventory_registration', side_effect=fail):
-            with self.assertRaisesRegex(RuntimeError, 'history persistence'):
-                self.save(sizeStocks={'M': -5}, temporaryInboundBySize={'M': 8})
+            response = self.save(sizeStocks={'M': -5}, temporaryInboundBySize={'M': 8})
+            self.assertEqual(response.status_code, 500)
+            self.assertNotIn('history persistence', str(response.json))
         self.assertEqual(self.detail(), before)
         self.assertEqual(self.history().json['total'], 0)
         self.assertEqual(self.call('audit-logs?page=1').json['total'], 0)

@@ -34,7 +34,9 @@ def attachments(order):
 
 def inherited_attachments(payload, origin):
     values = payload.get('inheritedAttachmentUrls', [])
+    from flask import current_app
     allowed = set(attachments(origin))
+    allowed.update(current_app.extensions['media'].canonical(v) for v in list(allowed))
     if (not isinstance(values, list) or any(not isinstance(v, str) for v in values)
             or len(values) != len(set(values)) or any(v not in allowed for v in values)):
         raise ValueError('继承附件与来源订单不一致，请重新打开草稿核对')

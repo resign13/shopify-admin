@@ -3,7 +3,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 import test_orders as helpers
-from test_workbench import db
+from test_workbench import db, fixture_file
 
 
 class OrderDraftsTest(unittest.TestCase):
@@ -128,12 +128,13 @@ class OrderDraftsTest(unittest.TestCase):
 
     def test_reorder_source_attachments_and_current_refresh(self):
         source=self.create();oid=source['id']
+        fixture_file('/uploads/old.pdf','order',oid)
         db._fetch_one("UPDATE orders SET owner_admin_id=2,label_image_urls='[\"/uploads/old.pdf\"]' WHERE id=%s RETURNING id",(oid,))
         data=self.call(f'orders/{oid}/reorder-draft',role='sales').json['draft']
         saved,_=self.save({**data,'sourceOrderId':oid})
         db._fetch_one("DELETE FROM product_size_prices WHERE product_id=1 AND size_code='L' RETURNING id")
         refreshed=self.call(f"orders/drafts/{saved['id']}",role='sales').json
-        self.assertEqual(refreshed['draft']['inheritedAttachmentUrls'],['/uploads/old.pdf'])
+        self.assertEqual(refreshed['draft']['inheritedAttachmentUrls'],[fixture_file('/uploads/old.pdf','order',oid)])
         self.assertEqual(refreshed['sourceOrderId'],oid)
         self.assertEqual(refreshed['draft']['pendingItems'][0]['reason'],'原尺码已移除')
         db._fetch_one("UPDATE orders SET owner_admin_id=NULL WHERE id=%s RETURNING id",(oid,))

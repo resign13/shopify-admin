@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 import test_orders as helpers
-from test_workbench import db
+from test_workbench import db, fixture_file
 
 
 class ReorderTest(unittest.TestCase):
@@ -32,7 +32,7 @@ class ReorderTest(unittest.TestCase):
 
     def test_readonly_draft_copies_whitelist_current_prices_and_full_attachments(self):
         source = self.create(); oid = source['id']
-        files = [f'/uploads/legacy-{n}.pdf' for n in range(18)] + ['/uploads/photo.jpg']
+        files = [fixture_file(f'/uploads/legacy-{n}.pdf','order',oid) for n in range(18)] + [fixture_file('/uploads/photo.jpg','order',oid)]
         db._fetch_one('UPDATE orders SET note=%s,label_image_urls=%s,tracking_no=%s,payment_link=%s,status=%s WHERE id=%s RETURNING id',
                       ('辅料\nPacking instructions', json.dumps(files), 'OLD-TRACK', 'https://old.test/pay', 'completed', oid))
         before = self.counts(); stock = self.stock()
@@ -95,14 +95,14 @@ class ReorderTest(unittest.TestCase):
             self.assertEqual(self.call(f'orders/{oid}').json['order']['status'],status)
 
     def test_attachments_independent_complete_and_membership_checked(self):
-        oid = self.create()['id']; files = [f'/uploads/{n}.pdf' for n in range(19)] + ['/uploads/legacy.doc']
+        oid = self.create()['id']; files = [fixture_file(f'/uploads/{n}.pdf','order',oid) for n in range(19)] + [fixture_file('/uploads/legacy.doc','order',oid)]
         db._fetch_one('UPDATE orders SET label_image_urls=%s WHERE id=%s RETURNING id',(json.dumps(files),oid))
         bad = self.body(oid); bad['labelPdfUrl'] = '/uploads/extra.pdf'
         self.assertEqual(self.call('orders','POST',bad).status_code,400)
         body = self.body(oid); body['inheritedAttachmentUrls'].pop(0)
-        body['labelImageUrls'] = ['/uploads/new.jpg']; body['labelPdfUrl'] = ''
+        body['labelImageUrls'] = [fixture_file('/uploads/new.jpg')]; body['labelPdfUrl'] = ''
         response = self.call('orders','POST',body); self.assertEqual(response.status_code,200,response.json)
-        copied = response.json['order']; expected = files[1:] + ['/uploads/new.jpg']
+        copied = response.json['order']; expected = files[1:] + [fixture_file('/uploads/new.jpg')]
         self.assertEqual(copied['labelImageUrls'],expected)
         self.assertEqual(self.call(f'orders/{oid}').json['order']['labelImageUrls'],files)
         # Future edits must also preserve all historical files rather than truncating.
@@ -117,7 +117,7 @@ class ReorderTest(unittest.TestCase):
         self.assertEqual(self.call('orders','POST',bad).status_code,400)
 
     def test_legacy_image_limit_preserves_history_and_limits_new_uploads(self):
-        oid = self.create()['id']; files = [f'/uploads/{n}.jpg' for n in range(12)]
+        oid = self.create()['id']; files = [fixture_file(f'/uploads/{n}.jpg','order',oid) for n in range(12)]
         db._fetch_one('UPDATE orders SET label_image_urls=%s WHERE id=%s RETURNING id',(json.dumps(files),oid))
         response = self.call('orders','POST',self.body(oid))
         self.assertEqual(response.status_code,200,response.json)

@@ -150,7 +150,9 @@ class DefectiveInventoryTest(unittest.TestCase):
             record(*args,**kwargs)
             raise RuntimeError('Injected defect log failure')
         with patch.object(workbench,'record_inventory_registration',side_effect=fail):
-            with self.assertRaisesRegex(RuntimeError,'defect log failure'):self.return_saved(body)
+            response=self.return_saved(body)
+            self.assertEqual(response.status_code,500)
+            self.assertNotIn('defect log failure',str(response.json))
         self.assertEqual(self.detail(),before)
         self.assertEqual(self.history()['total'],1)
         self.assertEqual(self.call('audit-logs').json['total'],audit)

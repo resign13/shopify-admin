@@ -19,45 +19,24 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-      - name: Configure and verify the deployed server over verified SSH
+      - name: Configure through the bounded non-root SSH channel
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.SECURITY_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.SECURITY_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SECURITY_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SECURITY_DEPLOY_KNOWN_HOSTS }}
           VOICE_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           case "$VOICE_MODE" in enable|disable) ;; *) exit 1;; esac
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq sshpass
+          test "$DEPLOY_USER" = gingtto-deploy
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
           umask 077
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy-key"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/deploy-known-hosts"
-          opts=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy-known-hosts" -o ConnectTimeout=30 -o ServerAliveInterval=15)
+          trap 'rm -f -- "$RUNNER_TEMP/deploy-key"' EXIT
+          opts=(-i "$RUNNER_TEMP/deploy-key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy-known-hosts" -o ConnectTimeout=30 -o ServerAliveInterval=15)
           audio_hash=$(python -c 'import json; print(json.load(open("frontend/src/assets/new-order-zh-CN.json"))["wavSha256"])')
-          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" bash -s -- "$VOICE_MODE" "$audio_hash" <<'REMOTE'
-          set -Eeuo pipefail
-          umask 077
-          mode="$1"
-          audio_hash="$2"
-          root=/opt/smawell/shopify-admin
-          exec 9>/var/lock/smawell-deploy.lock
-          flock -w 120 9
-          cd "$root/admin-backend"
-          .venv/bin/python "$root/scripts/verify-order-notifications.py"
-          if [ "$mode" = enable ]; then
-            test -n "$(find "$root/frontend/dist/assets" -maxdepth 1 -name 'new-order-zh-CN-*.wav' -print -quit)"
-            trap '.venv/bin/python "$root/scripts/configure-order-voice.py" disable --env "$root/admin-backend/.env"; systemctl restart smawell-admin-api' ERR
-          fi
-          .venv/bin/python "$root/scripts/configure-order-voice.py" "$mode" --env "$root/admin-backend/.env"
-          systemctl restart smawell-admin-api
-          for attempt in $(seq 1 20); do
-            if curl -fsS http://127.0.0.1:5302/api/health >/dev/null; then break; fi
-            sleep 2
-          done
-          systemctl is-active --quiet smawell-admin-api
-          .venv/bin/python "$root/scripts/verify-order-notifications.py" --http --expect-enabled "$mode" --audio-sha256 "$audio_hash"
-          systemctl is-active --quiet smawell-order-notification-cleanup.timer
-          trap - ERR
-          echo 'Server delivery settings and live HTTP checks passed.'
-          REMOTE
+          [[ "$audio_hash" =~ ^[a-f0-9]{64}$ ]]
+          ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "sudo -n /usr/local/sbin/gingtto-release voice '$VOICE_MODE' '$audio_hash'"

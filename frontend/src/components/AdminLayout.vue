@@ -56,7 +56,7 @@
           ></ElDropdown
         >
       </header>
-      <main class="workspace-content"><RouterView /></main>
+      <main class="workspace-content"><RouterView :key="auth.user?.id" /></main>
     </div>
   </div>
 </template>
@@ -149,10 +149,11 @@ async function logout() {
 }
 async function expired() {
   ElMessage.warning("登录已过期，请重新登录");
-  await logout();
+  auth.clearLocalAuth(false);
+  router.push("/login");
 }
-window.addEventListener("admin-session-expired", expired);
+window.addEventListener("auth-session-expired", expired);
 onBeforeUnmount(() =>
-  window.removeEventListener("admin-session-expired", expired),
+  window.removeEventListener("auth-session-expired", expired),
 );
 </script>

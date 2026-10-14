@@ -6,7 +6,7 @@ async (page) => {
   await page.waitForFunction(()=>[...document.querySelectorAll('button')].some(b=>b.textContent.trim()==='保存修改'&&b.disabled));
   const check=(ok,message)=>{if(!ok)throw new Error(message)};
   const api=(body)=>page.evaluate(async body=>{
-    const r=await fetch('/api/admin/presale',{method:body?'PUT':'GET',headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+    const r=await fetch('/api/admin/presale',{method:body?'PUT':'GET',headers:{...(await fetch('/api/auth/csrf').then(r=>r.json()).then(d=>({'X-CSRF-Token':d.csrfToken}))),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
     return {status:r.status,...await r.json()};
   },body);
   const initial=(await api()).config;await api({...initial,styleCodes:[],sortMode:'automatic'});

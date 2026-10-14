@@ -7,7 +7,7 @@ async (page) => {
   const check = (condition, message) => { if (!condition) throw new Error(message); };
   const api = (path, method = 'GET', body) => page.evaluate(async ({path, method, body}) => {
     const response = await fetch('/api/admin/' + path, {method,
-      headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},
+      headers:{...(await fetch('/api/auth/csrf').then(r=>r.json()).then(d=>({'X-CSRF-Token':d.csrfToken}))),'Content-Type':'application/json'},
       ...(body ? {body:JSON.stringify(body)} : {})});
     if (!response.ok) throw new Error('Fixture API '+path+': '+response.status);
     return response.json();
@@ -80,7 +80,7 @@ async (page) => {
   const response=await submit(); check(response.status()===200,'Reconfirmed order failed');
   const created=(await response.json()).order;
   check(created.status==='pending_payment'&&created.id!==source.id,'Not a new pending order');
-  check(created.labelImageUrls.length===1&&created.labelImageUrls[0]==='/uploads/fixture.jpg','Attachment choice not saved');
+  check(created.labelImageUrls.length===1&&created.labelImageUrls[0]===original.labelImageUrls[0],'Attachment choice not saved');
   check(await balance()===before-6,'New order inventory delta incorrect');
   const unchanged=(await api(`orders/${source.id}`)).order;
   check(unchanged.note===original.note&&unchanged.totalAmount===original.totalAmount&&

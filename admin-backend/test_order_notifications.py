@@ -154,7 +154,8 @@ class OrderNotificationsTest(unittest.TestCase):
 
     def test_compatibility_and_storefront_creation(self):
         cursor=self.start()
-        with self.app.test_client() as client:
+        with self.app.test_client() as client, patch.dict(os.environ, {'INTERNAL_COMPAT_ENABLED':'1'}), \
+                patch.object(fixtures.application, 'SERVICE_TOKEN', 'fixture-internal-key-' + '0123456789abcdef'):
             result=client.post('/api/internal/orders',json={'userId':1,'productId':1,'sizeCode':'M','quantity':1,'contactName':'Fixture','phone':'123','shippingAddress':'Fixture'},headers={'X-Service-Token':fixtures.application.SERVICE_TOKEN})
             self.assertIn(result.status_code,(200,201),result.json)
         storefront=Path(__file__).resolve().parents[2]/'shopify/storefront-backend'

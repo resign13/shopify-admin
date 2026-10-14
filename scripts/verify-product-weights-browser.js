@@ -4,7 +4,7 @@ async (page) => {
   const check=(ok,message)=>{if(!ok) throw new Error(message);};
   const settleDrawer=()=>page.waitForFunction(()=>[...document.querySelectorAll('.el-drawer')].some(el=>el.offsetWidth&&el.getBoundingClientRect().right<=window.innerWidth+1&&getComputedStyle(el).opacity==='1'));
   const api=(path,body)=>page.evaluate(async ({path,body})=>{
-    const response=await fetch('/api/admin/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+    const response=await fetch('/api/admin/'+path,{method:body?'POST':'GET',headers:{...(await fetch('/api/auth/csrf').then(r=>r.json()).then(d=>({'X-CSRF-Token':d.csrfToken}))),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
     if(!response.ok) throw new Error('Fixture API '+path+': '+response.status);
     return response.json();
   },{path,body});

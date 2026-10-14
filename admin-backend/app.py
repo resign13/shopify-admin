@@ -1,4 +1,5 @@
 from __future__ import annotations
+import safe_excel
 
 import module_permissions
 import sales_ownership
@@ -7,6 +8,7 @@ import os
 import product_weights
 import re
 import hashlib
+import hmac
 import zipfile
 from copy import copy
 from concurrent.futures import ThreadPoolExecutor
@@ -24,14 +26,10 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 
 BASE_DIR = Path(__file__).resolve().parent
-LOCAL_VENDOR_DIR = BASE_DIR / "_vendor"
-if LOCAL_VENDOR_DIR.exists():
-    sys.path.insert(0, str(LOCAL_VENDOR_DIR))
 
 import inventory_policy
 
 from flask import Flask, g, jsonify, request, send_file, send_from_directory
-from flask_cors import CORS
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as OpenpyxlImage
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -105,13 +103,21 @@ import order_numbering
 from time import perf_counter
 
 app = Flask(__name__)
-CORS(app)
+import security_core
+import db as security_db
+if os.environ.get('APP_ENV') != 'test':
+    security_db.load_env_file(Path(__file__).resolve().parent / '.env.security')
+security = security_core.Security(app, security_db, 'admin')
+from private_media import Media
+media = Media(app, security_db, 'admin', Path(__file__).resolve().parent)
 UPLOAD_DIR = BASE_DIR / "uploads"
 ADMIN_FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
 mimetypes.add_type("image/webp", ".webp")
 
 F = TypeVar("F", bound=Callable[..., Any])
-SERVICE_TOKEN = os.environ.get("LUMIERE_SERVICE_TOKEN", "lumiere-service-token")
+SERVICE_TOKEN = os.environ.get("LUMIERE_SERVICE_TOKEN", "")
+if os.environ.get("INTERNAL_COMPAT_ENABLED") == "1" and len(SERVICE_TOKEN) < 32:
+    raise RuntimeError("Internal compatibility requires an explicit random service token")
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
 SUPPORTED_LANGS = {"zh", "en"}
 DEFAULT_LANG = "zh"
@@ -394,68 +400,45 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
     }
 
 
-def fetch_image_bytes(url: str, *, attachment: bool = False) -> bytes | None:
-    from urllib.parse import urlsplit, unquote
+def _export_image_source(value: str, attachment: bool):
+    """Resolve and authorize in the caller's context, before starting workers."""
+    if media.mode == 'legacy':
+        return media.legacy_export_source(value)
+    row = media.find(value)
+    if not attachment and not __import__('private_media').file_id(value):
+        row = media.legacy_alias(value) or row
+    if row:
+        if not media.can_read(row):
+            raise ValueError('Attachment access denied')
+        return row
+    if attachment:
+        raise ValueError('Unregistered private attachment')
+    return None
+
+
+def _read_export_image(value, source):
+    from safe_images import fetch_image, check_image
+    raw = media.read_legacy_source(source) if source and source.get('legacy_channel') else media.read(source) if source else fetch_image(value)
+    check_image(raw)
+    return raw
+
+
+def fetch_image_bytes(url: str, *, attachment: bool = False):
     from flask import has_request_context
-    from image_delivery import deliver_image, MAX_SOURCE_BYTES
-    value = str(url or "").strip()
-    if not value:
-        return None
-    cache_key = (value, 1600) if attachment else value
-    cache = None
-    if has_request_context():
-        cache = g.setdefault('export_image_cache', {})
-        if cache_key in cache:
-            return cache[cache_key]
-    result = None
+    value = str(url or '').strip()
+    if not value: return None
+    cache = g.setdefault('export_image_cache', {}) if has_request_context() else {}
+    key = (value, attachment)
+    if key in cache: return cache[key]
     try:
-        parsed = urlsplit(value)
-        owned_hosts = {'img.smawell.shop', 'smawell.shop', 'admin.smawell.shop',
-                       'gingtto.store', 'admin.gingtto.store', 'img.gingtto.store'}
-        if parsed.path.startswith('/uploads/') and (not parsed.netloc or parsed.hostname in owned_hosts):
-            # Read the same local/R2 cache as image delivery, without an HTTP
-            # round trip through Cloudflare or another Gunicorn worker.
-            with app.test_request_context('/uploads/export?w=' + ('1600' if attachment else '640')):
-                response = deliver_image(UPLOAD_DIR, BASE_DIR / 'data' / 'image-cache',
-                                         unquote(parsed.path[len('/uploads/'):]), app.logger)
-                try:
-                    if response.status_code == 200 and response.mimetype.startswith('image/'):
-                        response.direct_passthrough = False
-                        result = response.get_data()
-                finally:
-                    response.close()
-        elif parsed.scheme in {'https', 'http'}:
-            # Cache the original once across requests and quality variants.
-            # URL hashes avoid persisting signed URLs or credentials in filenames.
-            import time
-            from filelock import FileLock
-            from image_delivery import atomic_write, prune_cache, SOURCE_TTL
-            cache_dir = BASE_DIR / 'data' / 'export-image-cache'
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            key = hashlib.sha256(value.encode()).hexdigest()
-            source = cache_dir / (key + '.source')
-            with FileLock(str(cache_dir / f'stripe-{int(key[:2], 16) % 64}.lock'), timeout=20):
-                if source.exists() and time.time() - source.stat().st_mtime < SOURCE_TTL:
-                    if source.stat().st_size <= MAX_SOURCE_BYTES:
-                        result = source.read_bytes()
-                else:
-                    req = urllib_request.Request(value, headers={'User-Agent': 'Mozilla/5.0', 'Accept': 'image/*'})
-                    with urllib_request.urlopen(req, timeout=10) as response:
-                        if str(response.headers.get('Content-Type', '')).lower().startswith('image/'):
-                            data = response.read(MAX_SOURCE_BYTES + 1)
-                            if len(data) <= MAX_SOURCE_BYTES:
-                                result = data
-                                atomic_write(source, lambda output: output.write(data))
-                    if result:
-                        try:
-                            prune_cache(cache_dir, {source})
-                        except Exception:
-                            app.logger.warning('Export image cache cleanup deferred')
+        raw = _read_export_image(value, _export_image_source(value, attachment))
+        if sum(len(data or b'') for data in cache.values()) + len(raw) <= 32*1024*1024:
+            cache[key] = raw
+        return raw
     except Exception:
-        app.logger.warning('Order export image retrieval failed')
-    if cache is not None and sum(len(data) for data in cache.values() if data) + len(result or b'') <= MAX_SOURCE_BYTES:
-        cache[cache_key] = result
-    return result
+        cache[key] = None
+        app.logger.warning('export_image_missing')
+        return None
 
 
 def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
@@ -463,29 +446,43 @@ def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
     from flask import has_request_context
     if not has_request_context():
         return
-    wanted = {}
+    wanted = set()
     for order in orders:
         for item in order.get('items', []):
             if item.get('image'):
-                wanted.setdefault(str(item['image']), False)
+                wanted.add((str(item['image']), False))
         for url in split_order_attachments(order)[0]:
-            wanted[str(url)] = True
+            wanted.add((str(url), True))
     cache = g.setdefault('export_image_cache', {})
-    pending = [(url, attachment) for url, attachment in wanted.items()
-               if ((url, 1600) if attachment else url) not in cache][:128]
+    pending = []
+    for key in sorted(wanted):
+        if key in cache: continue
+        if len(pending) >= 128:
+            cache[key] = None
+            continue
+        try:
+            pending.append((key, _export_image_source(*key)))
+        except Exception:
+            cache[key] = None
+            app.logger.warning('export_image_missing')
     def read(pair):
-        url, attachment = pair
-        with app.test_request_context('/api/admin/orders/export'):
-            return fetch_image_bytes(url, attachment=attachment)
+        key, source = pair
+        try:
+            return _read_export_image(key[0], source)
+        except Exception:
+            app.logger.warning('export_image_missing')
+            return None
     budget = sum(len(data) for data in cache.values() if data)
+    # Bounded batches prevent completed futures retaining an entire export's
+    # original images. Workers receive only already-authorized storage rows;
+    # they never manufacture an anonymous Flask request context.
     with ThreadPoolExecutor(max_workers=6) as pool:
-        for (url, attachment), data in zip(pending, pool.map(read, pending)):
-            cost = len(data or b'') * (2 if attachment else 1)
-            if budget + cost <= 32 * 1024 * 1024:
-                cache[url] = data
-                if attachment:
-                    cache[(url, 1600)] = data
-                budget += cost
+        for offset in range(0, len(pending), 6):
+            batch = pending[offset:offset + 6]
+            for (key, _), data in zip(batch, pool.map(read, batch)):
+                cost = len(data or b'')
+                cache[key] = data if budget + cost <= 32 * 1024 * 1024 else None
+                if cache[key]: budget += cost
 
 
 def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640) -> OpenpyxlImage | None:
@@ -556,6 +553,7 @@ def is_image_attachment(url: str) -> bool:
 
 
 def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]]:
+    order = media.rewrite(order)
     raw = order.get("labelImageUrls") or ([order.get("labelPdfUrl")] if order.get("labelPdfUrl") else [])
     image_urls: list[str] = []
     file_urls: list[str] = []
@@ -894,7 +892,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         raise ValueError("Please enter shipping fee before exporting PI")
 
     prefetch_export_images([order])
-    workbook = load_workbook(PROFORMA_TEMPLATE_PATH)
+    workbook = safe_excel.trust_template(load_workbook(PROFORMA_TEMPLATE_PATH))
     worksheet = workbook["PI"] if "PI" in workbook.sheetnames else workbook.active
     worksheet.sheet_view.showGridLines = False
     # The inherited PI template styles empty cells through XFC. Remove only
@@ -977,9 +975,9 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         row = item_start_row + index
         worksheet.row_dimensions[row].height = 132
         worksheet[f"A{row}"] = item.get("description") or "--"
-        worksheet[f"H{row}"] = f"=SUM(C{row}:G{row})"
+        safe_excel.formula(worksheet,f'H{row}',f'=SUM(C{row}:G{row})')
         worksheet[f"I{row}"] = float(item.get("unitPrice") or 0)
-        worksheet[f"J{row}"] = f"=H{row}*I{row}"
+        safe_excel.formula(worksheet,f'J{row}',f'=H{row}*I{row}')
         worksheet[f"I{row}"].font = copy(worksheet[f"J{row}"].font)
         worksheet[f"I{row}"].number_format = worksheet[f"J{row}"].number_format
 
@@ -987,28 +985,33 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
             worksheet[f"{column}{row}"] = quantity
 
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
+        excel_image = None
         if image_bytes:
             excel_image = build_excel_image(image_bytes, width=140, height=160)
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
+        if item.get('image') and not excel_image:
+            worksheet[f'B{row}'] = 'Image unavailable'
+            worksheet[f'B{row}'].font = invoice_body_font(worksheet)
+            worksheet[f'B{row}'].alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
 
     # Summary and formulas. These are the only formula positions that move when
     # more than three item rows are inserted.
     worksheet[f"B{product_total_row}"] = "Product Total"
-    worksheet[f"H{product_total_row}"] = f"=SUM(H{item_start_row}:H{last_item_row})"
-    worksheet[f"J{product_total_row}"] = f"=SUM(J{item_start_row}:J{last_item_row})"
+    safe_excel.formula(worksheet,f'H{product_total_row}',f'=SUM(H{item_start_row}:H{last_item_row})')
+    safe_excel.formula(worksheet,f'J{product_total_row}',f'=SUM(J{item_start_row}:J{last_item_row})')
 
     worksheet[f"B{shipping_row}"] = "Shipping Cost"
     worksheet[f"C{shipping_row}"] = "(DDP) Air freight: Delivery time is approximately 10-16 days."
     worksheet[f"J{shipping_row}"] = shipping_fee
 
     worksheet[f"B{total_row}"] = "Total"
-    worksheet[f"J{total_row}"] = f"=J{product_total_row}+J{shipping_row}"
+    safe_excel.formula(worksheet,f'J{total_row}',f'=J{product_total_row}+J{shipping_row}')
 
     worksheet[f"A{deposit_row}"] = "50% DEPOSITE:"
-    worksheet[f"C{deposit_row}"] = f"=J{total_row}*0.5"
+    safe_excel.formula(worksheet,f'C{deposit_row}',f'=J{total_row}*0.5')
     worksheet[f"A{balance_row}"] = "50% BALANCE:"
-    worksheet[f"C{balance_row}"] = f"=J{total_row}*0.5"
+    safe_excel.formula(worksheet,f'C{balance_row}',f'=J{total_row}*0.5')
 
     # Keep the moving summary/footer rows visually identical to the one-item
     # template, so Shipping Cost and the blue bank area never get squeezed.
@@ -1057,15 +1060,22 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
         from order_matrix_export import add_attachment_strip
         pictures = []
-        for attachment_url in attachment_images[:9]:
+        missing_images = 0
+        for attachment_url in attachment_images:
             attachment_bytes = fetch_image_bytes(attachment_url, attachment=True)
             attachment_image = build_excel_image(attachment_bytes, width=480, height=480, pixels=1600) if attachment_bytes else None
             if attachment_image:
                 pictures.append(attachment_image)
+            else:
+                missing_images += 1
+        if missing_images:
+            cell = worksheet[f'A{append_row + 1}']
+            cell.value = str(cell.value or '') + f'\nAttachment images unavailable: {missing_images}'
+            worksheet.row_dimensions[append_row + 1].height = estimate_text_row_height(cell.value, line_width=100, min_height=26, line_height=18, max_height=409, wide_characters=True)
         add_attachment_strip(worksheet, append_row + 3, pictures)
 
     output = BytesIO()
-    workbook.save(output)
+    safe_excel.prepare(workbook).save(output)
     output.seek(0)
     return output
 
@@ -1233,7 +1243,7 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
         worksheet.column_dimensions[column].width = 22
 
     output = BytesIO()
-    workbook.save(output)
+    safe_excel.prepare(workbook).save(output)
     output.seek(0)
     return output
 
@@ -1561,23 +1571,13 @@ def redact_order_amounts_for_warehouse(order: dict[str, Any]) -> dict[str, Any]:
 
 
 def extract_token() -> str:
-    auth_header = request.headers.get("Authorization", "")
-    if auth_header.startswith("Bearer "):
-        return auth_header.replace("Bearer ", "", 1).strip()
-    return ""
+    return security.raw_token()
+
 
 
 def require_auth(func: F) -> F:
-    @wraps(func)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        token = extract_token()
-        user = get_admin_user_by_session_token(token)
-        if not user:
-            return jsonify({"message": "Unauthorized"}), 401
-        g.current_user = user
-        return func(*args, **kwargs)
+    return security.authenticated(func)
 
-    return wrapper  # type: ignore[return-value]
 
 
 def require_roles(*roles: str) -> Callable[[F], F]:
@@ -1603,7 +1603,7 @@ def require_roles(*roles: str) -> Callable[[F], F]:
 def require_service_auth(func: F) -> F:
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        if request.headers.get("X-Service-Token", "") != SERVICE_TOKEN:
+        if request.remote_addr not in {"127.0.0.1", "::1"} or not SERVICE_TOKEN or not hmac.compare_digest(request.headers.get("X-Service-Token", ""), SERVICE_TOKEN):
             return jsonify({"message": "Unauthorized service"}), 401
         return func(*args, **kwargs)
 
@@ -1825,7 +1825,7 @@ def build_upload_url(filename: str) -> str:
 
 
 def cloudinary_enabled() -> bool:
-    return bool(CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET)
+    return os.environ.get('APP_ENV') != 'test' and bool(CLOUDINARY_CLOUD_NAME and CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET)
 
 
 def build_multipart_form_data(fields: dict[str, str], file_name: str, file_bytes: bytes, content_type: str) -> tuple[bytes, str]:
@@ -1851,6 +1851,8 @@ def build_multipart_form_data(fields: dict[str, str], file_name: str, file_bytes
 
 
 def upload_file_to_cloudinary(file_storage: Any) -> str:
+    if os.environ.get('APP_ENV') == 'test':
+        raise RuntimeError('External uploads are disabled for isolated fixtures')
     if not cloudinary_enabled():
         raise RuntimeError("Cloudinary is not configured")
 
@@ -1903,11 +1905,12 @@ def upload_file_to_cloudinary(file_storage: Any) -> str:
 
 
 def save_file_locally(file_storage: Any) -> str:
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    upload_dir = media.uploads['admin']
+    upload_dir.mkdir(parents=True, exist_ok=True)
     stem = secure_filename(Path(file_storage.filename or "").stem) or "upload"
     suffix = Path(file_storage.filename or "").suffix.lower() or ".jpg"
     unique_name = f"{stem}-{secrets.token_hex(6)}{suffix}"
-    file_storage.save(UPLOAD_DIR / unique_name)
+    file_storage.save(upload_dir / unique_name)
     return build_upload_url(unique_name)
 
 
@@ -1916,30 +1919,34 @@ def admin_frontend_ready() -> bool:
 
 
 @app.get("/uploads/<path:filename>")
-def serve_upload(filename: str) -> Any:
-    from image_delivery import deliver_image
-    return deliver_image(UPLOAD_DIR, BASE_DIR / "data" / "image-cache", filename, app.logger)
+def serve_upload(filename: str):
+    if media.mode == 'legacy':
+        from image_delivery import deliver_image
+        return deliver_image(media.uploads['admin'], media.cache, filename, app.logger)
+    row = media.legacy_alias(request.url_root.rstrip('/') + '/uploads/' + filename, '/uploads/' + filename)
+    if not row:
+        from flask import abort
+        abort(404)
+    return media.content(row['id'])
 
 
 @app.post("/api/admin/uploads")
 @require_auth
 @require_roles("admin", "sales")
-def upload_files() -> Any:
-    files = request.files.getlist("files")
-    if not files:
-        return jsonify({"message": "Missing files"}), 400
-    valid_files = [file for file in files if file.filename]
-    if not valid_files:
-        return jsonify({"message": "Missing files"}), 400
-
-    uploader = upload_file_to_cloudinary if cloudinary_enabled() else save_file_locally
-    if len(valid_files) == 1:
-        urls = [uploader(valid_files[0])]
-    else:
-        max_workers = min(4, len(valid_files))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            urls = list(executor.map(uploader, valid_files))
-    return jsonify({"urls": urls})
+def upload_files():
+    files = [f for f in request.files.getlist('files') if f.filename]
+    purpose = request.form.get('purpose', 'order')
+    required = {'product': 'products', 'order': 'orders', 'contract': 'contracts'}
+    if purpose not in required or required[purpose] not in module_permissions.effective(g.current_user):
+        return jsonify({'message':'Forbidden'}), 403
+    if not 1 <= len(files) <= (10 if purpose == 'product' else 9):
+        return jsonify({'message':'Invalid file count'}), 400
+    try:
+        app.extensions['legacy_media_uploader'] = upload_file_to_cloudinary if cloudinary_enabled() else save_file_locally
+        return jsonify({'urls':[media.upload(f,purpose=purpose) for f in files]})
+    except ValueError as exc:
+        g.security_event = 'upload_rejected'
+        return jsonify({'message':str(exc)}), 400
 
 
 @app.get("/api/health")
@@ -1950,29 +1957,26 @@ def health() -> Any:
 @app.post("/api/auth/admin/login")
 def admin_login() -> Any:
     payload = request.get_json(silent=True) or {}
-    email = str(payload.get("email", "")).strip().lower()
-    password = str(payload.get("password", "")).strip()
-    user = get_admin_user_by_email(email, include_password_hash=True)
-    password_ok = user is not None and check_password_hash(user["passwordHash"], password)
-    if not user or user["status"] != "active" or not password_ok:
-        return jsonify({"message": "Invalid email or password"}), 401
-    token = create_admin_session(user["id"])
-    return jsonify({"token": token, "user": sanitize_admin_user(user)})
+    if not isinstance(payload, dict):
+        return jsonify({'message':'Invalid request'}), 400
+    email = str(payload.get('email','')).strip().lower()
+    password = str(payload.get('password','')).strip()
+    return security.sign_in(email, password, sanitize_admin_user)
+
 
 
 @app.get("/api/auth/me")
 @require_auth
 def auth_me() -> Any:
-    return jsonify({"role": "admin", "user": sanitize_admin_user(g.current_user)})
+    return jsonify({'role':'admin','user':sanitize_admin_user(g.current_user), **security.metadata(g.current_session)})
+
 
 
 @app.post("/api/auth/logout")
 @require_auth
 def logout() -> Any:
-    token = extract_token()
-    if token:
-        delete_admin_session(token)
-    return jsonify({"message": "ok"})
+    return security.logout_response()
+
 
 
 @app.get("/api/public/home")
@@ -2508,6 +2512,11 @@ def store_users() -> Any:
 @require_roles("admin")
 def create_store_user_route() -> Any:
     payload = request.get_json(silent=True) or {}
+    if payload.get('password'):
+        try:
+            security_core.validate_password(str(payload['password']).strip())
+        except ValueError as exc:
+            return jsonify({'message':str(exc),'code':'weak_password'}), 400
     required = ["name", "email", "password"]
     missing = [field for field in required if not str(payload.get(field, "")).strip()]
     if missing:
@@ -2535,6 +2544,11 @@ def create_store_user_route() -> Any:
 @require_roles("admin")
 def update_store_user_route(user_id: int) -> Any:
     payload = request.get_json(silent=True) or {}
+    if payload.get('password'):
+        try:
+            security_core.validate_password(str(payload['password']).strip())
+        except ValueError as exc:
+            return jsonify({'message':str(exc),'code':'weak_password'}), 400
     user = get_store_user_by_id(user_id, include_password_hash=True)
     if not user:
         return jsonify({"message": "Store account not found"}), 404
@@ -2587,6 +2601,11 @@ def admin_users() -> Any:
 @require_roles("admin")
 def create_admin_user_route() -> Any:
     payload = request.get_json(silent=True) or {}
+    if payload.get('password'):
+        try:
+            security_core.validate_password(str(payload['password']).strip())
+        except ValueError as exc:
+            return jsonify({'message':str(exc),'code':'weak_password'}), 400
     required = ["name", "email", "password"]
     missing = [field for field in required if not str(payload.get(field, "")).strip()]
     if missing:
@@ -2620,6 +2639,11 @@ def update_admin_user_route(user_id: int) -> Any:
     if not user:
         return jsonify({"message": "Admin account not found"}), 404
     payload = request.get_json(silent=True) or {}
+    if payload.get('password'):
+        try:
+            security_core.validate_password(str(payload['password']).strip())
+        except ValueError as exc:
+            return jsonify({'message':str(exc),'code':'weak_password'}), 400
     email = str(payload.get("email", user["email"])).strip().lower()
     existing = get_admin_user_by_email(email, include_password_hash=False)
     if existing and existing["id"] != user_id:
@@ -3023,14 +3047,14 @@ def customer_template_delete(template_id):
 @require_auth
 @require_roles('admin', 'sales')
 def customer_template_pdf_upload():
-    files = request.files.getlist('files')
-    if len(files) != 1 or not files[0].filename or not files[0].filename.lower().endswith('.pdf'):
-        return jsonify({'message': '请选择一个 PDF 附件'}), 400
-    raw = files[0].read(32 * 1024 * 1024 + 1)
-    if len(raw) > 32 * 1024 * 1024 or not raw.startswith(b'%PDF-'):
-        return jsonify({'message': '请选择不超过 32 MB 的有效 PDF 文件'}), 400
-    files[0].stream.seek(0)
-    return jsonify({'urls': [save_file_locally(files[0])]})
+    file = request.files.get('files') or request.files.get('file')
+    if not file or Path(file.filename or '').suffix.lower() != '.pdf':
+        return jsonify({'message':'Select one PDF file'}), 400
+    try:
+        return jsonify({'urls':[media.upload(file,purpose='order')]})
+    except ValueError as exc:
+        g.security_event='upload_rejected'
+        return jsonify({'message':str(exc)}),400
 
 
 @app.get('/api/admin/catalog-options')
@@ -3295,5 +3319,23 @@ def salespeople():
 import finance
 finance.register(app, require_auth)
 
+
+
+@app.get('/api/admin/admin-users/security-audit')
+@require_auth
+@require_roles('admin')
+def security_audit_list():
+    if not module_permissions.can_administer(g.current_user): return jsonify({'message':'Forbidden'}),403
+    page,size=workbench.paging(request.args)
+    code=request.args.get('event','')
+    if len(code)>80: return jsonify({'message':'Invalid event filter'}),400
+    with security_db.get_connection() as conn:
+        where=' WHERE event_code=%s' if code else ''
+        params=(code,) if code else ()
+        total=conn.execute('SELECT COUNT(*) AS count FROM security_audit_events'+where,params).fetchone()['count']
+        rows=conn.execute('SELECT id,created_at,channel,event_code,actor_type,actor_id,route,status FROM security_audit_events'+where+' ORDER BY id DESC LIMIT %s OFFSET %s',params+(size,(page-1)*size)).fetchall()
+    return jsonify({'items':[dict(r,created_at=r['created_at'].isoformat()) for r in rows],'total':total,'page':page,'pageSize':size})
+
+
 if __name__ == "__main__":
-    app.run(debug=False, use_reloader=False, host="0.0.0.0", port=5002)
+    app.run(debug=False, use_reloader=False, host="127.0.0.1", port=5002)

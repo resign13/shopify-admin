@@ -1,0 +1,11 @@
+/var/lib/gingtto-release/events.jsonl {
+    daily
+    rotate 90
+    maxage 90
+    ifempty
+    missingok
+    dateext
+    compress
+    delaycompress
+    create 0600 root root
+}

@@ -12,6 +12,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   verify:
+    env:
+      APP_ENV: test
+      DB_SCHEMA_AUTO_MIGRATE: '1'
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -31,18 +34,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: pip install -r admin-backend/requirements.txt
+      - run: pip install pip-audit==2.10.1 -r admin-backend/requirements.txt
+      - name: Dependency and credential checks
+        run: |
+          python -m pip_audit -r admin-backend/requirements.txt
+          python scripts/security-secret-scan.py
+      - name: Phase-one proxy boundary acceptance (isolated container)
+        run: |
+          python -m unittest discover -s scripts/security -p 'test_*.py' -v
+          python scripts/security/verify_proxy_phase1.py --output "$RUNNER_TEMP/security-proxy-phase1"
+          docker run --rm --network none --cap-add SYS_PTRACE -e SECURITY_RELEASE_FIXTURE=1 --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/security,dst=/fixture,readonly" python:3.12-slim python /fixture/test_release_control_linux.py
+      - name: Dedicated-key SSH, restricted sudo and systemd parser (isolated container)
+        run: |
+          docker build --tag gingtto-security-runtime-fixture --file scripts/security/test_runtime.Dockerfile scripts/security
+          docker run --rm --network none -e SECURITY_INSTALL_FIXTURE=1 --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/security,dst=/fixture,readonly" --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/systemd,dst=/fixture-units,readonly" gingtto-security-runtime-fixture
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Install frontend test dependencies
         working-directory: frontend
-        run: npm ci
+        run: npm ci && npm audit --audit-level=high
       - name: Release configuration tests
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/audioAsset.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:
@@ -51,7 +67,18 @@ jobs:
           PGDATABASE: gingtto_workbench_test
           PGUSER: postgres
           PGPASSWORD: fixture-only-password
-        run: python -m unittest -v test_workbench test_dashboard test_negative_stock test_orders test_order_reorder test_order_drafts test_customer_templates test_image_delivery test_permissions test_order_matrix_export test_invoice_export test_contracts test_catalog_order test_sales_ownership test_sales_dashboard_access test_temporary_inbound test_inventory_operations test_order_search test_order_operations test_defective_inventory test_inventory_batch test_order_notifications test_order_numbering test_inventory_overdelivery test_product_weights test_presale test_finance && python ../scripts/verify-product-weights.py admin-backend && python ../scripts/verify-style-catalog.py admin-backend
+        run: python ../scripts/verify-security-regression.py && python ../scripts/verify-product-weights.py admin-backend && python ../scripts/verify-style-catalog.py admin-backend
+      - name: Metadata-only retention roles and native backup restore acceptance
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_workbench_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          python scripts/verify-security-aux-roles.py --expected-db gingtto_workbench_test --prefix gingtto_ci_aux_test
+          docker pull postgres:16
+          python scripts/security/verify_native_restore.py --isolated-fixture --report "$RUNNER_TEMP/native-restore.json"
       - name: Build and verify browser voice lifecycle on an isolated fixture
         env:
           PGHOST: 127.0.0.1
@@ -167,7 +194,7 @@ jobs:
     needs: verify
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -180,21 +207,26 @@ jobs:
         run: npm ci && npm run build
       - name: Package release without runtime data or secrets
         run: |
-          tar --exclude=.env --exclude='.env.*' --exclude=.venv --exclude=_vendor --exclude=uploads --exclude=data --exclude=__pycache__ -czf release.tar.gz admin-backend scripts frontend/dist db
+          python scripts/security/build_release.py --channel admin --output release.tar.gz
+          python scripts/security/build_release.py --channel admin --verify release.tar.gz
       - name: Upload, back up and deploy over verified SSH
         env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          SSHPASS: ${{ secrets.DEPLOY_PASSWORD }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.SECURITY_DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.SECURITY_DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.SECURITY_DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.SECURITY_DEPLOY_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq sshpass
           umask 077
+          test -n "$DEPLOY_SSH_KEY" && test -n "$DEPLOY_KNOWN_HOSTS"
+          test "$DEPLOY_USER" = gingtto-deploy
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$RUNNER_TEMP/deploy-key"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$RUNNER_TEMP/deploy-known-hosts"
-          opts=(-o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy-known-hosts" -o ConnectTimeout=30 -o ServerAliveInterval=15)
-          stage=/opt/smawell/incoming/admin-${{ github.run_id }}-${{ github.run_attempt }}
-          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$stage'"
-          sshpass -e scp "${opts[@]}" release.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:$stage/release.tar.gz"
-          sshpass -e ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; tar -xzf '$stage/release.tar.gz' -C '$stage'; bash '$stage/scripts/deploy-admin.sh' '$stage'"
+          trap 'rm -f -- "$RUNNER_TEMP/deploy-key"' EXIT
+          opts=(-i "$RUNNER_TEMP/deploy-key" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile="$RUNNER_TEMP/deploy-known-hosts" -o ConnectTimeout=30 -o ServerAliveInterval=15)
+          release_id=admin-${{ github.run_id }}-${{ github.run_attempt }}
+          stage=/opt/smawell/incoming/$release_id
+          ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "umask 077; mkdir -p '$stage'"
+          scp "${opts[@]}" release.tar.gz "$DEPLOY_USER@$DEPLOY_HOST:$stage/release.tar.gz"
+          ssh "${opts[@]}" "$DEPLOY_USER@$DEPLOY_HOST" "chmod 600 '$stage/release.tar.gz' && sudo -n /usr/local/sbin/gingtto-release deploy admin '$release_id'"

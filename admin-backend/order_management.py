@@ -43,7 +43,7 @@ def order_images(payload, old):
         if not isinstance(url, str) or len(url) > 2048:
             raise ValueError('订单图片地址无效')
         parsed = urlsplit(url)
-        if not ((parsed.scheme in {'https', 'http'} and parsed.netloc) or (not parsed.netloc and not parsed.scheme and parsed.path.startswith('/uploads/'))):
+        if not ((parsed.scheme in {'https', 'http'} and parsed.netloc) or (not parsed.netloc and not parsed.scheme and parsed.path.startswith(('/uploads/', '/api/attachments/', '/media/products/')))):
             raise ValueError('订单图片地址无效')
         if not parsed.path.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp')):
             raise ValueError('订单附件请上传图片')
@@ -63,6 +63,9 @@ def save_order(payload, order_id=None):
         old = db._fetch_one('SELECT * FROM orders WHERE id=%s FOR UPDATE', (order_id,))
         if not old:
             raise ValueError('订单不存在')
+        from flask import current_app
+        old['label_pdf_url'] = current_app.extensions['media'].canonical(old.get('label_pdf_url') or '')
+        old['label_image_urls'] = json.dumps([current_app.extensions['media'].canonical(u) for u in db._parse_label_image_urls(old)])
     else:
         try:
             request_id = str(uuid.UUID(str(payload.get('requestId', ''))))
@@ -234,6 +237,8 @@ def save_order(payload, order_id=None):
         db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping)
     if origin:
         order_reorder.audit(order_id, origin)
-    if stored_draft:
-        order_drafts.converted(stored_draft, order_id)
-    return {'order': db.get_order_by_id(order_id), 'replayed': False}
+    from private_media import bind_current, attachment_urls
+    saved = db.get_order_by_id(order_id)
+    bind_current('order', order_id, attachment_urls(saved))
+    if stored_draft: order_drafts.converted(stored_draft, order_id)
+    return {'order': saved, 'replayed': False}

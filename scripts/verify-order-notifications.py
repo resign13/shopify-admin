@@ -1,7 +1,6 @@
-"""Schema checks are read-only. Optional HTTP smoke writes notification progress only.
+"""Read-only schema and anonymous HTTP checks; never reuses staff credentials.
 
-Uses existing active sessions without logging in or changing any staff session.
-Never creates accounts, business orders, stock changes or synthetic order events.
+Does not log in, write progress, create orders or change inventory/sessions.
 """
 import argparse
 import hashlib
@@ -13,13 +12,20 @@ import uuid
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--http', action='store_true')
-parser.add_argument('--expect-enabled', choices=['enable', 'disable'], default='disable')
+parser.add_argument('--expect-enabled', choices=['enable', 'disable'])
 parser.add_argument('--audio-sha256')
 args = parser.parse_args()
+if args.http and args.expect_enabled is None:
+    parser.error('--expect-enabled is required for live verification')
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'admin-backend'))
 import db
-import module_permissions
+import order_notifications
+
+if args.expect_enabled is not None:
+    assert order_notifications.enabled() == (args.expect_enabled == 'enable'), 'Loaded notification switch does not match the requested state'
+    if args.expect_enabled == 'enable': order_notifications._secret()
+    print('Runtime notification configuration verified; signing key not disclosed.')
 
 with db._connect() as conn:
     conn.execute('SET TRANSACTION READ ONLY')
@@ -42,10 +48,8 @@ if args.http:
             assert response.status == 200 and hashlib.sha256(response.read()).hexdigest() == args.audio_sha256, 'Live audio response mismatch'
         print('Live double-phrase WAV resource verified: SHA256=' + args.audio_sha256)
 
-    def post(operation, body, token=None):
+    def post(operation, body):
         headers = {'Content-Type': 'application/json'}
-        if token:
-            headers['Authorization'] = 'Bearer ' + token
         req = request.Request('http://127.0.0.1:5302/api/admin/order-notifications/' + operation,
                               data=json.dumps(body).encode(), headers=headers, method='POST')
         try:
@@ -54,37 +58,6 @@ if args.http:
         except error.HTTPError as response:
             return response.code, {}  # No credentials, cursors or response content in diagnostics.
 
-    assert post('start', {'requestId': str(uuid.uuid4())})[0] == 401, 'Anonymous request was not rejected'
-    with db._connect() as conn:
-        conn.execute('SET TRANSACTION READ ONLY')
-        sessions = conn.execute("SELECT DISTINCT ON (u.role) s.token,u.id,u.role,u.permissions "
-                                "FROM admin_sessions s JOIN admin_users u ON u.id=s.admin_user_id "
-                                "WHERE u.status='active' AND u.role IN ('admin','sales','warehouse') "
-                                "ORDER BY u.role,s.id DESC").fetchall()
-    expected = args.expect_enabled == 'enable'
-    checked = []
-    for user in sessions:
-        if 'orders' not in module_permissions.effective(user):
-            continue
-        body = {'requestId': str(uuid.uuid4())}
-        status, start = post('start', body, user['token'])
-        assert status == 200 and start.get('enabled') is expected, 'Live start switch check failed'
-        if expected:
-            status, retry = post('start', body, user['token'])
-            assert status == 200 and retry.get('enabled'), 'Live start retry failed'
-            status, result = post('poll', {'cursor': start['cursor']}, user['token'])
-            assert status == 200 and result.get('enabled'), 'Live poll failed'
-            assert all(set(e) == {'eventId','orderId','orderNo','createdAt'} for e in result['events']), 'Non-minimal event fields'
-            if user['role'] == 'sales' and result['events']:
-                ids = [e['orderId'] for e in result['events']]
-                with db._connect() as conn:
-                    conn.execute('SET TRANSACTION READ ONLY')
-                    assert conn.execute('SELECT COUNT(*) AS n FROM orders WHERE id=ANY(%s) AND owner_admin_id=%s',
-                                        (ids,user['id'])).fetchone()['n'] == len(ids), 'Sales ownership mismatch'
-            status, valid = post('validate', {'cursor': result['cursor'], 'eventIds': []}, user['token'])
-            assert status == 200 and valid.get('events') == [], 'Live validate failed'
-            assert post('poll', {'cursor': 'invalid'}, user['token'])[0] == 409, 'Invalid cursor not rejected'
-        checked.append(user['role'])
-    assert checked, 'No existing active permitted staff session is available for live HTTP verification'
-    print('Live notification HTTP checks passed: enabled=%s roles=%s; no business writes or new sessions.'
-          % (expected, ','.join(checked)))
+    # Production acceptance does not reconstruct or reuse staff credentials.
+    assert post('start', {'requestId':str(uuid.uuid4())})[0] in {401,426}, 'Notification endpoint must reject unauthenticated requests'
+    print('Live notification anonymous boundary verified; authenticated roles are covered by isolated cookie/browser tests.')

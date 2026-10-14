@@ -35,7 +35,7 @@ def pdf_url(value):
         return ''
     parsed = urlsplit(value)
     if not (((parsed.scheme in {'http', 'https'} and parsed.netloc) or
-             (not parsed.scheme and not parsed.netloc and parsed.path.startswith('/uploads/')))
+             (not parsed.scheme and not parsed.netloc and parsed.path.startswith(('/uploads/', '/api/attachments/', '/media/products/'))))
             and parsed.path.lower().endswith('.pdf')):
         raise ValueError('附件请上传 PDF 文件')
     return value
@@ -139,6 +139,8 @@ def save(payload, template_id=None):
         db._fetch_one('''UPDATE order_customer_templates SET name=%s,store_user_id=%s,customer_info=%s,
                         revision=revision+1,updated_at=clock_timestamp() WHERE id=%s RETURNING id''',
                       (name.strip(), user_id, Jsonb(data), template_id))
+    from private_media import bind_current, attachment_urls
+    bind_current("template", template_id, attachment_urls(data))
     return detail(template_id)
 
 

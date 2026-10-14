@@ -126,7 +126,10 @@ export class OrderVoiceController {
     } catch (error) {
       if (!this.active(generation)) return;
       if (error.code === 'notification_storage') { this.fail(error); return; }
-      if (!error.status || error.status >= 500) {
+      if (error.status === 429) {
+        delay = Math.max(1000, (error.retryAfter || 5) * 1000);
+        this.emit({ status: 'reconnecting', message: '请求较多，稍后自动恢复提醒' });
+      } else if (!error.status || error.status >= 500) {
         // Failure to persist the recovery marker must stop delivery, not silently advance.
         try {
           const state = await this.storage.read(this.key);

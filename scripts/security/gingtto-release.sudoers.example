@@ -1,0 +1,6 @@
+Defaults:gingtto-deploy env_reset
+Defaults:gingtto-deploy secure_path=/usr/sbin:/usr/bin:/sbin:/bin
+# The root-owned controller has a closed grammar; no shell, script, config path,
+# migration, arbitrary systemctl target, SQL or database-restore argument exists.
+Cmnd_Alias GINGTTO_RELEASE = /usr/local/sbin/gingtto-release deploy admin admin-*, /usr/local/sbin/gingtto-release deploy store store-*, /usr/local/sbin/gingtto-release rollback admin, /usr/local/sbin/gingtto-release rollback store, /usr/local/sbin/gingtto-release status admin, /usr/local/sbin/gingtto-release status store, /usr/local/sbin/gingtto-release voice enable *, /usr/local/sbin/gingtto-release voice disable *
+gingtto-deploy ALL=(root) NOPASSWD: NOSETENV: GINGTTO_RELEASE

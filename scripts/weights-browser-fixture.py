@@ -13,13 +13,14 @@ with psycopg.connect(host='127.0.0.1',port=os.environ['PGPORT'],dbname='postgres
         management.execute(SQL('CREATE DATABASE {}').format(Identifier(name)))
 from PIL import Image
 root=Path(__file__).resolve().parents[1]
-uploads=root/'admin-backend/uploads';uploads.mkdir(exist_ok=True)
-Image.new('RGB',(160,160),'#334155').save(uploads/'fixture.jpg')
 sys.path.insert(0,str(root/'admin-backend'))
 os.environ['ORDER_VOICE_ENABLED']='0'
 import test_workbench as fixtures
 if __name__=='__main__':
     fixtures.seed()
+    uploads=fixtures.application.media.uploads['admin'];uploads.mkdir(parents=True,exist_ok=True)
+    Image.new('RGB',(160,160),'#334155').save(uploads/'fixture.jpg')
+    fixtures.fixture_file('/uploads/fixture.pdf')
     with fixtures.db.get_connection() as conn:
         conn.execute("UPDATE product_size_prices SET weight_grams=350 WHERE product_id=1 AND size_code='M'")
         conn.execute("UPDATE product_size_prices SET weight_grams=380 WHERE product_id=2 AND size_code='M'")

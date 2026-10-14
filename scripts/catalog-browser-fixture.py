@@ -10,7 +10,7 @@ import test_workbench as fixtures
 from PIL import Image, ImageDraw
 fixtures.seed()
 db=fixtures.db
-uploads=root/'admin-backend/uploads';uploads.mkdir(exist_ok=True)
+uploads=fixtures.application.media.uploads['admin'];uploads.mkdir(parents=True,exist_ok=True)
 image=Image.new('RGB',(400,400),'#f1f2f3');draw=ImageDraw.Draw(image)
 draw.polygon([(140,65),(260,65),(335,130),(290,170),(270,145),(270,330),(130,330),(130,145),(110,170),(65,130)],fill='#334155')
 image.save(uploads/'fixture.jpg')

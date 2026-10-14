@@ -85,8 +85,8 @@ def integer(value, minimum=1):
 
 def terms(value):
     if isinstance(value, str): value = value.replace('，', ',').split(',')
-    if not isinstance(value, list) or len(value) > 200 or any(not isinstance(s, str) or len(s) > 200 for s in value):
-        raise ValueError('款号筛选无效，最多 200 项')
+    if not isinstance(value, list) or len(value) > 100 or any(not isinstance(s, str) or len(s) > 200 for s in value):
+        raise ValueError('款号筛选无效，最多 100 项')
     return list(dict.fromkeys(s.strip() for s in value if s.strip()))
 
 

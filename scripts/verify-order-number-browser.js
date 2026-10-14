@@ -4,7 +4,7 @@ async (page) => {
   await page.setViewportSize({width:1920,height:1000});
   const check=(ok,text)=>{if(!ok)throw new Error(text);};
   const api=(path,method='GET',body)=>page.evaluate(async({path,method,body})=>{
-    const response=await fetch('/api/admin/'+path,{method,headers:{Authorization:'Bearer '+localStorage.getItem('lumiere-admin-token'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
+    const response=await fetch('/api/admin/'+path,{method,headers:{...(await fetch('/api/auth/csrf').then(r=>r.json()).then(d=>({'X-CSRF-Token':d.csrfToken}))),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});
     if(!response.ok)throw new Error('Fixture API '+response.status);return response.json();
   },{path,method,body});
   const secondary='PO1013-Jonathan  Vargo Élodie 张三 Very Long Customer Name-000188';

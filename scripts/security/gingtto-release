@@ -1,0 +1,4 @@
+#!/bin/sh
+# Root-owned wrapper. No caller environment reaches the privileged interpreter.
+exec /usr/bin/env -i PATH=/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 \
+  /usr/bin/python3 -I /usr/local/lib/gingtto-release/release_control.py "$@"
