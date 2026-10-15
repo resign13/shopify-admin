@@ -54,11 +54,11 @@ async (page) => {
   const matrix=draft.locator('.el-table').first();
   check(await matrix.getByRole('columnheader',{name:'小计',exact:true}).count()===0,'Subtotal column returned');
   check((await draft.getByRole('heading',{name:/订单总额/}).innerText()).includes('$162.00'),'Current price not used');
-  await draft.getByRole('button',{name:'已按最新价格更新 2 项',exact:true}).click();
+  await draft.getByRole('button',{name:'2 项与来源报价不同',exact:true}).click();
   const comparison=page.getByTestId('reorder-price-details');
   await comparison.waitFor();
   check((await comparison.innerText()).includes('$20.00 → $29.90'),'Price comparison incorrect');
-  await draft.getByRole('button',{name:'已按最新价格更新 2 项',exact:true}).click();
+  await draft.getByRole('button',{name:'2 项与来源报价不同',exact:true}).click();
   await matrix.getByRole('spinbutton').first().fill('3');
   await matrix.getByRole('spinbutton').first().press('Tab');
   await draft.getByTestId('inherited-attachments').getByRole('button',{name:'移除附件',exact:true}).last().click();
@@ -76,6 +76,10 @@ async (page) => {
   check(conflict.status()===409,'Price change did not require confirmation');
   await draft.getByText('商品价格已变化，草稿已保留，请核对最新价格后重新确认创建。',{exact:true}).waitFor();
   check(await balance()===before,'Rejected draft changed stock');
+  const refresh=page.getByRole('dialog',{name:'确认操作',exact:true});
+  await refresh.getByText('目录售价已变化。是否将列出的目录价商品更新为最新报价？手工成交价保持不变，更新后仍需再次确认提交。',{exact:true}).waitFor();
+  check((await draft.getByRole('heading',{name:/订单总额/}).innerText()).includes('$191.90'),'Conflicting catalog price was silently applied');
+  await refresh.getByRole('button',{name:'确认',exact:true}).click();
   check((await draft.getByRole('heading',{name:/订单总额/}).innerText()).includes('$195.20'),'New price not applied to draft');
   const response=await submit(); check(response.status()===200,'Reconfirmed order failed');
   const created=(await response.json()).order;
