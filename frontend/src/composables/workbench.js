@@ -22,8 +22,8 @@ export const roleNames = {
   warehouse: "仓库部",
   customer: "客户",
 };
-export const money = (value) =>
-  `$${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export const money = (value, currency = "USD") =>
+  `${currency === "CNY" ? "CNY ¥" : "$"}${Number(value || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 export const dateTime = (value) =>
   value
     ? new Date(value).toLocaleString("zh-CN", {
@@ -71,9 +71,9 @@ export async function copy(value) {
     ElMessage.info("请选中内容手动复制");
   }
 }
-export async function download(path, filename) {
+export async function download(path, filename, options = {}) {
   const response = await authenticatedFetch(`${API_BASE}/api/admin/${path}`, {
-    headers: { },
+    ...options,
   });
   if (!response.ok)
     throw new Error(

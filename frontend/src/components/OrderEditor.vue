@@ -2,7 +2,7 @@
   <component
     :is="embedded ? 'div' : ElDrawer"
     :model-value="open"
-    :title="id ? '订单详情' : sourceOrderId ? `再来一单 · 来源订单 ${sourceOrderNo || '加载中…'}` : draftId ? '订单草稿' : '新增订单'"
+    :title="id ? '订单详情' : sourceOrderId || form.sourceOrderId ? `再来一单 · 来源订单 ${sourceOrderNo || '加载中…'}` : draftId ? '订单草稿' : '新增订单'"
     size="min(900px, 100vw)"
     :before-close="close"
     :close-on-click-modal="false"
@@ -30,7 +30,7 @@
       ><ElButton @click="adoptLatest">放弃草稿，使用最新资料</ElButton>
     </section>
     <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
-    <p v-if="ready && !id && !readOnly" class="small-note" role="status">{{ draftSavedAt ? `已保存至服务器 · ${dateTime(draftSavedAt)}${dirty ? ' · 有未保存修改' : ''}` : '尚未保存为草稿；可填写一部分后点击“保存草稿”，稍后从“我的草稿”继续。' }}</p>
+    <p v-if="ready && !id && !readOnly && draftSavedAt" class="small-note" role="status">已保存至服务器 · {{ dateTime(draftSavedAt) }}{{ dirty ? ' · 有未保存修改' : '' }}</p>
     <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
       <ElFormItem label="副单号（选填）" prop="secondaryOrderNo">
         <SecondaryOrderInput v-model="form.secondaryOrderNo" />
@@ -91,9 +91,10 @@
       </div>
       <div class="panel-title section-gap">
         <h3>商品明细</h3>
+        <div class="order-product-actions"><ElButton size="small" :disabled="readOnly || saving || loading || lockedLines || !matrixRows.length" @click="pricingOpen=true" data-testid="order-unified-pricing">统一改价</ElButton>
         <ElButton :disabled="lockedLines" @click="picker = true"
           >＋ 添加商品</ElButton
-        >
+        ></div>
       </div>
       <ElAlert
         :title="
@@ -160,31 +161,40 @@
       </section>
       <div class="order-goods-summary" data-testid="order-goods-summary">
         <div class="order-amount-summary">
+          <div class="order-quote-controls">
+          <ElFormItem label="订单币种"><ElSelect :model-value="form.currency" size="default" :disabled="lockedCurrency || readOnly || saving || loading" aria-label="订单币种" @update:model-value="value=>openCurrency(value,form.exchangeRate)"><ElOption label="USD" value="USD"/><ElOption label="CNY" value="CNY"/></ElSelect></ElFormItem>
+          <ElFormItem label="本单汇率 · 1 USD = CNY"><ElInputNumber :model-value="form.exchangeRate" size="default" :disabled="lockedCurrency || readOnly || saving || loading" :precision="6" :min="0.000001" :max="9999999999.99" :controls="false" placeholder="选填汇率" aria-label="本单汇率" @change="value=>openCurrency(form.currency,value)" /></ElFormItem>
           <ElFormItem
-            label="运费（USD）"
+            :label="`运费（${form.currency}）`"
             prop="shippingFee"
             :rules="[{ validator: validateFee }]"
             ><ElInputNumber
               v-model="form.shippingFee"
+              size="default"
               :min="0"
               :precision="2"
-              controls-position="right"
+              :controls="false"
+              @change="form.shippingConversionBase=null"
           /></ElFormItem>
+          </div>
           <div class="order-amount-values">
             <div><span>商品金额</span><strong>{{ money(subtotal) }}</strong></div>
             <h3>订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}</h3>
           </div>
         </div>
+        <p v-if="form.currency==='CNY'&&!validRate(form.exchangeRate)" class="quote-notice">请填写本单汇率后确认人民币报价。</p>
+        <p v-if="willClearPayment" class="quote-notice" role="status">金额或币种已调整，保存后将清空旧付款链接，请按新报价重新填写。</p>
+        <p v-if="form.items.some(row=>row.catalogPriceChanged)" class="quote-notice">目录售价已变化，请在“统一改价”中恢复当前售价，或填写确认的成交价。</p>
         <div v-if="sourceOrderId || activeDraftId" class="reorder-pricing">
-          <span>{{ sourceOrderId ? '运费沿用原单，请在创建前核对。' : '草稿已按当前商品资料恢复，请在创建前核对金额及运费。' }}</span>
+          <span>{{ sourceOrderId || form.sourceOrderId ? '运费沿用原单，请在创建前核对。' : '草稿报价已恢复，请在创建前核对金额及运费。' }}</span>
           <ElPopover v-if="priceChanges.length" trigger="click" placement="bottom" :width="380" :popper-style="{maxWidth:'calc(100vw - 32px)'}">
-            <template #reference><ElButton link type="primary">已按最新价格更新 {{ priceChanges.length }} 项</ElButton></template>
+            <template #reference><ElButton link type="primary">{{ priceChanges.length }} 项与来源报价不同</ElButton></template>
             <div class="reorder-price-details" data-testid="reorder-price-details">
-              <strong>原单／保存时单价 → 当前单价</strong>
-              <p v-for="row in priceChanges" :key="`${row.productId}:${row.sizeCode}`">{{ row.sku }} · {{ row.sizeCode }}：{{ row.oldUnitPrices.map(money).join(' / ') }} → {{ money(row.unitPrice) }}</p>
+              <strong>原单／保存时单价 → 本单报价</strong>
+              <p v-for="row in priceChanges" :key="`${row.productId}:${row.sizeCode}`">{{ row.sku }} · {{ row.sizeCode }}：{{ row.oldUnitPrices.map(value=>formatMoney(value,row.oldPriceCurrency||form.currency)).join(' / ') }} → {{ money(row.unitPrice) }}</p>
             </div>
           </ElPopover>
-          <span v-else>商品按当前尺码价格计算。</span>
+          <span v-else>商品按本单成交价计算，可通过统一改价调整。</span>
         </div>
         <div class="order-draft-weight" data-testid="order-draft-weight">
           <div class="order-weight-heading">
@@ -223,10 +233,8 @@
             </div>
             <ElButton class="order-weight-refresh" :loading="weightLoading" :disabled="!weightItems.length" @click="refreshWeightPreview">刷新重量</ElButton>
           </div>
-          <small class="order-weight-caption">按当前商品净重计算，不含包装。</small>
         </div>
       </div>
-      <ElAlert v-if="inventoryImpact.some(row => row.after < 0)" title="保存后存在欠货，仍可提交。入库时会抵减欠货余额。" type="warning" :closable="false"/>
       <div v-if="id" class="detail-grid">
         <ElFormItem label="订单状态"
           ><ElSelect v-model="form.status"
@@ -270,7 +278,7 @@
       <ElFormItem label="PDF 附件"><small v-if="hasInheritedPdf">如需替换，请先移除上方保留的 PDF；历史附件可继续保留。</small><PdfAttachment v-else v-model="form.labelPdfUrl" @busy="pdfUploading = $event" /></ElFormItem>
       <ElAlert
         v-if="id && dirty"
-        :title="`保存前核对：商品 ${originalCount} → ${units} 件；总额 ${money(originalTotal)} → ${money(subtotal + Number(form.shippingFee || 0))}`"
+        :title="`保存前核对：商品 ${originalCount} → ${units} 件；总额 ${formatMoney(originalTotal,originalCurrency)} → ${money(subtotal + Number(form.shippingFee || 0))}`"
         type="warning"
         :closable="false"
       />
@@ -295,6 +303,8 @@
     @select="addProduct"
     @select-many="(rows) => rows.forEach(addProduct)"
   />
+  <OrderPricingDialog v-model:open="pricingOpen" :items="form.items" :products="products" :currency="form.currency" :exchange-rate="form.exchangeRate" @apply="applyPrices" />
+  <OrderCurrencyDialog v-model:open="currencyOpen" :quote="form" :target-currency="targetCurrency" :target-rate="targetRate" :existing-order="!!id" @apply="applyCurrency" />
 </template>
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
@@ -305,6 +315,9 @@ import ProductPicker from "./ProductPicker.vue";
 import SecondaryOrderInput from "./SecondaryOrderInput.vue";
 import CustomerTemplates from "./CustomerTemplates.vue";
 import PdfAttachment from "./PdfAttachment.vue";
+import OrderPricingDialog from './OrderPricingDialog.vue';
+import OrderCurrencyDialog from './OrderCurrencyDialog.vue';
+import { catalogQuote, quoteTotal, validAmount, validRate } from '../utils/orderPricing';
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
 import { useAdminAuthStore } from "../stores/auth";
@@ -317,7 +330,7 @@ import {
   useDirty,
   confirm,
   productName,
-  money,
+  money as formatMoney,
   dateTime,
   statusNames,
 } from "../composables/workbench";
@@ -331,6 +344,7 @@ const props = defineProps({
   emit = defineEmits(["update:open", "saved"]);
 const form = reactive({
   userId: null,
+  sourceOrderId: null,
   secondaryOrderNo: "",
   ownerAdminId: null,
   contactName: "",
@@ -352,14 +366,24 @@ const form = reactive({
   trackingNo: "",
   paymentLink: "",
   shippingFee: 0,
+  currency: 'USD', exchangeRate: null, shippingConversionBase: null,
   items: [],
 });
+const money=(value)=>formatMoney(value,form.currency);
+const pricingOpen=ref(false),currencyOpen=ref(false),targetCurrency=ref('USD'),targetRate=ref(null);
+const originalCurrency=ref('USD'),originalPaymentLink=ref('');
+const lockedCurrency=computed(()=>['paid','shipped','completed','cancelled'].includes(status.value));
+const willClearPayment=computed(()=>!!props.id && !!originalPaymentLink.value &&
+  (form.currency!==originalCurrency.value || subtotal.value+Number(form.shippingFee||0)!==Number(originalTotal.value)));
+function openCurrency(currency,rate){if(lockedCurrency.value||readOnly.value||saving.value)return;const next=rate==null?null:Number(rate);if(currency===form.currency&&next===form.exchangeRate)return;targetCurrency.value=currency;targetRate.value=next;currencyOpen.value=true;}
+function applyCurrency(quote){if(!lockedCurrency.value&&!readOnly.value&&!saving.value)Object.assign(form,quote);}
+function applyPrices(items){if(!lockedLines.value&&!readOnly.value&&!saving.value)form.items=items;}
 const auth = useAdminAuthStore(), salespeople = ref([]);
 const fields = customerFields;
 const originalItems = ref([]);
 const sourceOrderNo = ref(''), customerUnavailable = ref(false);
 const activeDraftId = ref(null), draftVersion = ref(''), draftKey = ref(''), draftSavedAt = ref(''), readOnly = ref(false);
-const priceChanges = computed(() => reorderPriceChanges(form.items));
+const priceChanges = computed(() => reorderPriceChanges(form.items,form.currency));
 const imageUploading = ref(false), pdfUploading = ref(false), templateBusy = ref(false);
 const uploading = computed(() => imageUploading.value || pdfUploading.value || templateBusy.value);
 const isImage = (url) =>
@@ -389,13 +413,7 @@ const { dirty, markClean, canLeave } = useDirty(() => form),
   ),
   subtotal = computed(
     () =>
-      form.items.reduce(
-        (sum, row) =>
-          sum +
-          Math.round(Number(row.unitPrice || 0) * 100) *
-            Number(row.quantity || 0),
-        0,
-      ) / 100,
+      quoteTotal(form.items),
   ),
   units = computed(() =>
     form.items.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
@@ -486,9 +504,7 @@ function lineFor(row, sizeCode) {
 function priceFor(row, sizeCode) {
   const line = lineFor(row, sizeCode);
   if (line) return Number(line.unitPrice || 0);
-  return Number(
-    products[row.productId]?.sizePrices?.find((item) => item.sizeCode === sizeCode)?.price || 0,
-  );
+  return catalogQuote(products[row.productId]?.sizePrices?.find(item=>item.sizeCode===sizeCode)?.price||0,form.currency,form.exchangeRate).unitPrice;
 }
 function quantityFor(row, sizeCode) {
   return Number(lineFor(row, sizeCode)?.quantity || 0);
@@ -508,6 +524,7 @@ function setMatrixQuantity(row, sizeCode, value) {
       sizeCode,
       quantity: 0,
       unitPrice: priceFor(row, sizeCode),
+      priceSource:'catalog', referencePriceUsd:products[row.productId]?.sizePrices?.find(item=>item.sizeCode===sizeCode)?.price ?? null,
     };
     form.items.push(line);
   }
@@ -564,6 +581,7 @@ async function populate(item) {
   status.value = item.status;
   originalCount.value = item.itemCount;
   originalTotal.value = item.totalAmount;
+  originalCurrency.value=item.currency||'USD';originalPaymentLink.value=item.paymentLink||'';
   Object.assign(
     form,
     Object.fromEntries(
@@ -576,7 +594,9 @@ async function populate(item) {
       labelImageUrls: [], labelPdfUrl: '',
       inheritedAttachmentUrls: [...new Set([...(item.labelImageUrls || []), item.labelPdfUrl].filter(Boolean))],
       pendingItems: [], ownerConfirmed: true,
-      items: item.items.map((row) => ({ ...row })),
+      sourceOrderId: null,
+      currency:item.currency||'USD', exchangeRate:item.exchangeRate==null?null:Number(item.exchangeRate),shippingConversionBase:null,
+      items: item.items.map((row) => ({ ...row, preserveQuote:true })),
     },
   );
   if (!customers.value.some((c) => c.id === item.userId))
@@ -600,6 +620,7 @@ watch(
   () => [props.open, props.id, props.sourceOrderId, props.draftId],
   async ([open, id, sourceId, savedId]) => {
     const current = ++serial;
+    pricingOpen.value=false;currencyOpen.value=false;
     if (!open) { ++customerSerial; return; }
     loading.value = true;
     ready.value = false;
@@ -626,8 +647,11 @@ watch(
         if (current !== serial) return;
         await populate(item);
       } else {
+        const pricing=await api('orders/pricing-settings');
+        if(current!==serial)return;
         Object.assign(form, {
           userId: null,
+          sourceOrderId: null,
           secondaryOrderNo: "",
           ownerAdminId: null,
           contactName: "",
@@ -647,9 +671,11 @@ watch(
           trackingNo: "",
           paymentLink: "",
           shippingFee: 0,
+          currency:'USD',exchangeRate:pricing.exchangeRate==null?null:Number(pricing.exchangeRate),shippingConversionBase:null,
           items: [],
         });
         originalItems.value = [];
+        originalCurrency.value='USD';originalPaymentLink.value='';originalTotal.value=0;originalCount.value=0;
         status.value = "pending_payment";
         requestId.value = crypto.randomUUID();
         markClean();
@@ -704,6 +730,7 @@ async function applyTemplate(item) {
   ElMessage.success(`已填入客户模板：${item.name}`);
 }
 function addProduct(product) {
+  if(form.currency==='CNY'&&!validRate(form.exchangeRate)){ElMessage.warning('请先填写本单汇率');return;}
   if (!product.sizePrices?.length) {
     ElMessage.warning("该商品尚未配置尺码");
     return;
@@ -732,7 +759,7 @@ function addProduct(product) {
       sku: product.sku,
       sizeCode: size.sizeCode,
       quantity: 0,
-      unitPrice: Number(size.price || 0),
+      ...catalogQuote(size.price||0,form.currency,form.exchangeRate),
     })),
   );
   ElMessage.success(
@@ -743,7 +770,7 @@ function selectSize(row) {
   const size = products[row.productId]?.sizePrices.find(
     (s) => s.sizeCode === row.sizeCode,
   );
-  if (size) row.unitPrice = size.price;
+  if (size) Object.assign(row,catalogQuote(size.price,form.currency,form.exchangeRate));
 }
 function validateFee(_r, value, callback) {
   callback(
@@ -779,13 +806,14 @@ async function submit() {
     error.value = '请先处理异常商品并确认业务员归属';
     return;
   }
+  if((form.currency==='CNY'&&!validRate(form.exchangeRate))||(form.exchangeRate!=null&&!validRate(form.exchangeRate))){error.value='请填写有效本单汇率，最多六位小数';return;}
   const invalidRow = form.items.find(
     (r) =>
       !Number.isInteger(r.quantity) ||
       r.quantity < 0 ||
       typeof r.unitPrice !== "number" ||
       !Number.isFinite(r.unitPrice) ||
-      r.unitPrice < 0,
+      !validAmount(r.unitPrice),
   );
   const items = form.items.filter((r) => r.quantity > 0);
   if (invalidRow || !items.length) {
@@ -801,7 +829,7 @@ async function submit() {
   }
   if (
     !(await confirm(
-      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}。${props.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}保存后同步调整现货库存。`,
+      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}（${form.currency}）。${props.id ? `原总额 ${formatMoney(originalTotal.value,originalCurrency.value)}。` : ''}${status.value==='paid'?'已付款订单改价，请核对补款或退款；付款状态不自动改变。':''}${willClearPayment.value?'保存后清空旧付款链接。':''}${props.sourceOrderId || form.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}库存仅按商品数量差额调整。`,
     ))
   )
     return;
@@ -813,11 +841,12 @@ async function submit() {
       ...(props.sourceOrderId ? { sourceOrderId: props.sourceOrderId } : {}),
       ...(activeDraftId.value ? {draftId:activeDraftId.value, draftVersion:draftVersion.value} : {}),
       ownerAdminId: auth.canAssignOrderOwner ? (form.ownerAdminId || null) : auth.user.id,
-      items: items.map(({ productId, sizeCode, quantity, unitPrice }) => ({
+      items: items.map(({ productId, sizeCode, quantity, unitPrice, priceSource, referencePriceUsd }) => ({
         productId,
         sizeCode,
         quantity,
         unitPrice,
+        priceSource,referencePriceUsd,
       })),
       ...(props.id
         ? { version: version.value }
@@ -835,10 +864,9 @@ async function submit() {
   } catch (e) {
     error.value = e.message;
     if (e.data?.code === 'reorder_price_changed') {
-      applyReorderPrices(form.items, products, e.data.changes || []);
-      ElMessage.warning(e.message);
+      if(await confirm('目录售价已变化。是否将列出的目录价商品更新为最新报价？手工成交价保持不变，更新后仍需再次确认提交。')) applyReorderPrices(form.items, products, e.data.changes || []);
     }
-    conflict.value = !!props.id && e.status === 409;
+    conflict.value = !!props.id && e.status === 409 && e.data?.code !== 'reorder_price_changed';
   } finally {
     saving.value = false;
   }
@@ -849,7 +877,7 @@ async function saveDraft() {
   try {
     const result = await save(activeDraftId.value ? `orders/drafts/${activeDraftId.value}` : 'orders/drafts', {
       draftKey:draftKey.value, version:draftVersion.value, submitRequestId:requestId.value,
-      draft:{...form, sourceOrderId:props.sourceOrderId || null},
+      draft:{...form, sourceOrderId:props.sourceOrderId || form.sourceOrderId || null},
     }, activeDraftId.value ? 'PUT' : 'POST');
     activeDraftId.value = result.id; draftVersion.value = result.version;
     draftSavedAt.value = result.updatedAt; requestId.value = result.submitRequestId;
@@ -874,6 +902,13 @@ async function adoptLatest() {
 }
 </script>
 <style scoped>
+.order-product-actions{display:flex;gap:8px;align-items:center}.order-product-actions .el-button+.el-button{margin-left:0}
+.order-quote-controls{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;min-width:0}
+.order-quote-controls :deep(.el-form-item__label){height:18px;line-height:18px;padding:0;margin-bottom:8px;white-space:nowrap}
+.order-quote-controls :deep(.el-select){width:88px}
+.order-quote-controls :deep(.el-input-number){width:150px;height:32px;line-height:30px}
+.order-quote-controls :deep(.el-select__wrapper),.order-quote-controls :deep(.el-input__wrapper){min-height:32px;box-sizing:border-box;font-size:12px}
+.quote-notice{font-size:12px;color:#b45309;line-height:1.6;margin:10px 0}
 .order-size-stock { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .order-size-stock.is-shortage { color: var(--el-color-danger); }
 .order-size-stock.is-unavailable { color: #a8abb2; }
@@ -919,7 +954,6 @@ async function adoptLatest() {
 .order-weight-hint :deep(.el-icon) { margin-right: 4px; font-size: 13px; }
 .order-weight-hint:hover, .order-weight-hint:focus-visible { color: #92400e; background: #fffbeb; }
 .order-weight-refresh { flex-shrink: 0; }
-.order-weight-caption { display: block; margin-top: 4px; font-size: 12px; line-height: 1.6; }
 .order-weight-details { color: #334155; font-size: 12px; line-height: 1.6; }
 .order-weight-details > strong { font-size: 13px; font-weight: 600; }
 .order-weight-details p { margin: 6px 0 0; color: #64748b; overflow-wrap: anywhere; }

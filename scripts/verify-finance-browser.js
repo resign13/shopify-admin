@@ -61,7 +61,9 @@ async (page) => {
   const failedQuery=await response('/reports/query',()=>page.getByRole('button',{name:'查询核算',exact:true}).click());
   assert(failedQuery.status()===503,'Injected query failure');
   await page.getByText('核算读取测试失败',{exact:true}).waitFor();
-  assert(await page.locator('.finance-summary').getByText('$269.10',{exact:true}).isVisible(),'Query failure retains previous totals');
+  const nativeSales=page.locator('.finance-summary>article').first();
+  assert(await nativeSales.getByText('$269.10 USD',{exact:true}).isVisible(),'Query failure retains previous USD total');
+  assert(await nativeSales.getByText('¥0.00 CNY 原币',{exact:true}).isVisible(),'Native CNY must stay separate from USD sales');
   assert(await page.getByRole('button',{name:'导出 Excel',exact:true}).isDisabled(),'Failed new conditions cannot export old result');
   await page.getByPlaceholder('订单客户名称',{exact:true}).fill('');
   data=await query();

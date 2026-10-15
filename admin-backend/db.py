@@ -8,6 +8,8 @@ import style_catalog
 import product_weights
 import order_notification_schema
 import order_numbering
+import order_pricing
+import order_printing
 import os
 import secrets
 from contextlib import contextmanager
@@ -190,6 +192,8 @@ def _empty_bundle() -> dict[str, str]:
 
 
 def _apply_schema_migrations(cur: Any) -> None:
+    order_pricing.migrate(cur)
+    order_printing.migrate(cur)
     from workbench import migrate
     import finance
     finance.migrate(cur)
@@ -2152,6 +2156,10 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           o.id,
           o.order_no,
           o.secondary_order_no,
+          o.currency,
+          o.exchange_rate,
+          wp.printed_at AS warehouse_printed_at,
+          wp.printed_by_name AS warehouse_printed_by_name,
           o.created_at,
           o.updated_at,
           o.status,
@@ -2172,6 +2180,8 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           oi.sku,
           oi.size_code,
           oi.quantity{weight_column},
+          oi.price_source,
+          oi.reference_price_usd,
           oi.unit_price,
           oi.total_price,
           p.product_code,
@@ -2199,6 +2209,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           p.main_image_url
         FROM orders o
         JOIN store_users su ON su.id = o.store_user_id
+        LEFT JOIN order_warehouse_prints wp ON wp.order_id = o.id
         LEFT JOIN order_items oi ON oi.order_id = o.id
         LEFT JOIN products p ON p.id = oi.product_id
         {weight_join}
@@ -2225,6 +2236,11 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                 "id": order_id,
                 "orderNo": row["order_no"],
                 "secondaryOrderNo": row["secondary_order_no"] or "",
+                "currency": row.get("currency") or "USD",
+                "exchangeRate": str(row["exchange_rate"]) if row["exchange_rate"] is not None else None,
+                "warehousePrinted": row["warehouse_printed_at"] is not None,
+                "warehousePrintedAt": _iso(row["warehouse_printed_at"]) if row["warehouse_printed_at"] else None,
+                "warehousePrintedBy": row["warehouse_printed_by_name"] or "",
                 "createdAt": _iso(row["created_at"]),
                 "updatedAt": _iso(row["updated_at"]),
                 "status": row["status"],
@@ -2277,6 +2293,8 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                     "quantity": quantity,
                     "unitPrice": _num(row["unit_price"]) if row["unit_price"] is not None else 0,
                     "totalPrice": _num(row["total_price"]) if row["total_price"] is not None else 0,
+                    "priceSource": row["price_source"],
+                    "referencePriceUsd": _num(row["reference_price_usd"]) if row["reference_price_usd"] is not None else None,
                     "image": row.get("main_image_url") or "",
                 }
             )
@@ -2392,8 +2410,8 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
             )
             cur.execute(
                 """
-                INSERT INTO order_items (order_id, product_id, product_name, sku, size_code, quantity, unit_price, total_price)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO order_items (order_id, product_id, product_name, sku, size_code, quantity, unit_price, total_price, price_source, reference_price_usd)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     order_id,
@@ -2404,6 +2422,7 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
                     quantity,
                     unit_price,
                     total_price,
+                    "catalog", unit_price,
                 ),
             )
         conn.commit()
@@ -2422,7 +2441,7 @@ def update_order_status(
 ) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT status FROM orders WHERE id=%s FOR UPDATE', (order_id,))
+            cur.execute('SELECT status,total_amount,currency FROM orders WHERE id=%s FOR UPDATE', (order_id,))
             previous = cur.fetchone()
             if not previous:
                 return None
@@ -2437,6 +2456,8 @@ def update_order_status(
             subtotal_row = cur.fetchone()
             subtotal = _safe_decimal(subtotal_row["subtotal"] if subtotal_row else 0)
             next_total = subtotal + shipping_fee_decimal
+            if order_pricing.financial_changed(previous, next_total, previous['currency']):
+                payment_link = ''
             if status == "shipped":
                 cur.execute(
                     """

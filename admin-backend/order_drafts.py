@@ -10,6 +10,7 @@ from psycopg.types.json import Jsonb
 import db
 import order_reorder
 import order_numbering
+import order_pricing
 import workbench
 
 
@@ -74,6 +75,14 @@ def clean_document(payload):
     result['labelPdfUrl'] = pdf_url(payload.get('labelPdfUrl', ''))
     order_reorder.validate_attachment_uploads(result['inheritedAttachmentUrls'], result['labelImageUrls'], result['labelPdfUrl'])
     result['shippingFee'] = db._num(amount(payload.get('shippingFee') or 0, '运费'))
+    def anchor(raw,key):
+        if raw is None:return None
+        if not isinstance(raw,dict) or raw.get('currency') not in ('USD','CNY'):
+            raise ValueError('报价换算基准格式无效')
+        return {'currency':raw['currency'],key:db._num(amount(raw.get(key),'报价换算基准'))}
+    result['shippingConversionBase']=anchor(payload.get('shippingConversionBase'),'amount')
+    currency, rate = order_pricing.terms(payload, draft=True)
+    result.update(currency=currency, exchangeRate=str(rate) if rate is not None else None)
     result['ownerConfirmed'] = payload.get('ownerConfirmed', True) is True
     for field in ['items','pendingItems']:
         rows = payload.get(field, [])
@@ -91,10 +100,18 @@ def clean_document(payload):
                 item[key] = value
             item['quantity'] = db._parse_non_negative_int(row.get('quantity') or 0, '商品数量')
             item['unitPrice'] = db._num(amount(row.get('unitPrice') or 0, '商品单价'))
+            source = row.get('priceSource', 'legacy')
+            if not isinstance(source,str) or source not in {'catalog','manual','legacy'}: raise ValueError('商品价格来源无效')
+            item['priceSource'] = source
+            item['referencePriceUsd'] = db._num(amount(row['referencePriceUsd'], '参考单价')) if row.get('referencePriceUsd') is not None else None
+            item['conversionBase']=anchor(row.get('conversionBase'),'unitPrice')
             previous = row.get('oldUnitPrices', [item['unitPrice']])
             if not isinstance(previous, list) or len(previous) > 500:
                 raise ValueError('历史价格格式无效')
             item['oldUnitPrices'] = [db._num(amount(v, '历史单价')) for v in previous]
+            old_currency=row.get('oldPriceCurrency',currency)
+            if old_currency not in ('USD','CNY'):raise ValueError('历史报价币种无效')
+            item['oldPriceCurrency']=old_currency
             cleaned.append(item)
         result[field] = cleaned
     if len(result['items']) + len(result['pendingItems']) > 500:
@@ -120,7 +137,10 @@ def detail(draft_id):
     active(row)
     result = metadata(row)
     data = copy.deepcopy(row['document'])
-    data['items'], data['pendingItems'], products = order_reorder.refresh_items(data['items'] + data['pendingItems'])
+    currency, rate = order_pricing.terms(data, draft=True)
+    data.update(currency=currency, exchangeRate=str(rate) if rate is not None else None)
+    data['items'], data['pendingItems'], products = order_reorder.refresh_items(
+        data['items'] + data['pendingItems'], preserve=True, currency=currency, exchange_rate=rate)
     had_customer = bool(data['userId'])
     customer = db._fetch_one('SELECT id,name,email,company_name,status FROM store_users WHERE id=%s', (data['userId'],)) if had_customer else None
     if not customer or customer['status'] != 'active':

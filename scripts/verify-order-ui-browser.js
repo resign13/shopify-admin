@@ -71,6 +71,8 @@ async (page) => {
   await updateDraftWeight('M',350);await updateDraftWeight('L',null);
   await page.getByRole('button', {name: '＋ 新增订单', exact: true}).click();
   const editor = page.getByRole('dialog', {name: '新增订单', exact: true});
+  check(await editor.getByText('尚未保存为草稿；可填写一部分后点击“保存草稿”，稍后从“我的草稿”继续。',{exact:true}).count()===0,'Initial draft help remains');
+  check(await editor.locator('.customer-template-bar > small').count()===0,'Template help remains in the editor');
   await editor.getByRole('combobox', {name: /商城客户/}).click();
   await page.getByRole('option', {name: 'Alex Morgan · Northline Apparel', exact: true}).click();
   const contact = 'UI-QA Customer Name ' + Date.now();
@@ -99,6 +101,14 @@ async (page) => {
   check((await matrix.innerText()).includes('3 件'), 'Per-product item count removed');
   const summary = editor.locator('[data-testid="order-goods-summary"]');
   const weightSummary = summary.locator('[data-testid="order-draft-weight"]');
+  const quoteControls=summary.locator('.order-quote-controls');
+  const quoteBoxes=await quoteControls.locator('.el-form-item').evaluateAll(items=>items.map(item=>{
+    const box=item.querySelector('.el-select__wrapper,.el-input__wrapper').getBoundingClientRect();
+    return {top:box.top,height:box.height};
+  }));
+  check(quoteBoxes.length===3&&quoteBoxes.every(box=>Math.abs(box.height-32)<1&&Math.abs(box.top-quoteBoxes[0].top)<1),'Currency, FX and freight controls are not aligned at 32px');
+  check(await quoteControls.locator('.el-input-number__increase,.el-input-number__decrease').count()===0,'Freight stepper buttons remain');
+  check(await weightSummary.locator('.order-weight-caption').count()===0,'Redundant weight caption remains');
   check((await summary.innerText()).includes('$89.70'), 'Goods amount calculated incorrectly');
   check(await summary.evaluate(el => el.previousElementSibling?.classList.contains('el-table')), 'Goods amount not below matrix');
   check(await editor.getByRole('columnheader',{name:'库存核对 / SKU',exact:true}).count()===0,'Separate stock table remains');
@@ -113,6 +123,7 @@ async (page) => {
   await firstQuantity.fill(String(Math.max(0,firstStock)+3)); await firstQuantity.press('Tab');
   const shortage=editor.getByTestId(`size-stock-1-${sizes[1]}`);
   check((await shortage.innerText()).includes('欠货') && (await shortage.getAttribute('class')).includes('is-shortage'),'Shortage not highlighted');
+  check(await editor.getByText('保存后存在欠货，仍可提交。入库时会抵减欠货余额。',{exact:true}).count()===0,'Redundant shortage banner remains');
   await firstQuantity.fill('0'); await firstQuantity.press('Tab');
   check((await shortage.innerText()).includes(`库存 ${firstStock}`),'Zero quantity did not restore preview');
   await firstQuantity.fill(oldQuantity); await firstQuantity.press('Tab');
@@ -156,6 +167,9 @@ async (page) => {
   check((await missingHint().innerText()).includes('3 件未设置'), 'All-missing count incorrect');
   await page.setViewportSize({width:390,height:844});
   await weightSummary.scrollIntoViewIfNeeded(); await settleDrawer();
+  check(await quoteControls.evaluate(el=>[...el.querySelectorAll('.el-select__wrapper,.el-input-number')].every(input=>{
+    const box=input.getBoundingClientRect();return box.left>=-1&&box.right<=innerWidth+1&&Math.abs(box.height-32)<1;
+  })),'Quote controls overflow or change height on mobile');
   await page.waitForFunction(() => { const el=document.querySelector('[data-testid=order-draft-weight]'); if(!el)return false; const box=el.getBoundingClientRect(); return box.left>=-1 && box.right<=innerWidth+1 && el.scrollWidth<=el.clientWidth+1; });
   check(await weightSummary.evaluate(el=>el.getBoundingClientRect().left>=-1 &&
     el.getBoundingClientRect().right<=window.innerWidth+1 && el.scrollWidth<=el.clientWidth+1), 'Weight area overflows narrow drawer');
@@ -260,6 +274,7 @@ async (page) => {
   await warehouseDetail.getByRole('button', {name: '关闭', exact: true}).click();
   return {dateAfterOrderNo: true,oldColumnPreferences: true,customerSearch: true,
     noSizeUnitPrice: true,noProductSubtotal: true,goodsSummaryPosition: true,
+    quoteControlsAligned: true,shippingNoStepper: true,compactEditorHints: true,
     itemCountsPreserved: true,amountsAndShippingPreserved: true,draftWeightAndMissingWarning: true,
     compactWeightHint: true,missingDetailsPopover: true,unsetWeightSmallFont: true,narrowWeightSummary: true,
     currentWeightRefresh: true,weightFailureRecovery: true,completedListReopen: true,

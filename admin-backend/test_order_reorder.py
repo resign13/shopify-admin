@@ -76,6 +76,7 @@ class ReorderTest(unittest.TestCase):
         self.assertEqual(result.json['changes'][0]['unitPrice'], 35)
         self.assertEqual(self.counts(), before); self.assertEqual(self.stock()['stock'], stock)
         body['items'][0]['unitPrice'] = 35
+        body['items'][0]['referencePriceUsd'] = result.json['changes'][0]['referencePriceUsd']
         self.assertEqual(self.call('orders', 'POST', body).status_code, 200)
 
     def test_added_lines_also_use_current_prices(self):

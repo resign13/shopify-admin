@@ -1,5 +1,7 @@
 from __future__ import annotations
 import safe_excel
+import order_pricing
+import order_printing
 
 import module_permissions
 import sales_ownership
@@ -285,7 +287,7 @@ def build_dashboard_style_summary(orders: list[dict[str, Any]]) -> list[dict[str
             )
             quantity = int(item.get('quantity') or 0)
             entry['quantity'] += quantity
-            entry['totalAmount'] += float(item.get('totalPrice') or 0)
+            entry['totalAmount'] += float(order_pricing.to_usd(item.get('totalPrice'), order.get('currency','USD'),order.get('exchangeRate')))
             order_styles.add(style_code)
         for style_code in order_styles:
             summary[style_code]['orderCount'] += 1
@@ -374,7 +376,7 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
         if key not in buckets:
             continue
         item_count = int(order.get('itemCount') or 0)
-        amount = float(order.get('totalAmount') or 0)
+        amount = float(order_pricing.to_usd(order.get('totalAmount'),order.get('currency','USD'),order.get('exchangeRate')))
         buckets[key]['orderCount'] += 1
         buckets[key]['itemCount'] += item_count
         buckets[key]['totalAmount'] += amount
@@ -721,6 +723,9 @@ def build_invoice_line_items(items: list[dict[str, Any]]) -> list[dict[str, Any]
         if not isinstance(item, dict):
             continue
         description = build_invoice_item_description(item)
+        size_column = invoice_size_column(item.get('sizeCode'))
+        if not size_column:
+            description += '\nSize: ' + str(item.get('sizeCode') or 'Unspecified')
         image = str(item.get("image") or "").strip()
         unit_price = float(item.get("unitPrice") or 0)
         key = (description, image, unit_price)
@@ -736,7 +741,7 @@ def build_invoice_line_items(items: list[dict[str, Any]]) -> list[dict[str, Any]
         )
         quantity = int(item.get("quantity") or 0)
         row["quantity"] += quantity
-        column = invoice_size_column(item.get("sizeCode"))
+        column = size_column
         if column:
             row["sizes"][column] = int(row["sizes"].get(column, 0)) + quantity
     return list(grouped.values()) or [{"description": "--", "image": "", "unitPrice": 0, "sizes": {}, "quantity": 0}]
@@ -824,6 +829,8 @@ def rebuild_invoice_fixed_footer(worksheet: Any, *, footer_start_row: int) -> No
         payment_row: worksheet[f'A{payment_row}'].value or '5. Terms of payment: 100% payment for T/T sample.',
         bank_title_row: worksheet[f'A{bank_title_row}'].value or '6.Beneficiary bank information:',
     }
+    # Keep the template's bank/payment details, including their original account
+    # currency labels, for both USD and CNY invoices.
     bank_text = worksheet[f'A{bank_row}'].value
     seller_name = worksheet[f'A{seller_name_row}'].value or worksheet[f'B{seller_name_row}'].value or 'QUANZHOU CHENSHENG Trading Co., Ltd.'
     buyer_name = worksheet[f'G{seller_name_row}'].value or worksheet[f'I{seller_name_row}'].value or '=B6'
@@ -891,9 +898,24 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     if shipping_fee <= 0:
         raise ValueError("Please enter shipping fee before exporting PI")
 
+    # PI always uses the existing USD template/payment details. Convert a CNY
+    # order's saved transaction prices, not today's catalog or public FX. Round
+    # each unit price and freight to cents before the invoice quantity formulas.
+    # Work on copies: exporting never changes the order, its quotes or stock.
+    if order.get('currency') == 'CNY':
+        rate = order_pricing.decimal(order.get('exchangeRate'), '本单汇率', rate=True)
+        shipping_fee = float(order_pricing.to_usd(shipping_fee, 'CNY', rate))
+        order = {**order, 'currency': 'USD', 'shippingFee': shipping_fee, 'items': [
+            {**item, 'unitPrice': float(order_pricing.to_usd(item.get('unitPrice'), 'CNY', rate))}
+            for item in (order.get('items') or []) if isinstance(item, dict)
+        ]}
+    currency = 'USD'
     prefetch_export_images([order])
     workbook = safe_excel.trust_template(load_workbook(PROFORMA_TEMPLATE_PATH))
     worksheet = workbook["PI"] if "PI" in workbook.sheetnames else workbook.active
+    for address in ('J11','I12'):
+        if isinstance(worksheet[address].value,str):
+            worksheet[address].value = worksheet[address].value.replace('(USD)',f'({currency})')
     worksheet.sheet_view.showGridLines = False
     # The inherited PI template styles empty cells through XFC. Remove only
     # unused columns before insert_rows, which otherwise visits ~1M cells.
@@ -975,11 +997,15 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         row = item_start_row + index
         worksheet.row_dimensions[row].height = 132
         worksheet[f"A{row}"] = item.get("description") or "--"
-        safe_excel.formula(worksheet,f'H{row}',f'=SUM(C{row}:G{row})')
+        if item.get('sizes'):
+            safe_excel.formula(worksheet,f'H{row}',f'=SUM(C{row}:G{row})')
+        else:
+            worksheet[f'H{row}'] = int(item.get('quantity') or 0)
         worksheet[f"I{row}"] = float(item.get("unitPrice") or 0)
         safe_excel.formula(worksheet,f'J{row}',f'=H{row}*I{row}')
         worksheet[f"I{row}"].font = copy(worksheet[f"J{row}"].font)
         worksheet[f"I{row}"].number_format = worksheet[f"J{row}"].number_format
+        worksheet[f"I{row}"].number_format = worksheet[f"J{row}"].number_format = order_pricing.excel_format(currency)
 
         for column, quantity in (item.get("sizes") or {}).items():
             worksheet[f"{column}{row}"] = quantity
@@ -1009,9 +1035,9 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     safe_excel.formula(worksheet,f'J{total_row}',f'=J{product_total_row}+J{shipping_row}')
 
     worksheet[f"A{deposit_row}"] = "50% DEPOSITE:"
-    safe_excel.formula(worksheet,f'C{deposit_row}',f'=J{total_row}*0.5')
+    safe_excel.formula(worksheet,f'C{deposit_row}',f'=ROUND(J{total_row}*0.5,2)')
     worksheet[f"A{balance_row}"] = "50% BALANCE:"
-    safe_excel.formula(worksheet,f'C{balance_row}',f'=J{total_row}*0.5')
+    safe_excel.formula(worksheet,f'C{balance_row}',f'=ROUND(J{total_row}-C{deposit_row},2)')
 
     # Keep the moving summary/footer rows visually identical to the one-item
     # template, so Shipping Cost and the blue bank area never get squeezed.
@@ -1033,7 +1059,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     worksheet[f"C{shipping_row}"].font = invoice_body_font(worksheet)
     worksheet[f"C{shipping_row}"].alignment = Alignment(horizontal="center", vertical="center", wrap_text=False)
     for cell_ref in (f"J{product_total_row}", f"J{shipping_row}", f"J{total_row}", f"C{deposit_row}", f"C{balance_row}"):
-        worksheet[cell_ref].number_format = '$#,##0.00'
+        worksheet[cell_ref].number_format = order_pricing.excel_format(currency)
 
     # Show order-specific remarks directly below totals, before the fixed terms.
     if has_attachments:
@@ -1561,10 +1587,10 @@ def sanitize_store_user(user: dict[str, Any], *, internal: bool = False) -> dict
 def redact_order_amounts_for_warehouse(order: dict[str, Any]) -> dict[str, Any]:
     """Remove financial fields before returning an order to warehouse staff."""
     sanitized = dict(order)
-    for key in ("totalAmount", "goodsAmount", "shippingFee", "paymentLink"):
+    for key in ("totalAmount", "goodsAmount", "shippingFee", "paymentLink", "currency", "exchangeRate"):
         sanitized.pop(key, None)
     sanitized["items"] = [
-        {key: value for key, value in item.items() if key not in {"unitPrice", "totalPrice"}}
+        {key: value for key, value in item.items() if key not in {"unitPrice", "totalPrice", "priceSource", "referencePriceUsd"}}
         for item in (order.get("items") or [])
     ]
     return sanitized
@@ -2725,10 +2751,12 @@ def orders() -> Any:
     return jsonify(result)
 
 
-@app.get("/api/admin/orders/export")
+@app.route("/api/admin/orders/export", methods=["GET", "POST"])
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def export_orders() -> Any:
+    if g.current_user.get('role') == 'warehouse' and request.method != 'POST':
+        return jsonify({'code': 'warehouse_export_requires_post', 'message': '请使用订单页面的导出按钮进行仓库打单'}), 405, {'Allow': 'POST'}
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     include_images = parse_bool(request.args.get("includeImages", "1"))
     order_ids_raw = str(request.args.get("orderIds", "")).strip()
@@ -2750,18 +2778,23 @@ def export_orders() -> Any:
         orders = [redact_order_amounts_for_warehouse(order) for order in orders]
     file_stream = build_orders_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return send_file(
+    response = send_file(
         file_stream,
         as_attachment=True,
         download_name=f"orders_export_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    if request.method == 'POST':
+        order_printing.record(workbench.db, orders, g.current_user, 'export')
+    return response
 
 
-@app.get("/api/admin/orders/export-by-sheet")
+@app.route("/api/admin/orders/export-by-sheet", methods=["GET", "POST"])
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def export_orders_by_sheet() -> Any:
+    if g.current_user.get('role') == 'warehouse' and request.method != 'POST':
+        return jsonify({'code': 'warehouse_export_requires_post', 'message': '请使用订单页面的导出按钮进行仓库打单'}), 405, {'Allow': 'POST'}
     time_range = str(request.args.get("timeRange", "all")).strip() or "all"
     include_images = parse_bool(request.args.get("includeImages", "1"))
     order_ids_raw = str(request.args.get("orderIds", "")).strip()
@@ -2780,12 +2813,15 @@ def export_orders_by_sheet() -> Any:
         orders = [redact_order_amounts_for_warehouse(order) for order in orders]
     file_stream = build_orders_sheet_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return send_file(
+    response = send_file(
         file_stream,
         as_attachment=True,
         download_name=f"orders_by_sheet_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    if request.method == 'POST':
+        order_printing.record(workbench.db, orders, g.current_user, 'export-by-sheet')
+    return response
 
 
 @app.get("/api/admin/orders/<int:order_id>/invoice")
@@ -2912,6 +2948,14 @@ def serve_admin_spa(path: str) -> Any:
             return send_from_directory(ADMIN_FRONTEND_DIST, path)
         return send_from_directory(ADMIN_FRONTEND_DIST, "index.html")
     return jsonify({"message": "Admin frontend build not found"}), 404
+
+
+@app.get('/api/admin/orders/pricing-settings')
+@require_auth
+@require_roles('admin', 'sales')
+def order_pricing_settings():
+    import order_pricing
+    return jsonify(order_pricing.settings(workbench.db))
 
 
 @app.get('/api/admin/orders/customers')

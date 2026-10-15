@@ -334,7 +334,7 @@ def _report(payload, paginate=True):
     if codes: where.append(f'LOWER({style})=ANY(%s)');params.append([v.lower() for v in codes])
     rows=db._fetch_all(f'''SELECT o.id AS order_id,o.order_no,o.created_at,o.status,o.contact_name,
         o.store_user_id,su.name AS account_name,su.company_name,COALESCE(a.name,'未分配') AS salesperson,
-        o.owner_admin_id,i.id AS item_id,i.product_id,i.sku,i.size_code,i.quantity,i.unit_price,
+        o.owner_admin_id,o.currency,o.exchange_rate,i.id AS item_id,i.product_id,i.sku,i.size_code,i.quantity,i.unit_price,
         {style} AS style_code,h.cost_cny,h.effective_at AS cost_effective_at,h.is_initial
       FROM orders o JOIN order_items i ON i.order_id=o.id
       LEFT JOIN store_users su ON su.id=o.store_user_id LEFT JOIN admin_users a ON a.id=o.owner_admin_id
@@ -346,12 +346,17 @@ def _report(payload, paginate=True):
       WHERE {' AND '.join(where)} ORDER BY o.created_at DESC,o.id DESC,i.id''',params)
     groups={}; lines=[]
     for r in rows:
-        usd=r['unit_price']*r['quantity']; cny=(usd*rate).quantize(CENT,rounding=ROUND_HALF_UP)
+        original=r['unit_price']*r['quantity']
+        usd=original if r['currency']=='USD' else Decimal(0)
+        native_cny=original if r['currency']=='CNY' else Decimal(0)
+        cny=(usd*rate).quantize(CENT,rounding=ROUND_HALF_UP)+native_cny
         cost=r['cost_cny']*r['quantity'] if r['cost_cny'] is not None else None
         line={'orderId':r['order_id'],'orderNo':r['order_no'],'createdAt':db._iso(r['created_at']),
             'customerName':r['contact_name'],'accountName':r['company_name'] or r['account_name'] or '',
             'salesperson':r['salesperson'],'styleCode':r['style_code'],'sku':r['sku'],'sizeCode':r['size_code'] or '',
             'productId':r['product_id'],'quantity':r['quantity'],'salesUsd':money(usd),'salesCny':money(cny),
+            'nativeSalesCny':money(native_cny),'currency':r['currency'],'originalUnitPrice':money(r['unit_price']),
+            'originalAmount':money(original),'orderExchangeRate':str(r['exchange_rate']) if r['exchange_rate'] is not None else None,
             'unitCostCny':money(r['cost_cny']),'costCny':money(cost),'profitCny':money(cny-cost) if cost is not None else None,
             'costEffectiveAt':db._iso(r['cost_effective_at']) if r['cost_effective_at'] else None,
             'costMatch':('首次成本补算' if r['is_initial'] and r['cost_effective_at']>r['created_at'] else '下单时生效成本') if cost is not None else '未设置成本'}
@@ -362,7 +367,7 @@ def _report(payload, paginate=True):
         missing=sum(v['quantity'] for v in items if v['costCny'] is None)
         total=lambda name:sum((Decimal(v[name]) for v in items if v[name] is not None),Decimal(0))
         return {'orderCount':len({v['orderId'] for v in items}),'quantity':sum(v['quantity'] for v in items),
-            'salesUsd':money(total('salesUsd')),'salesCny':money(total('salesCny')),'knownCostCny':money(total('costCny')),
+            'salesUsd':money(total('salesUsd')),'salesCny':money(total('salesCny')),'nativeSalesCny':money(total('nativeSalesCny')),'knownCostCny':money(total('costCny')),
             'totalCostCny':None if missing else money(total('costCny')),
             'profitCny':None if missing else money(total('profitCny')),'knownProfitCny':money(total('profitCny')),'missingQuantity':missing}
     items=[]
@@ -394,10 +399,10 @@ def export(payload):
             cell.alignment=Alignment(vertical='center',wrap_text=True)
     amount=lambda v:Decimal(v) if v is not None else '待补全'
     append(summary,['GINGTTO 商品成本核算']); append(summary,['生成时间',data['generatedAt']])
-    append(summary,['口径','每款首次成本补算此前订单；后续成本按订单下单时间匹配，从保存时间起生效，不覆盖旧订单；清空期间为未设置。美元销售额按本次汇率换算；不含运费、税费及其他费用；未付款订单不代表实际回款。'])
+    append(summary,['口径','每款首次成本补算此前订单；后续成本按订单下单时间匹配，从保存时间起生效，不覆盖旧订单；清空期间为未设置。美元原币销售额按本次核算汇率逐行换算，人民币原币销售额直接计入；订单报价汇率仅作记录；不含运费、税费及其他费用；未付款订单不代表实际回款。'])
     labels={'dateFrom':'下单日期起（北京时间）','dateTo':'下单日期止（北京时间）','customerName':'客户名称关键词',
         'customerId':'商城账号','salespersonIds':'业务员','styleCodes':'款号','statuses':'订单状态','exchangeRate':'本次汇率（1 USD = CNY）',
-        'orderCount':'涉及订单数','quantity':'商品件数','salesUsd':'商品销售额 USD','salesCny':'折合销售额 CNY',
+        'nativeSalesCny':'人民币原币销售额 CNY','orderCount':'涉及订单数','quantity':'商品件数','salesUsd':'商品销售额 USD','salesCny':'折合销售额 CNY',
         'knownCostCny':'已知成本 CNY','totalCostCny':'完整成本 CNY','profitCny':'商品毛利 CNY',
         'knownProfitCny':'已设置成本部分商品毛利 CNY','missingQuantity':'缺失成本件数'}
     lookup=options(); customers={c['id']:c['name'] for c in lookup['customers']}; people={c['id']:c['name'] for c in lookup['salespeople']}
@@ -409,15 +414,15 @@ def export(payload):
         if isinstance(v,list): v='、'.join(map(str,v)) or '全部'
         append(summary,[labels[k],str(v or '全部')])
     for k,v in data['summary'].items(): append(summary,[labels[k],amount(v) if k.endswith(('Cny','Usd')) else v])
-    headers=['款号','颜色 SKU','真实尺码','订单数','件数','销售额 USD','折合销售额 CNY','成本下限 CNY','成本上限 CNY','已知成本 CNY','完整成本 CNY','商品毛利 CNY','缺失成本件数']
+    headers=['款号','颜色 SKU','真实尺码','订单数','件数','销售额 USD','折合销售额 CNY','成本下限 CNY','成本上限 CNY','已知成本 CNY','完整成本 CNY','商品毛利 CNY','缺失成本件数','人民币原币销售额 CNY']
     append(summary,headers); header_row=summary.max_row
     for r in data['items']:
-        append(summary,[r['styleCode'],r['sku'],r['sizeCode'],r['orderCount'],r['quantity'],*[amount(r[k]) for k in ('salesUsd','salesCny','minCostCny','maxCostCny','knownCostCny','totalCostCny','profitCny')],r['missingQuantity']])
+        append(summary,[r['styleCode'],r['sku'],r['sizeCode'],r['orderCount'],r['quantity'],*[amount(r[k]) for k in ('salesUsd','salesCny','minCostCny','maxCostCny','knownCostCny','totalCostCny','profitCny')],r['missingQuantity'],amount(r['nativeSalesCny'])])
     detail=book.create_sheet('订单明细');missing=book.create_sheet('成本缺失')
-    columns=[('orderNo','订单号'),('createdAt','下单时间（北京时间）'),('customerName','客户'),('accountName','商城账号'),('salesperson','业务员'),('styleCode','款号'),('sku','SKU'),('sizeCode','尺码'),('quantity','数量'),('salesUsd','销售额 USD'),('salesCny','折合销售额 CNY'),('unitCostCny','单件成本 CNY'),('costEffectiveAt','成本生效时间（北京时间）'),('costCny','成本 CNY'),('profitCny','商品毛利 CNY'),('costMatch','成本匹配方式')]
+    columns=[('orderNo','订单号'),('createdAt','下单时间（北京时间）'),('customerName','客户'),('accountName','商城账号'),('salesperson','业务员'),('styleCode','款号'),('sku','SKU'),('sizeCode','尺码'),('quantity','数量'),('salesUsd','销售额 USD'),('salesCny','折合销售额 CNY'),('unitCostCny','单件成本 CNY'),('costEffectiveAt','成本生效时间（北京时间）'),('costCny','成本 CNY'),('profitCny','商品毛利 CNY'),('costMatch','成本匹配方式'),('currency','成交币种'),('originalUnitPrice','原币单价'),('originalAmount','原币商品金额'),('nativeSalesCny','人民币原币销售额 CNY'),('orderExchangeRate','订单报价汇率（1 USD = CNY）')]
     for sheet in (detail,missing): append(sheet,[label for _,label in columns])
     for row in data['lines']:
-        vals=[amount(row[k]) if k.endswith(('Cny','Usd')) else datetime.fromisoformat(row[k]).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if k in ('createdAt','costEffectiveAt') and row[k] else row[k] for k,_ in columns]
+        vals=[amount(row[k]) if k.endswith(('Cny','Usd')) else (Decimal(row[k]) if row[k] is not None else '—') if k in ('originalUnitPrice','originalAmount','orderExchangeRate') else datetime.fromisoformat(row[k]).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if k in ('createdAt','costEffectiveAt') and row[k] else row[k] for k,_ in columns]
         append(detail,vals)
         if row['costCny'] is None: append(missing,vals)
     if missing.max_row==1: append(missing,['无缺失成本'])

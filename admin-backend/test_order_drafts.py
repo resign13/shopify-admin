@@ -113,6 +113,7 @@ class OrderDraftsTest(unittest.TestCase):
         self.assertEqual(self.call('orders/drafts',role='sales').json['total'],1)
         self.assertEqual(self.stock()['stock'],stock);self.assertEqual(self.totals(),before)
         body['items'][0]['unitPrice']=32
+        body['items'][0]['referencePriceUsd']=result.json['changes'][0]['referencePriceUsd']
         with patch('order_drafts.converted',side_effect=ValueError('fixture conversion failure')):
             self.assertEqual(self.call('orders','POST',body,'sales').status_code,400)
         self.assertEqual(self.stock()['stock'],stock);self.assertEqual(self.totals(),before)
