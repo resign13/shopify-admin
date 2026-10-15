@@ -14,5 +14,6 @@
 - Currency-switch development is retained in both repositories at local branch
   `feature/order-currency-switch-saved` (admin e7b157a, storefront 710db4d).
   The original feature/order-pricing-currency branch is retained as well.
-- This change is local only. No push, PR, merge to remote main or deployment is
-  part of this task. Automated writes require a local *_test database.
+- Release the USD-only main version through the normal reviewed CI/deployment
+  flow. Keep the currency feature branch separate. Automated writes require a
+  local *_test database; production acceptance is read-only.
