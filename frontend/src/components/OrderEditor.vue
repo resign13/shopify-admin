@@ -162,8 +162,6 @@
       <div class="order-goods-summary" data-testid="order-goods-summary">
         <div class="order-amount-summary">
           <div class="order-quote-controls">
-          <ElFormItem label="订单币种"><ElSelect :model-value="form.currency" size="default" :disabled="lockedCurrency || readOnly || saving || loading" aria-label="订单币种" @update:model-value="value=>openCurrency(value,form.exchangeRate)"><ElOption label="USD" value="USD"/><ElOption label="CNY" value="CNY"/></ElSelect></ElFormItem>
-          <ElFormItem label="本单汇率 · 1 USD = CNY"><ElInputNumber :model-value="form.exchangeRate" size="default" :disabled="lockedCurrency || readOnly || saving || loading" :precision="6" :min="0.000001" :max="9999999999.99" :controls="false" placeholder="选填汇率" aria-label="本单汇率" @change="value=>openCurrency(form.currency,value)" /></ElFormItem>
           <ElFormItem
             :label="`运费（${form.currency}）`"
             prop="shippingFee"
@@ -174,7 +172,6 @@
               :min="0"
               :precision="2"
               :controls="false"
-              @change="form.shippingConversionBase=null"
           /></ElFormItem>
           </div>
           <div class="order-amount-values">
@@ -182,8 +179,7 @@
             <h3>订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}</h3>
           </div>
         </div>
-        <p v-if="form.currency==='CNY'&&!validRate(form.exchangeRate)" class="quote-notice">请填写本单汇率后确认人民币报价。</p>
-        <p v-if="willClearPayment" class="quote-notice" role="status">金额或币种已调整，保存后将清空旧付款链接，请按新报价重新填写。</p>
+        <p v-if="willClearPayment" class="quote-notice" role="status">金额已调整，保存后将清空旧付款链接，请按新报价重新填写。</p>
         <p v-if="form.items.some(row=>row.catalogPriceChanged)" class="quote-notice">目录售价已变化，请在“统一改价”中恢复当前售价，或填写确认的成交价。</p>
         <div v-if="sourceOrderId || activeDraftId" class="reorder-pricing">
           <span>{{ sourceOrderId || form.sourceOrderId ? '运费沿用原单，请在创建前核对。' : '草稿报价已恢复，请在创建前核对金额及运费。' }}</span>
@@ -304,7 +300,6 @@
     @select-many="(rows) => rows.forEach(addProduct)"
   />
   <OrderPricingDialog v-model:open="pricingOpen" :items="form.items" :products="products" :currency="form.currency" :exchange-rate="form.exchangeRate" @apply="applyPrices" />
-  <OrderCurrencyDialog v-model:open="currencyOpen" :quote="form" :target-currency="targetCurrency" :target-rate="targetRate" :existing-order="!!id" @apply="applyCurrency" />
 </template>
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
@@ -316,8 +311,7 @@ import SecondaryOrderInput from "./SecondaryOrderInput.vue";
 import CustomerTemplates from "./CustomerTemplates.vue";
 import PdfAttachment from "./PdfAttachment.vue";
 import OrderPricingDialog from './OrderPricingDialog.vue';
-import OrderCurrencyDialog from './OrderCurrencyDialog.vue';
-import { catalogQuote, quoteTotal, validAmount, validRate } from '../utils/orderPricing';
+import { catalogQuote, quoteTotal, validAmount } from '../utils/orderPricing';
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
 import { useAdminAuthStore } from "../stores/auth";
@@ -366,17 +360,14 @@ const form = reactive({
   trackingNo: "",
   paymentLink: "",
   shippingFee: 0,
-  currency: 'USD', exchangeRate: null, shippingConversionBase: null,
+  currency: 'USD', exchangeRate: null,
   items: [],
 });
 const money=(value)=>formatMoney(value,form.currency);
-const pricingOpen=ref(false),currencyOpen=ref(false),targetCurrency=ref('USD'),targetRate=ref(null);
+const pricingOpen=ref(false);
 const originalCurrency=ref('USD'),originalPaymentLink=ref('');
-const lockedCurrency=computed(()=>['paid','shipped','completed','cancelled'].includes(status.value));
 const willClearPayment=computed(()=>!!props.id && !!originalPaymentLink.value &&
   (form.currency!==originalCurrency.value || subtotal.value+Number(form.shippingFee||0)!==Number(originalTotal.value)));
-function openCurrency(currency,rate){if(lockedCurrency.value||readOnly.value||saving.value)return;const next=rate==null?null:Number(rate);if(currency===form.currency&&next===form.exchangeRate)return;targetCurrency.value=currency;targetRate.value=next;currencyOpen.value=true;}
-function applyCurrency(quote){if(!lockedCurrency.value&&!readOnly.value&&!saving.value)Object.assign(form,quote);}
 function applyPrices(items){if(!lockedLines.value&&!readOnly.value&&!saving.value)form.items=items;}
 const auth = useAdminAuthStore(), salespeople = ref([]);
 const fields = customerFields;
@@ -595,7 +586,7 @@ async function populate(item) {
       inheritedAttachmentUrls: [...new Set([...(item.labelImageUrls || []), item.labelPdfUrl].filter(Boolean))],
       pendingItems: [], ownerConfirmed: true,
       sourceOrderId: null,
-      currency:item.currency||'USD', exchangeRate:item.exchangeRate==null?null:Number(item.exchangeRate),shippingConversionBase:null,
+      currency:item.currency||'USD', exchangeRate:item.exchangeRate==null?null:Number(item.exchangeRate),
       items: item.items.map((row) => ({ ...row, preserveQuote:true })),
     },
   );
@@ -620,7 +611,7 @@ watch(
   () => [props.open, props.id, props.sourceOrderId, props.draftId],
   async ([open, id, sourceId, savedId]) => {
     const current = ++serial;
-    pricingOpen.value=false;currencyOpen.value=false;
+    pricingOpen.value=false;
     if (!open) { ++customerSerial; return; }
     loading.value = true;
     ready.value = false;
@@ -647,8 +638,6 @@ watch(
         if (current !== serial) return;
         await populate(item);
       } else {
-        const pricing=await api('orders/pricing-settings');
-        if(current!==serial)return;
         Object.assign(form, {
           userId: null,
           sourceOrderId: null,
@@ -671,7 +660,7 @@ watch(
           trackingNo: "",
           paymentLink: "",
           shippingFee: 0,
-          currency:'USD',exchangeRate:pricing.exchangeRate==null?null:Number(pricing.exchangeRate),shippingConversionBase:null,
+          currency:'USD',exchangeRate:null,
           items: [],
         });
         originalItems.value = [];
@@ -730,7 +719,6 @@ async function applyTemplate(item) {
   ElMessage.success(`已填入客户模板：${item.name}`);
 }
 function addProduct(product) {
-  if(form.currency==='CNY'&&!validRate(form.exchangeRate)){ElMessage.warning('请先填写本单汇率');return;}
   if (!product.sizePrices?.length) {
     ElMessage.warning("该商品尚未配置尺码");
     return;
@@ -806,7 +794,6 @@ async function submit() {
     error.value = '请先处理异常商品并确认业务员归属';
     return;
   }
-  if((form.currency==='CNY'&&!validRate(form.exchangeRate))||(form.exchangeRate!=null&&!validRate(form.exchangeRate))){error.value='请填写有效本单汇率，最多六位小数';return;}
   const invalidRow = form.items.find(
     (r) =>
       !Number.isInteger(r.quantity) ||
@@ -905,7 +892,6 @@ async function adoptLatest() {
 .order-product-actions{display:flex;gap:8px;align-items:center}.order-product-actions .el-button+.el-button{margin-left:0}
 .order-quote-controls{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;min-width:0}
 .order-quote-controls :deep(.el-form-item__label){height:18px;line-height:18px;padding:0;margin-bottom:8px;white-space:nowrap}
-.order-quote-controls :deep(.el-select){width:88px}
 .order-quote-controls :deep(.el-input-number){width:150px;height:32px;line-height:30px}
 .order-quote-controls :deep(.el-select__wrapper),.order-quote-controls :deep(.el-input__wrapper){min-height:32px;box-sizing:border-box;font-size:12px}
 .quote-notice{font-size:12px;color:#b45309;line-height:1.6;margin:10px 0}

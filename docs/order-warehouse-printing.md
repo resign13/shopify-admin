@@ -2,6 +2,9 @@
 
 - A successful warehouse-role export adds a small green printer beside the main
   order number in the admin list and detail header. Hover/focus says 仓库已打单.
+- All backend accounts authorized to view an order see the same mark in its
+  list and detail, including admin, sales, warehouse and explicitly authorized
+  finance accounts. Existing ownership and module permissions still apply.
 - The mark means the export file was generated, not a physical-printer receipt.
   Only the actual authorized/filtered orders in the file are marked, across all
   export pages. Admin/sales exports do not mark orders. Previous exports are not

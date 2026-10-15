@@ -112,8 +112,7 @@ def draft(order_id):
         price = db._num(row['unit_price'])
         if price not in item['oldUnitPrices']:
             item['oldUnitPrices'].append(price)
-    currency = origin.get('currency') or 'USD'
-    exchange_rate = order_pricing.default_rate(db)
+    currency, exchange_rate = 'USD', None
     items, issues, products = refresh_items(list(grouped.values()), currency=currency, exchange_rate=exchange_rate)
     mapping = {'contactName': 'contact_name', 'phone': 'phone', 'country': 'country',
                'contactValue': 'contact_email', 'address': 'address_line1', 'apartment': 'apartment',
@@ -123,7 +122,8 @@ def draft(order_id):
     profile.update(userId=customer['id'] if customer and customer['status'] == 'active' else None,
                    secondaryOrderNo='',
                    ownerAdminId=owner['id'] if owner_valid else None,
-                   shippingFee=db._num(origin.get('shipping_fee') or 0), items=items,
+                   shippingFee=db._num(order_pricing.to_usd(origin.get('shipping_fee') or 0,
+                       origin.get('currency') or 'USD', origin.get('exchange_rate'))), items=items,
                    currency=currency, exchangeRate=str(exchange_rate) if exchange_rate is not None else None,
                    inheritedAttachmentUrls=attachments(origin), labelImageUrls=[], labelPdfUrl='')
     if g.current_user['role'] == 'sales':

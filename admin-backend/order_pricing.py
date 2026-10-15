@@ -3,7 +3,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 
 CENT = Decimal('0.01')
 MAX_AMOUNT = Decimal('9999999999.99')
-CURRENCIES = ('USD', 'CNY')
+CURRENCIES = ('USD',)
 
 
 def migrate(cur):
@@ -41,15 +41,25 @@ def decimal(value, label, *, rate=False):
 def terms(payload, old=None, *, draft=False):
     old = old or {}
     currency = payload.get('currency', old.get('currency') or 'USD')
-    if currency not in CURRENCIES:
-        raise ValueError('订单币种仅支持 USD 或 CNY')
+    # New quotes are USD only. Retain native-currency reads and frozen terms
+    # for previously saved orders so a code rollback never relabels money.
+    saved_currency = old.get('currency') or 'USD'
+    if currency != saved_currency or currency not in ('USD', 'CNY'):
+        raise ValueError('当前订单仅支持 USD 建单，已保存订单不支持切换币种')
     value = payload.get('exchangeRate', old.get('exchange_rate'))
     rate = None if value in (None, '') else decimal(value, '本单汇率', rate=True)
-    if currency == 'CNY' and rate is None and not draft:
-        raise ValueError('人民币订单必须填写本单汇率（1 USD = CNY）')
-    if old.get('status') in {'paid','shipped','completed','cancelled'}:
-        if currency != (old.get('currency') or 'USD') or rate != old.get('exchange_rate'):
-            raise ValueError('已付款、已发货、已完成或已取消订单的币种及汇率已锁定')
+    if rate != old.get('exchange_rate'):
+        raise ValueError('本单汇率编辑已移除，保留已保存订单的汇率')
+    return currency, rate
+
+
+def saved_terms(payload):
+    """Read an old draft without converting its stored amounts or terms."""
+    currency = payload.get('currency') or 'USD'
+    rate = payload.get('exchangeRate')
+    rate = None if rate in (None, '') else decimal(rate, '已保存汇率', rate=True)
+    if currency not in ('USD', 'CNY') or (currency == 'CNY' and rate is None):
+        raise ValueError('已保存报价币种或汇率无效')
     return currency, rate
 
 
@@ -83,9 +93,8 @@ def default_rate(db):
 
 
 def settings(db):
-    rate = default_rate(db)
     return {'defaultCurrency':'USD', 'currencies':list(CURRENCIES),
-            'exchangeRate':format(rate, '.6f') if rate is not None else None}
+            'exchangeRate':None}
 
 
 def financial_changed(old, total, currency):

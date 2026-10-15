@@ -137,7 +137,11 @@ def detail(draft_id):
     active(row)
     result = metadata(row)
     data = copy.deepcopy(row['document'])
-    currency, rate = order_pricing.terms(data, draft=True)
+    currency, rate = order_pricing.saved_terms(data)
+    # Old USD drafts could carry the then-current global rate for a future
+    # currency toggle. It does not price USD rows and is no longer editable.
+    if currency == 'USD':
+        rate = None
     data.update(currency=currency, exchangeRate=str(rate) if rate is not None else None)
     data['items'], data['pendingItems'], products = order_reorder.refresh_items(
         data['items'] + data['pendingItems'], preserve=True, currency=currency, exchange_rate=rate)
