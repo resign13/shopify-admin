@@ -14,7 +14,6 @@
         :label="`${item.name} · ${item.customer.companyName || item.customer.name || '客户已删除'}`"
         :disabled="!item.customerActive" />
     </ElSelect>
-    <small>管理员可查看全部模板，其他人员仅可查看自己创建的模板。仅填入客户资料、备注和附件，商品明细及金额不变。</small>
     <ElAlert v-if="optionsError" :title="optionsError" type="error" :closable="false">
       <ElButton text @click="searchOptions()">重试</ElButton>
     </ElAlert>
@@ -216,7 +215,6 @@ async function applySelected(id) {
 <style scoped>
 .customer-template-bar { padding: 16px; margin-bottom: 22px; border: 1px solid var(--el-border-color); border-radius: 8px; background: var(--el-color-primary-light-9); }
 .customer-template-bar .panel-title { margin-bottom: 12px; flex-wrap: wrap; gap: 10px; }
-.customer-template-bar small { display: block; margin-top: 8px; }
 :global(.customer-template-dialog .el-dialog__body) { max-height: calc(90vh - 120px); overflow-y: auto; }
 :global(.customer-template-dialog) .detail-grid { gap: 0 16px; }
 </style>

@@ -30,7 +30,7 @@
       ><ElButton @click="adoptLatest">放弃草稿，使用最新资料</ElButton>
     </section>
     <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
-    <p v-if="ready && !id && !readOnly" class="small-note" role="status">{{ draftSavedAt ? `已保存至服务器 · ${dateTime(draftSavedAt)}${dirty ? ' · 有未保存修改' : ''}` : '尚未保存为草稿；可填写一部分后点击“保存草稿”，稍后从“我的草稿”继续。' }}</p>
+    <p v-if="ready && !id && !readOnly && draftSavedAt" class="small-note" role="status">已保存至服务器 · {{ dateTime(draftSavedAt) }}{{ dirty ? ' · 有未保存修改' : '' }}</p>
     <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
       <ElFormItem label="副单号（选填）" prop="secondaryOrderNo">
         <SecondaryOrderInput v-model="form.secondaryOrderNo" />
@@ -162,17 +162,18 @@
       <div class="order-goods-summary" data-testid="order-goods-summary">
         <div class="order-amount-summary">
           <div class="order-quote-controls">
-          <ElFormItem label="订单币种"><ElSelect :model-value="form.currency" :disabled="lockedCurrency || readOnly || saving || loading" aria-label="订单币种" @update:model-value="value=>openCurrency(value,form.exchangeRate)"><ElOption label="USD" value="USD"/><ElOption label="CNY" value="CNY"/></ElSelect></ElFormItem>
-          <ElFormItem label="本单汇率 · 1 USD = CNY"><ElInputNumber :model-value="form.exchangeRate" :disabled="lockedCurrency || readOnly || saving || loading" :precision="6" :min="0.000001" :max="9999999999.99" :controls="false" placeholder="选填汇率" aria-label="本单汇率" @change="value=>openCurrency(form.currency,value)" /></ElFormItem>
+          <ElFormItem label="订单币种"><ElSelect :model-value="form.currency" size="default" :disabled="lockedCurrency || readOnly || saving || loading" aria-label="订单币种" @update:model-value="value=>openCurrency(value,form.exchangeRate)"><ElOption label="USD" value="USD"/><ElOption label="CNY" value="CNY"/></ElSelect></ElFormItem>
+          <ElFormItem label="本单汇率 · 1 USD = CNY"><ElInputNumber :model-value="form.exchangeRate" size="default" :disabled="lockedCurrency || readOnly || saving || loading" :precision="6" :min="0.000001" :max="9999999999.99" :controls="false" placeholder="选填汇率" aria-label="本单汇率" @change="value=>openCurrency(form.currency,value)" /></ElFormItem>
           <ElFormItem
             :label="`运费（${form.currency}）`"
             prop="shippingFee"
             :rules="[{ validator: validateFee }]"
             ><ElInputNumber
               v-model="form.shippingFee"
+              size="default"
               :min="0"
               :precision="2"
-              controls-position="right"
+              :controls="false"
               @change="form.shippingConversionBase=null"
           /></ElFormItem>
           </div>
@@ -232,10 +233,8 @@
             </div>
             <ElButton class="order-weight-refresh" :loading="weightLoading" :disabled="!weightItems.length" @click="refreshWeightPreview">刷新重量</ElButton>
           </div>
-          <small class="order-weight-caption">按当前商品净重计算，不含包装。</small>
         </div>
       </div>
-      <ElAlert v-if="inventoryImpact.some(row => row.after < 0)" title="保存后存在欠货，仍可提交。入库时会抵减欠货余额。" type="warning" :closable="false"/>
       <div v-if="id" class="detail-grid">
         <ElFormItem label="订单状态"
           ><ElSelect v-model="form.status"
@@ -903,7 +902,13 @@ async function adoptLatest() {
 }
 </script>
 <style scoped>
-.order-product-actions{display:flex;gap:8px;align-items:center}.order-product-actions .el-button+.el-button{margin-left:0}.order-quote-controls{display:flex;flex-wrap:wrap;gap:12px}.order-quote-controls :deep(.el-select){width:88px}.order-quote-controls :deep(.el-input-number){width:150px}.quote-notice{font-size:12px;color:#b45309;line-height:1.6;margin:10px 0}
+.order-product-actions{display:flex;gap:8px;align-items:center}.order-product-actions .el-button+.el-button{margin-left:0}
+.order-quote-controls{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;min-width:0}
+.order-quote-controls :deep(.el-form-item__label){height:18px;line-height:18px;padding:0;margin-bottom:8px;white-space:nowrap}
+.order-quote-controls :deep(.el-select){width:88px}
+.order-quote-controls :deep(.el-input-number){width:150px;height:32px;line-height:30px}
+.order-quote-controls :deep(.el-select__wrapper),.order-quote-controls :deep(.el-input__wrapper){min-height:32px;box-sizing:border-box;font-size:12px}
+.quote-notice{font-size:12px;color:#b45309;line-height:1.6;margin:10px 0}
 .order-size-stock { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .order-size-stock.is-shortage { color: var(--el-color-danger); }
 .order-size-stock.is-unavailable { color: #a8abb2; }
@@ -949,7 +954,6 @@ async function adoptLatest() {
 .order-weight-hint :deep(.el-icon) { margin-right: 4px; font-size: 13px; }
 .order-weight-hint:hover, .order-weight-hint:focus-visible { color: #92400e; background: #fffbeb; }
 .order-weight-refresh { flex-shrink: 0; }
-.order-weight-caption { display: block; margin-top: 4px; font-size: 12px; line-height: 1.6; }
 .order-weight-details { color: #334155; font-size: 12px; line-height: 1.6; }
 .order-weight-details > strong { font-size: 13px; font-weight: 600; }
 .order-weight-details p { margin: 6px 0 0; color: #64748b; overflow-wrap: anywhere; }
