@@ -7,7 +7,7 @@
     ><template #header="{titleId,titleClass}">
       <div :id="titleId" :class="[titleClass,'order-drawer-heading']">
         <small>订单详情</small>
-        <OrderNumber v-if="order" :value="order.orderNo" :secondary="order.secondaryOrderNo" expanded />
+        <OrderNumber v-if="order" :value="order.orderNo" :secondary="order.secondaryOrderNo" :warehouse-printed="order.warehousePrinted" expanded />
       </div>
     </template><ElSkeleton v-if="loading" :rows="10" animated /><template v-if="order">
       <OrderEditor
@@ -140,7 +140,7 @@
                   :value="value"
                   :label="label" /></ElSelect></ElFormItem
             ><ElFormItem v-if="!warehouseStatusOnly"
-              label="运费（USD）"
+              :label="`运费（${order.currency||'USD'}）`"
               prop="shippingFee"
               :rules="[{ validator: validateFee, trigger: 'blur' }]"
               ><ElInputNumber
@@ -188,7 +188,7 @@
       ><OrderOperations :order-id="order.id" :open="open" :revision="order.version" />
       </template
     ><template #footer>
-      <ElButton v-if="!editing && ['admin', 'sales'].includes(auth.userRole) && auth.can('orders')"
+      <ElButton v-if="!editing && auth.canEditOrders"
         :disabled="loading || !order || busy" type="primary" plain @click="emit('reorder', order.id)">再来一单</ElButton>
       <ElButton
         v-if="!editing && !warehouseStatusOnly"
@@ -208,6 +208,7 @@
       <ElButton
         v-if="!warehouseStatusOnly"
         :disabled="busy || !order || (fullEditing ? editor?.dirty : dirty)"
+        :title="order?.currency === 'CNY' ? '人民币订单按本单汇率换算为 USD 导出 PI' : '导出 USD PI'"
         @click="exportInvoice"
         >导出订单详情</ElButton
       >
@@ -240,7 +241,7 @@ import {
   notifyError,
   useDirty,
   statusNames,
-  money,
+  money as formatMoney,
   dateTime,
   confirm,
 } from "../composables/workbench";
@@ -250,7 +251,7 @@ const props = defineProps({ open: Boolean, id: [Number, String] }),
 const editing = ref(false),
   editor = ref();
 const fullEditing = computed(
-  () => editing.value && ["admin", "sales"].includes(auth.userRole),
+  () => editing.value && auth.canEditOrders,
 );
 const warehouseStatusOnly = computed(() => auth.userRole === "warehouse");
 const busy = computed(
@@ -270,6 +271,7 @@ const order = ref(),
   conflict = ref(false),
   latest = ref();
 const { dirty, markClean, canLeave } = useDirty(() => form);
+const money=(value)=>formatMoney(value,order.value?.currency||'USD');
 function populate(item) {
   editing.value = false;
   order.value = item;

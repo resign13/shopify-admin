@@ -3,7 +3,9 @@
     <span class="order-number-primary" :title="parts.full">
     <button v-if="clickable" class="order-number-text order-number-link" type="button" :aria-label="parts.full" @click="$emit('open')"><span class="order-number-fixed">{{ parts.prefix }}</span><span class="order-number-name">{{ parts.name }}</span><span class="order-number-fixed">{{ parts.suffix }}</span></button>
     <span v-else class="order-number-text"><span class="order-number-fixed">{{ parts.prefix }}</span><span class="order-number-name">{{ parts.name }}</span><span class="order-number-fixed">{{ parts.suffix }}</span></span>
-    </span>
+    <ElTooltip v-if="warehousePrinted" content="仓库已打单" :trigger="['hover', 'focus', 'click']" placement="top">
+      <span class="order-printed-mark" role="img" aria-label="仓库已打单" title="仓库已打单" tabindex="0"><Printer /></span>
+    </ElTooltip></span>
     <span v-if="secondary" class="order-number-secondary" :title="secondary">
       <span class="order-number-text"><span class="order-number-fixed">{{ subParts.prefix }}</span><span class="order-number-name">{{ subParts.name }}</span><span class="order-number-fixed">{{ subParts.suffix }}</span></span>
     </span>
@@ -11,8 +13,9 @@
 </template>
 <script setup>
 import { computed } from 'vue';
+import { Printer } from '@element-plus/icons-vue';
 import { orderNumberParts } from '../utils/orderNumber';
-const props = defineProps({ value: String, secondary: String, clickable: Boolean, expanded: Boolean });
+const props = defineProps({ value: String, secondary: String, clickable: Boolean, expanded: Boolean, warehousePrinted: Boolean });
 defineEmits(['open']);
 const parts = computed(() => orderNumberParts(props.value,props.expanded?Infinity:28));
 const subParts = computed(() => orderNumberParts(props.secondary,props.expanded?Infinity:28));
@@ -21,6 +24,8 @@ const subParts = computed(() => orderNumberParts(props.secondary,props.expanded?
 .order-number { display:flex; flex-direction:column; gap:3px; min-width:0; width:100%; }
 .order-number-primary,.order-number-secondary { display:flex; align-items:center; gap:6px; min-width:0; width:100%; }
 .order-number-primary { font-size:14px; font-weight:600; }
+.order-printed-mark { display:inline-flex; flex:0 0 14px; width:14px; height:14px; color:var(--el-color-success); cursor:help; }
+.order-printed-mark:focus-visible { outline:2px solid var(--el-color-primary); outline-offset:2px; border-radius:2px; }
 .order-number-secondary { color:#6b7b90; font-size:11px; font-weight:400; }
 .order-number-text { display: flex; align-items: baseline; min-width: 0; max-width: 100%; padding: 0; background: none; border: 0; font: inherit; text-align: left; }
 .order-number-link { color: var(--el-color-primary); cursor: pointer; }

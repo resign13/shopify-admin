@@ -96,15 +96,15 @@
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       ><template #orderNo="{ row }"
-        ><OrderNumber :value="row.orderNo" :secondary="row.secondaryOrderNo" clickable @open="open(row.id)" /></template
+        ><OrderNumber :value="row.orderNo" :secondary="row.secondaryOrderNo" :warehouse-printed="row.warehousePrinted" clickable @open="open(row.id)" /></template
       ><template #userName="{ row }"
         >{{ row.ownerAdminName || "未分配"
         }}<small style="display: block">{{
           row.companyName || row.userEmail
         }}</small></template
-      ><template #goodsAmount="{ row }">{{ money(row.goodsAmount) }}</template
-      ><template #shippingFee="{ row }">{{ money(row.shippingFee) }}</template
-      ><template #totalAmount="{ row }">{{ money(row.totalAmount) }}</template
+      ><template #goodsAmount="{ row }">{{ money(row.goodsAmount,row.currency) }}</template
+      ><template #shippingFee="{ row }">{{ money(row.shippingFee,row.currency) }}</template
+      ><template #totalAmount="{ row }">{{ money(row.totalAmount,row.currency) }}</template
       ><template #status="{ row }"
         ><ElDropdown
           v-if="statusOptions(row).length"
@@ -337,7 +337,8 @@ async function exportOrders(type) {
         ? { orderIds: selected.value.map((o) => o.id).join(",") }
         : {}),
     });
-    await download(`orders/${type}?${params}`, `订单-${type}.xlsx`);
+    await download(`orders/${type}?${params}`, `订单-${type}.xlsx`, { method: 'POST' });
+    if (auth.isWarehouse) await list.load();
   } catch (e) {
     notifyError(e);
   } finally {

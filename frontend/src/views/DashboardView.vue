@@ -250,7 +250,7 @@
         <ElButton @click="resetStyleFilters">重置</ElButton>
       </div>
       <p v-if="!stylePersonalScope" class="small-note calculation-note">
-        销量与金额按上方日期、国家和款号筛选，排除已取消订单，金额不含运费。现货及各库存阶段为当前数量。预计可售天数
+        销量与金额按上方日期、国家和款号筛选，排除已取消订单，金额不含运费，统一按订单保存汇率折合 USD。现货及各库存阶段为当前数量。预计可售天数
         = 当前现货 ÷ 截至 {{ appliedGlobal.dateTo }} 的近
         {{ velocityWindow }} 天日均销量（{{
           appliedGlobal.country || "全部国家"
@@ -663,7 +663,7 @@
           label="国家"
         /><ElTableColumn label="商品金额" align="right"
           ><template #default="{ row }">{{
-            money(row.goodsAmount)
+            money(row.goodsAmount,row.currency)
           }}</template></ElTableColumn
         ><ElTableColumn label="状态"
           ><template #default="{ row }"
@@ -733,9 +733,9 @@ const styleDetail = ref(null),
   selectedStyle = ref(null);
 const metrics = [
   { key: "orders", label: "有效订单数" },
-  { key: "amount", label: "商品订单金额", amount: true },
+  { key: "amount", label: "商品金额（折合 USD）", amount: true },
   { key: "units", label: "下单商品件数" },
-  { key: "average", label: "平均每单商品金额", amount: true },
+  { key: "average", label: "平均每单（折合 USD）", amount: true },
   { key: "customers", label: "下单客户数" },
 ];
 const allInventoryMetrics = [

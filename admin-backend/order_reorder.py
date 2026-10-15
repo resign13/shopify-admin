@@ -7,6 +7,7 @@ from flask import abort, g
 
 import db
 import sales_ownership
+import order_pricing
 
 
 class PriceChanged(Exception):
@@ -62,7 +63,7 @@ def current_products(ids):
     return products, prices
 
 
-def refresh_items(rows):
+def refresh_items(rows, *, preserve=False, currency='USD', exchange_rate=None):
     products, prices = current_products(sorted({r['productId'] for r in rows if r.get('productId')}))
     items, issues = [], []
     for row in rows:
@@ -77,7 +78,19 @@ def refresh_items(rows):
         else:
             item.pop('reason', None)
             item.setdefault('oldUnitPrices', [item.get('unitPrice', db._num(size['price']))])
-            items.append({**item, 'unitPrice': db._num(size['price'])})
+            current = order_pricing.catalog_price(size['price'], currency, exchange_rate) if currency == 'USD' or exchange_rate else Decimal(0)
+            # Pre-quote drafts never supported negotiated prices; retain their
+            # current-catalog restore behavior. New explicit quotes are frozen.
+            if preserve and item.get('priceSource','legacy') != 'legacy':
+                item.setdefault('priceSource', 'catalog')
+                item.setdefault('referencePriceUsd', None)
+                item['catalogPriceChanged'] = item['priceSource'] == 'catalog' and (
+                    Decimal(str(item['unitPrice'])) != current or
+                    (item['referencePriceUsd'] is not None and Decimal(str(item['referencePriceUsd'])) != size['price']))
+                items.append(item)
+            else:
+                items.append({**item, 'unitPrice': db._num(current), 'priceSource':'catalog',
+                              'referencePriceUsd':db._num(size['price'])})
     return items, issues, list(products.values())
 
 
@@ -94,12 +107,14 @@ def draft(order_id):
         # just because both IDs are NULL; retain every orphan line for review.
         group_key = key if key[0] is not None else ('deleted', row['id'])
         item = grouped.setdefault(group_key, {'productId': key[0], 'sizeCode': key[1], 'sku': row['sku'],
-            'productName': row['product_name'], 'quantity': 0, 'oldUnitPrices': []})
+            'productName': row['product_name'], 'quantity': 0, 'oldUnitPrices': [], 'oldPriceCurrency':origin.get('currency') or 'USD'})
         item['quantity'] += int(row['quantity'])
         price = db._num(row['unit_price'])
         if price not in item['oldUnitPrices']:
             item['oldUnitPrices'].append(price)
-    items, issues, products = refresh_items(list(grouped.values()))
+    currency = origin.get('currency') or 'USD'
+    exchange_rate = order_pricing.default_rate(db)
+    items, issues, products = refresh_items(list(grouped.values()), currency=currency, exchange_rate=exchange_rate)
     mapping = {'contactName': 'contact_name', 'phone': 'phone', 'country': 'country',
                'contactValue': 'contact_email', 'address': 'address_line1', 'apartment': 'apartment',
                'city': 'city', 'state': 'state', 'zip': 'postal_code', 'note': 'note'}
@@ -109,6 +124,7 @@ def draft(order_id):
                    secondaryOrderNo='',
                    ownerAdminId=owner['id'] if owner_valid else None,
                    shippingFee=db._num(origin.get('shipping_fee') or 0), items=items,
+                   currency=currency, exchangeRate=str(exchange_rate) if exchange_rate is not None else None,
                    inheritedAttachmentUrls=attachments(origin), labelImageUrls=[], labelPdfUrl='')
     if g.current_user['role'] == 'sales':
         profile['ownerAdminId'] = g.current_user['id']

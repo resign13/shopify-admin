@@ -4,6 +4,8 @@ from io import BytesIO
 import re
 import product_weights
 import order_numbering
+import order_pricing
+from decimal import Decimal
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -31,9 +33,10 @@ def group_items(items):
     groups = {}
     for item in items:
         identity = item.get('productId') or item.get('sku') or item.get('productName')
-        key = (identity, item.get('sku'), item.get('colorName'))
+        price = Decimal(str(item.get('unitPrice') or 0))
+        key = (identity, item.get('sku'), item.get('colorName'), price)
         group = groups.setdefault(key, {'sku': item.get('sku') or item.get('productName') or '--',
-            'color': item.get('colorName') or '', 'image': item.get('image') or '', 'sizes': {}})
+            'color': item.get('colorName') or '', 'image': item.get('image') or '', 'sizes': {}, 'unitPrice':price})
         if not group['image']:
             group['image'] = item.get('image') or ''
         label = size_label(item.get('sizeCode'))
@@ -104,7 +107,10 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
         start = 1 if split else cursor
         rows = group_items(order.get('items') or [])
         labels = SIZES + list(dict.fromkeys(label for row in rows for label in row['sizes'] if label not in SIZES))
-        end_col = 3 + len(labels)
+        total_col = 3 + len(labels)
+        priced = any('unitPrice' in item for item in order.get('items', []))
+        end_col = total_col + (2 if priced else 0)
+        currency = order.get('currency') or 'USD'
         # All blocks on the combined sheet share the same dimensions.
         ws.column_dimensions['A'].width = 29
         ws.column_dimensions['B'].width = 19
@@ -122,8 +128,10 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
         ws.cell(start, 1).font = Font(bold=True, size=14)
         full_line(start + 1, f"联系人：{order.get('contactName', '')}    电话：{order.get('phone', '')}    邮箱：{order.get('userEmail', '')}", 34)
         full_line(start + 2, '收货地址：' + str(order.get('shippingAddress') or ''), 42)
+        if priced:
+            full_line(start + 3, f"币种：{currency}    运费：{order.get('shippingFee', 0):,.2f}    订单总额：{order.get('totalAmount', 0):,.2f}", 26)
         header = start + 4
-        for col, label in enumerate(['型号 / 颜色 SKU', '图片', *labels, '合计 pcs'], 1):
+        for col, label in enumerate(['型号 / 颜色 SKU', '图片', *labels, '合计 pcs'] + ([f'单价 {currency}',f'商品金额 {currency}'] if priced else []), 1):
             cell = text_cell(ws, header, col, label)
             cell.fill = PatternFill('solid', fgColor='FFF36A')
             cell.font = Font(bold=True)
@@ -136,7 +144,11 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             text_cell(ws, row_no, 1, str(item['sku']) + ('\n' + item['color'] if item['color'] else ''))
             for col, label in enumerate(labels, 3):
                 ws.cell(row_no, col, item['sizes'].get(label))
-            ws.cell(row_no, end_col, sum(item['sizes'].values()))
+            count = sum(item['sizes'].values())
+            ws.cell(row_no, total_col, count)
+            if priced:
+                ws.cell(row_no, total_col+1, item['unitPrice']).number_format = order_pricing.excel_format(currency)
+                ws.cell(row_no, total_col+2, item['unitPrice']*count).number_format = order_pricing.excel_format(currency)
             for cell in ws[row_no][:end_col]:
                 cell.border = border
                 cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
@@ -153,7 +165,9 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
         text_cell(ws, row_no, 1, '总件数')
         for col, label in enumerate(labels, 3):
             ws.cell(row_no, col, sum(item['sizes'].get(label, 0) for item in rows))
-        ws.cell(row_no, end_col, sum(sum(item['sizes'].values()) for item in rows))
+        ws.cell(row_no, total_col, sum(sum(item['sizes'].values()) for item in rows))
+        if priced:
+            ws.cell(row_no, total_col+2, sum((item['unitPrice']*sum(item['sizes'].values()) for item in rows), Decimal(0))).number_format = order_pricing.excel_format(currency)
         for cell in ws[row_no][:end_col]:
             cell.font = Font(bold=True)
             cell.fill = PatternFill('solid', fgColor='F1F5F9')

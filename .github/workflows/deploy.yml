@@ -58,7 +58,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:

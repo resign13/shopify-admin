@@ -163,7 +163,7 @@ def style_performance(args):
         GROUP BY pc.style_code
       ),
       window_sales AS (
-        SELECT pc.style_code, SUM(i.quantity) AS units, SUM(i.total_price) AS amount,
+        SELECT pc.style_code, SUM(i.quantity) AS units, SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount,
                COUNT(DISTINCT o.id) AS orders, COUNT(DISTINCT o.store_user_id) AS customers,
                MAX(o.created_at) AS last_sold_at
         FROM product_catalog pc
@@ -290,7 +290,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
         GROUP BY pc.id,pc.style_code,pc.product_code,pc.sku,pc.color_name,pc.color_hex,pc.main_image_url,pc.name,pc.category_id,pc.category_sort_order
       ),
       window_sales AS (
-        SELECT pc.id, SUM(i.quantity) AS units, SUM(i.total_price) AS amount,
+        SELECT pc.id, SUM(i.quantity) AS units, SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount,
                COUNT(DISTINCT o.id) AS orders, MAX(o.created_at) AS last_sold_at
         FROM product_catalog pc JOIN order_items i ON i.product_id=pc.id JOIN orders o ON o.id=i.order_id
         WHERE {window_join}
@@ -357,7 +357,7 @@ def _style_size_rows(args, style_code: str, product_id: int | None = None):
     sql = f"""
       WITH {catalog_cte},
       window_sales AS (
-        SELECT i.product_id, i.size_code, SUM(i.quantity) AS units, SUM(i.total_price) AS amount
+        SELECT i.product_id, i.size_code, SUM(i.quantity) AS units, SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount
         FROM product_catalog pc JOIN order_items i ON i.product_id=pc.id JOIN orders o ON o.id=i.order_id
         WHERE {window_join} GROUP BY i.product_id,i.size_code
       ),
@@ -947,7 +947,7 @@ def order_where(args, status=True, owner_id=None):
 
 def order_ids(args, limit=None, offset=0, status=True, owner_id=None):
     where, params = order_where(args, status, owner_id)
-    sort = {'createdAt': 'o.created_at', 'totalAmount': 'o.total_amount', 'id': 'o.id'}.get(args.get('sort'), 'o.created_at')
+    sort = {'createdAt': 'o.created_at', 'totalAmount': "(CASE WHEN o.currency='CNY' THEN o.total_amount/o.exchange_rate ELSE o.total_amount END)", 'id': 'o.id'}.get(args.get('sort'), 'o.created_at')
     direction = 'ASC' if args.get('direction') == 'asc' else 'DESC'
     query = f'SELECT o.id FROM orders o JOIN store_users su ON su.id=o.store_user_id WHERE {where} ORDER BY {sort} {direction},o.id DESC'
     if limit is not None:
@@ -1032,18 +1032,18 @@ def dashboard(args):
             params.append(args['category'])
         base=f''' FROM orders o JOIN store_users su ON su.id=o.store_user_id JOIN order_items i ON i.order_id=o.id
                   JOIN products p ON p.id=i.product_id WHERE {where} AND o.status <> 'cancelled' {line_clause}'''
-        metrics=db._fetch_one('SELECT COUNT(DISTINCT o.id) AS orders,COUNT(DISTINCT o.store_user_id) AS customers,COALESCE(SUM(i.quantity),0) AS units,COALESCE(SUM(i.total_price),0) AS amount'+base,tuple(params))
+        metrics=db._fetch_one("SELECT COUNT(DISTINCT o.id) AS orders,COUNT(DISTINCT o.store_user_id) AS customers,COALESCE(SUM(i.quantity),0) AS units,COALESCE(SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END),0) AS amount"+base,tuple(params))
         metrics={k:float(v) if isinstance(v,Decimal) else v for k,v in metrics.items()}
         metrics['average']=round(metrics['amount']/metrics['orders'],2) if metrics['orders'] else 0
         return base,params,metrics
     base,params,metrics=period(start,end)
     _,_,previous=period(start-timedelta(days=span),start-timedelta(days=1))
-    trend=db._fetch_all("SELECT (o.created_at AT TIME ZONE 'Asia/Shanghai')::date AS day,COUNT(DISTINCT o.id) AS orders,SUM(i.total_price) AS amount"+base+' GROUP BY day ORDER BY day',tuple(params))
+    trend=db._fetch_all("SELECT (o.created_at AT TIME ZONE 'Asia/Shanghai')::date AS day,COUNT(DISTINCT o.id) AS orders,SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount"+base+' GROUP BY day ORDER BY day',tuple(params))
     indexed={row['day']:row for row in trend}
     points=[{'date':(d:=start+timedelta(days=n)).isoformat(),'orders':indexed.get(d,{}).get('orders',0),'amount':float(indexed.get(d,{}).get('amount',0))} for n in range(span)]
-    top=db._fetch_all("SELECT COALESCE(NULLIF(p.product_code,''),i.sku) AS sku,MAX(i.product_name) AS name,SUM(i.quantity) AS units,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY units DESC,sku LIMIT 10',tuple(params))
-    top_amount=db._fetch_all("SELECT COALESCE(NULLIF(p.product_code,''),i.sku) AS sku,MAX(i.product_name) AS name,SUM(i.quantity) AS units,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY amount DESC,sku LIMIT 10',tuple(params))
-    countries=db._fetch_all("SELECT COALESCE(NULLIF(o.country,''),'未填写') AS country,COUNT(DISTINCT o.id) AS orders,SUM(i.total_price) AS amount"+base+' GROUP BY 1 ORDER BY orders DESC,country',tuple(params))
+    top=db._fetch_all("SELECT COALESCE(NULLIF(p.product_code,''),i.sku) AS sku,MAX(i.product_name) AS name,SUM(i.quantity) AS units,SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount"+base+' GROUP BY 1 ORDER BY units DESC,sku LIMIT 10',tuple(params))
+    top_amount=db._fetch_all("SELECT COALESCE(NULLIF(p.product_code,''),i.sku) AS sku,MAX(i.product_name) AS name,SUM(i.quantity) AS units,SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount"+base+' GROUP BY 1 ORDER BY amount DESC,sku LIMIT 10',tuple(params))
+    countries=db._fetch_all("SELECT COALESCE(NULLIF(o.country,''),'未填写') AS country,COUNT(DISTINCT o.id) AS orders,SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount"+base+' GROUP BY 1 ORDER BY orders DESC,country',tuple(params))
     owner_clause, owner_params = sales_ownership.clause(args.get('_ownerId'))
     global_counts=db._fetch_all('SELECT status,COUNT(*) AS count FROM orders o WHERE '+owner_clause+' GROUP BY status', tuple(owner_params))
     inventory={} if args.get('_ownerId') is not None else db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COALESCE(SUM(s.defective_pending),0) AS "defectivePending",COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0))')

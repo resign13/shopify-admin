@@ -36,3 +36,13 @@ test('inherited file links never execute stored markup or scripts', () => {
       '/api/attachments/12345678-1234-1234-1234-123456789abc/content/attachment.pdf']) assert.equal(attachmentHref(url), url);
   for (const url of ['/api/attachments/bad/content/file.pdf','/api/attachments/12345678-1234-1234-1234-123456789abc/content/../file.pdf']) assert.equal(attachmentHref(url),'');
 });
+test('a resumed reorder quote keeps its source identity, native currency, manual prices and anchors',()=>{
+  const draft={sourceOrderId:5,currency:'CNY',exchangeRate:'7.200000',shippingFee:10,
+    shippingConversionBase:{currency:'USD',amount:1.39},items:[{productId:1,sizeCode:'M',quantity:2,
+      unitPrice:82,priceSource:'manual',referencePriceUsd:29.9,oldUnitPrices:[80],conversionBase:{currency:'USD',unitPrice:11.39}}]};
+  const form=reorderForm({draft,sourceOrderId:5,issues:[],ownerNeedsConfirmation:false});
+  assert.equal(form.sourceOrderId,5);assert.equal(form.currency,'CNY');assert.equal(form.exchangeRate,7.2);
+  assert.equal(form.items[0].unitPrice,82);assert.equal(form.items[0].priceSource,'manual');
+  assert.equal(form.shippingConversionBase.amount,1.39);assert.equal(form.items[0].conversionBase.unitPrice,11.39);
+  assert.equal(reorderForm({draft,issues:[]}).sourceOrderId,5);
+});

@@ -18,8 +18,9 @@ ORDER_FIELDS = {
     'owner_admin_id': 'ownerAdminId',
     'secondary_order_no': 'secondaryOrderNo',
     'shipping_fee': 'shippingFee', 'total_amount': 'totalAmount',
+    'currency': 'currency', 'exchange_rate': 'exchangeRate',
 }
-FINANCIAL_FIELDS = {'shippingFee', 'totalAmount', 'unitPrice'}
+FINANCIAL_FIELDS = {'shippingFee', 'totalAmount', 'unitPrice', 'currency', 'exchangeRate'}
 
 
 def _attachments(data):
@@ -105,7 +106,9 @@ def summarize(rows, *, hide_amounts=False):
             action = 'restore'
         else:
             action = 'status'
-    return {'id': last['id'], 'occurredAt': db._iso(last['occurred_at']),
+    currencies = {} if hide_amounts else {'beforeCurrency':(before or {}).get('currency') or 'USD',
+                                         'afterCurrency':(after or before or {}).get('currency') or 'USD'}
+    return {'id': last['id'], 'occurredAt': db._iso(last['occurred_at']), **currencies,
             'actor': {key: (first['actor'] or {}).get(key) for key in ('id', 'name', 'role')},
             'action': action, 'changes': changes}
 

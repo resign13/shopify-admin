@@ -1,6 +1,6 @@
 """Synthetic invoice export regression tests; no real order writes."""
 import unittest
-from copy import copy
+from copy import copy, deepcopy
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -252,7 +252,32 @@ class InvoiceExportTest(unittest.TestCase):
         self.assertIn('$', sheet['I13'].number_format)
         self.assertEqual(sheet['J13'].value, '=H13*I13')
         self.assertEqual(sheet['J23'].value, '=J21+J22')
-        self.assertEqual(sheet['C25'].value, '=J23*0.5')
+        self.assertEqual(sheet['C25'].value, '=ROUND(J23*0.5,2)')
+        self.assertEqual(sheet['C26'].value, '=ROUND(J23-C25,2)')
+
+    def test_cny_pi_rounds_units_and_freight_before_totals_without_mutating_order(self):
+        order = {'orderNo': 'CNY-USD-PI', 'currency': 'CNY', 'exchangeRate': '6',
+                 'shippingFee': 1, 'totalAmount': 4,
+                 'items': [{'sku': 'FIXTURE', 'sizeCode': 'M', 'quantity': 3, 'unitPrice': 1}]}
+        original = deepcopy(order)
+        with patch.object(application, 'fetch_image_bytes', return_value=None):
+            sheet = load_workbook(application.build_order_invoice_export(order)).active
+        self.assertEqual(order, original)
+        self.assertEqual(sheet['I12'].value, '(USD)')
+        self.assertEqual(sheet['I13'].value, 0.17)
+        self.assertEqual(sheet['J22'].value, 0.17)
+        self.assertEqual(sheet['D13'].value, 3)
+        self.assertEqual(sheet['J13'].value, '=H13*I13')
+        self.assertEqual(sheet['J23'].value, '=J21+J22')
+        self.assertEqual(sheet['C25'].value, '=ROUND(J23*0.5,2)')
+        self.assertEqual(sheet['C26'].value, '=ROUND(J23-C25,2)')
+        self.assertIn('USD', sheet['I13'].number_format)
+        self.assertIn('USD', sheet['J22'].number_format)
+        source = load_workbook(application.PROFORMA_TEMPLATE_PATH)['PI']
+        self.assertEqual(sheet['A35'].value, source['A29'].value)
+        for rate in (None, 0, -1, 'NaN', '7.1234567'):
+            with self.subTest(rate=rate), self.assertRaises(ValueError):
+                application.build_order_invoice_export({**order, 'exchangeRate': rate})
 
     def test_custom_terms_are_preserved_and_footer_rebuild_is_idempotent(self):
         with TemporaryDirectory() as directory:

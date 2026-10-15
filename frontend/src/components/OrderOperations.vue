@@ -22,7 +22,7 @@
           <strong>{{ operationNames[row.action] || '修改订单' }}</strong>
           <div v-for="(change, index) in row.changes" :key="index" class="history-change">
             <span v-if="change.sku" class="sku">{{ change.sku }} · {{ change.sizeCode || '无尺码' }} </span>
-            {{ operationFields[change.field] || change.field }}：{{ format(change.field, change.before) }} → {{ format(change.field, change.after) }}
+            {{ operationFields[change.field] || change.field }}：{{ format(change.field, change.before,row.beforeCurrency) }} → {{ format(change.field, change.after,row.afterCurrency) }}
             <span v-if="change.field === 'attachments' && change.before === change.after">（附件内容已更新）</span>
             <b v-if="change.delta != null" :class="change.delta < 0 ? 'negative' : 'positive'">（{{ change.delta > 0 ? '+' : '' }}{{ change.delta }}）</b>
           </div>
@@ -41,7 +41,7 @@ import { operationNames, operationFields, operationValue } from '../utils/orderO
 
 const props = defineProps({ orderId: [Number, String], open: Boolean, revision: String });
 const history = reactive({ items: [], total: 0, page: 1, loading: false, error: '' });
-const format = (field, value) => operationValue(field, value, statusNames, money);
+const format = (field, value, currency) => operationValue(field, value, statusNames, amount=>money(amount,currency));
 let controller, serial = 0;
 
 async function load() {

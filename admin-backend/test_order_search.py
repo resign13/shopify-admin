@@ -24,9 +24,9 @@ class OrderSearchTest(unittest.TestCase):
         db._fetch_one('UPDATE orders SET owner_admin_id=%s WHERE id=2 RETURNING id', (self.b,))
         db._fetch_one("UPDATE orders SET tracking_no='TRACK-ONLY-4' WHERE id=4 RETURNING id")
 
-    def call(self, query, role='admin', route='orders'):
+    def call(self, query, role='admin', route='orders', method='GET'):
         with application.app.test_client() as client:
-            return client.get('/api/admin/' + route + '?' + urlencode(query),
+            return client.open('/api/admin/' + route + '?' + urlencode(query), method=method,
                               headers={'Authorization': 'Bearer ' + self.tokens[role]})
 
     def ids(self, query, role='admin'):
@@ -84,7 +84,7 @@ class OrderSearchTest(unittest.TestCase):
                 for role, expected in [('admin', {1, 2, 3}), ('sales', {1, 3}), ('b', {2}), ('warehouse', {1, 2, 3})]:
                     query = {'keyword': 'zm4757', 'view': view, 'orderIds': '1,2,3,4', 'includeImages': '0'}
                     with patch.object(application, builder, return_value=io.BytesIO(b'fixture')) as mocked:
-                        response = self.call(query, role, route)
+                        response = self.call(query, role, route, method='POST' if role == 'warehouse' else 'GET')
                         self.assertEqual(response.status_code, 200, response.json)
                         orders = mocked.call_args.args[0]
                         self.assertEqual({row['id'] for row in orders}, expected)
@@ -142,7 +142,8 @@ class OrderSearchTest(unittest.TestCase):
                     with self.subTest(route=route, view=view, role=role), patch.object(
                         application, builder, return_value=io.BytesIO(b'fixture')
                     ) as mocked:
-                        response = self.call({'keyword': '  BUYER CONTACT ', 'view': view, 'includeImages': '0'}, role, route)
+                        response = self.call({'keyword': '  BUYER CONTACT ', 'view': view, 'includeImages': '0'}, role, route,
+                                             method='POST' if role == 'warehouse' else 'GET')
                         self.assertEqual(response.status_code, 200, response.json)
                         orders = mocked.call_args.args[0]
                         self.assertEqual({row['id'] for row in orders}, expected)

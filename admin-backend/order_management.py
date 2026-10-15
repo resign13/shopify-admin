@@ -10,6 +10,7 @@ import inventory_policy
 import sales_ownership
 import order_reorder
 import order_numbering
+import order_pricing
 
 
 def amount(value, label):
@@ -157,6 +158,7 @@ def save_order(payload, order_id=None):
     if any(not fields[key] for key in ['contactName', 'phone', 'country', 'address']):
         raise ValueError('请填写收货人、联系电话、国家及收货地址')
     shipping = amount(payload.get('shippingFee', 0), '运费')
+    currency, exchange_rate = order_pricing.terms(payload, old)
     rows = payload.get('items')
     if not isinstance(rows, list) or not 1 <= len(rows) <= 500:
         raise ValueError('订单需包含 1–500 个商品尺码行')
@@ -167,8 +169,14 @@ def save_order(payload, order_id=None):
         key = (positive(row.get('productId'), '商品编号'), str(row.get('sizeCode') or '').strip())
         if key in desired:
             raise ValueError('同一商品尺码不能重复，请合并数量')
-        desired[key] = {'quantity': positive(row.get('quantity'), '商品数量'), 'price': amount(row.get('unitPrice'), '商品单价')}
+        source = row.get('priceSource')
+        if source not in (None, 'legacy', 'catalog', 'manual'):
+            raise ValueError('商品价格来源无效')
+        desired[key] = {'quantity': positive(row.get('quantity'), '商品数量'),
+                        'price': amount(row.get('unitPrice'), '商品单价'),
+                        'source': source, 'reference': amount(row['referencePriceUsd'],'参考单价') if row.get('referencePriceUsd') is not None else None}
     previous_rows = db._fetch_all('SELECT * FROM order_items WHERE order_id=%s ORDER BY id', (order_id,)) if old else []
+    previous_map = {(r['product_id'], r['size_code'] or ''): r for r in previous_rows}
     previous_quantities = {}
     for row in previous_rows:
         key = (row['product_id'], row['size_code'] or '')
@@ -196,8 +204,27 @@ def save_order(payload, order_id=None):
             raise ValueError('原订单尺码已移除，请先恢复尺码再调整数量')
         if delta > 0 and not products[product_id]['is_active']:
             raise ValueError('已下架商品不能增加订购数量')
-        if (origin or stored_draft) and new and size:
-            order_reorder.check_price(price_changes, key, new['price'], size['price'], products[product_id]['sku'])
+        if new:
+            previous = previous_map.get(key)
+            unchanged = bool(previous and new['price'] == previous['unit_price']
+                and currency == (old.get('currency') or 'USD')
+                and exchange_rate == old.get('exchange_rate')
+                and new['source'] in (None, previous['price_source'])
+                and (new['reference'] is None or new['reference'] == previous['reference_price_usd']))
+            if unchanged:
+                new.update(source=previous['price_source'], reference=previous['reference_price_usd'])
+            else:
+                source = new['source'] or ('catalog' if origin or stored_draft else 'manual')
+                new['source'] = 'manual' if source == 'legacy' else source
+                current = size['price'] if size else products[product_id]['price']
+                if new['source'] == 'catalog':
+                    expected = order_pricing.catalog_price(current, currency, exchange_rate)
+                    reference = amount(new['reference'], '参考单价') if new['reference'] is not None else current
+                    if new['price'] != expected or reference != current:
+                        price_changes.append({'productId':product_id,'sizeCode':size_code,
+                            'sku':products[product_id]['sku'],'previousPrice':db._num(new['price']),
+                            'unitPrice':db._num(expected),'referencePriceUsd':db._num(current),'currency':currency})
+                new['reference'] = current
     if price_changes:
         raise order_reorder.PriceChanged(price_changes)
     changes = {key: previous_quantities.get(key, 0) - desired.get(key, {}).get('quantity', 0)
@@ -207,6 +234,8 @@ def save_order(payload, order_id=None):
         with db.get_connection() as conn, conn.cursor() as cur:
             inventory_policy.adjust_stock(cur, changes)
     total = amount(sum(row['quantity'] * row['price'] for row in desired.values()) + shipping, '订单总额')
+    if order_pricing.financial_changed(old, total, currency):
+        payment = ''
     address = ', '.join(fields[key] for key in ['address', 'apartment', 'city', 'state', 'zip', 'country'] if fields[key])
     if not old:
         record = db._fetch_one("INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,shipping_address,total_amount,created_by_admin_id,owner_admin_id,order_source) VALUES(%s,%s,'pending_payment',%s,%s,%s,%s,%s,%s,'backend') RETURNING id,created_at,contact_name", ('TEMP-'+uuid.uuid4().hex, user_id, fields['contactName'], fields['phone'], address, total, g.current_user['id'], owner_id))
@@ -214,9 +243,14 @@ def save_order(payload, order_id=None):
         db._fetch_one('UPDATE orders SET order_no=%s WHERE id=%s RETURNING id', (order_numbering.make_order_number(order_id, record['created_at'], record['contact_name']), order_id))
     db._fetch_one('''UPDATE orders SET store_user_id=%s,contact_name=%s,phone=%s,country=%s,contact_email=%s,
         address_line1=%s,apartment=%s,city=%s,state=%s,postal_code=%s,shipping_address=%s,note=%s,
-        shipping_fee=%s,total_amount=%s,secondary_order_no=%s,updated_at=NOW() WHERE id=%s RETURNING id''',
-        (user_id, fields['contactName'], fields['phone'], fields['country'], fields['contactValue'], fields['address'], fields['apartment'], fields['city'], fields['state'], fields['zip'], address, fields['note'], shipping, total, secondary, order_id))
-    if lines_changed:
+        shipping_fee=%s,total_amount=%s,secondary_order_no=%s,currency=%s,exchange_rate=%s,updated_at=NOW() WHERE id=%s RETURNING id''',
+        (user_id, fields['contactName'], fields['phone'], fields['country'], fields['contactValue'], fields['address'], fields['apartment'], fields['city'], fields['state'], fields['zip'], address, fields['note'], shipping, total, secondary, currency, exchange_rate, order_id))
+    metadata_changed = any((r['source'], r['reference']) !=
+        (previous_map.get(k, {}).get('price_source'), previous_map.get(k, {}).get('reference_price_usd'))
+        for k,r in desired.items())
+    if old and old['status'] in {'cancelled','shipped','completed'} and metadata_changed:
+        raise ValueError('已锁定订单的商品报价保持不变')
+    if lines_changed or metadata_changed:
         db._fetch_one('DELETE FROM order_items WHERE order_id=%s RETURNING id', (order_id,))
         previous_map = {(r['product_id'], r['size_code'] or ''): r for r in previous_rows}
         for (product_id, size), row in desired.items():
@@ -225,8 +259,8 @@ def save_order(payload, order_id=None):
             title = db._fetch_one("SELECT name FROM product_translations WHERE product_id=%s AND lang_code='zh'", (product_id,))
             name = original['product_name'] if original else (title['name'] if title else product['sku'])
             sku = original['sku'] if original else product['sku']
-            db._fetch_one('''INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price)
-                VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''', (order_id, product_id, name, sku, size, row['quantity'], row['price'], row['quantity'] * row['price']))
+            db._fetch_one('''INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price,price_source,reference_price_usd)
+                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id''', (order_id, product_id, name, sku, size, row['quantity'], row['price'], row['quantity'] * row['price'], row['source'], row['reference']))
     if not old:
         db._fetch_one('INSERT INTO admin_order_requests(request_id,actor_id,payload_hash,order_id) VALUES(%s,%s,%s,%s) RETURNING request_id', (request_id, g.current_user['id'], digest, order_id))
     if image_urls is not None:
