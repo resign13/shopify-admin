@@ -36,7 +36,7 @@ for kind in ['admin','store']:
         except psycopg.errors.InsufficientPrivilege: pass
         else: raise AssertionError('Runtime DDL succeeded')
         if kind=='store':
-            for table in ['finance_cost_history','admin_users','admin_sessions','admin_audit_logs']:
+            for table in ['finance_cost_history','finance_style_costs','finance_style_cost_audit','admin_users','admin_sessions','admin_audit_logs']:
                 try: conn.execute('SELECT 1 FROM '+table+' LIMIT 1')
                 except psycopg.errors.InsufficientPrivilege: pass
                 else: raise AssertionError('Store runtime accessed a forbidden table')
@@ -73,6 +73,13 @@ if is_store:
     assert client.get('/api/catalog/styles').status_code==200
 else:
     assert client.get('/api/admin/finance/options').status_code==200
+    costs=client.get('/api/admin/finance/costs')
+    assert costs.status_code==200,'Admin runtime cannot read style costs'
+    change={'changes':[{'styleCode':costs.json['items'][0]['styleCode'],'costCny':'10.25','version':'0'}]}
+    preview=client.post('/api/admin/finance/costs/preview',json=change,headers=headers)
+    assert preview.status_code==200,'Admin runtime cannot preview style costs'
+    saved=client.post('/api/admin/finance/costs/save',json={**change,'previewHash':preview.json['previewHash'],'requestId':str(uuid.uuid4())},headers=headers)
+    assert saved.status_code==200 and saved.json['saved']==1,'Admin runtime cannot save style costs/audit'
 print(json.dumps({'runtime':app.security.channel,'login':True,'create':True,'stock':True,'cancel':is_store}))
 '''
 for kind,directory in [('store',store),('admin',root/'admin-backend')]:

@@ -1,5 +1,4 @@
-"""Private cost timelines and read-only order-line accounting. All money is Decimal."""
-from collections import defaultdict
+"""Private style cost timelines and read-only order-time accounting (Decimal)."""
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP, localcontext
 from functools import wraps
@@ -19,6 +18,7 @@ import workbench
 TZ = timezone(timedelta(hours=8))
 STATES = ['pending_payment', 'allocated', 'paid', 'shipped', 'completed']
 CENT = Decimal('.01')
+COST_BASIS = 'style_at_order_time'
 
 
 def migrate(cur):
@@ -52,6 +52,46 @@ def migrate(cur):
       revision BIGINT NOT NULL DEFAULT 1,
       updated_by BIGINT REFERENCES admin_users(id) ON DELETE SET NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());
+    -- Keep the legacy variant timelines intact; they are not the active cost source.
+    -- No product/size FK: changing or deleting catalog rows must not erase cost history.
+    CREATE TABLE IF NOT EXISTS finance_style_costs (
+      style_code TEXT PRIMARY KEY CHECK(length(btrim(style_code)) BETWEEN 1 AND 200),
+      cost_cny NUMERIC(12,2) CHECK(cost_cny>=0), revision BIGINT NOT NULL DEFAULT 0,
+      actor JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());
+    CREATE TABLE IF NOT EXISTS finance_style_cost_audit (
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, style_code TEXT NOT NULL,
+      old_cost_cny NUMERIC(12,2), cost_cny NUMERIC(12,2), actor JSONB NOT NULL,
+      request_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      effective_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      is_initial BOOLEAN NOT NULL DEFAULT false);
+    -- Saved events are also the immutable cost timeline. Upgrade using the actual
+    -- original save time, never the migration time or the first historical order.
+    ALTER TABLE finance_style_cost_audit ADD COLUMN IF NOT EXISTS effective_at TIMESTAMPTZ;
+    UPDATE finance_style_cost_audit SET effective_at=created_at WHERE effective_at IS NULL;
+    ALTER TABLE finance_style_cost_audit ALTER COLUMN effective_at SET DEFAULT clock_timestamp();
+    ALTER TABLE finance_style_cost_audit ALTER COLUMN effective_at SET NOT NULL;
+    ALTER TABLE finance_style_cost_audit ADD COLUMN IF NOT EXISTS is_initial BOOLEAN NOT NULL DEFAULT false;
+    -- Repair a cache-only legacy record at its known timestamp, without inventing
+    -- costs for earlier orders. Normal saves always write both rows atomically.
+    INSERT INTO finance_style_cost_audit(style_code,old_cost_cny,cost_cny,actor,request_id,created_at,effective_at)
+      SELECT c.style_code,NULL,c.cost_cny,c.actor,md5('finance-style-baseline:'||c.style_code)::uuid,c.updated_at,c.updated_at
+      FROM finance_style_costs c WHERE NOT EXISTS (
+        SELECT 1 FROM finance_style_cost_audit a WHERE a.style_code=c.style_code);
+    -- The first actual amount (including explicit zero) is the historical
+    -- baseline. Clears before any amount do not count as a first cost.
+    WITH initial AS (
+      SELECT DISTINCT ON (a.style_code) a.id FROM finance_style_cost_audit a
+      WHERE a.cost_cny IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM finance_style_cost_audit b WHERE b.style_code=a.style_code AND b.is_initial)
+      ORDER BY a.style_code,a.effective_at,a.id)
+    UPDATE finance_style_cost_audit a SET is_initial=true FROM initial i WHERE a.id=i.id;
+    CREATE UNIQUE INDEX IF NOT EXISTS finance_style_cost_audit_initial
+      ON finance_style_cost_audit(style_code) WHERE is_initial;
+    CREATE INDEX IF NOT EXISTS finance_style_cost_audit_style
+      ON finance_style_cost_audit(style_code,id DESC);
+    CREATE INDEX IF NOT EXISTS finance_style_cost_audit_timeline
+      ON finance_style_cost_audit(style_code,effective_at DESC,id DESC);
     ''')
 
 
@@ -128,119 +168,116 @@ def options():
 
 
 def costs(args):
-    effective = day(args.get('effectiveDate'))
-    page = integer(args.get('page', 1)); size = integer(args.get('pageSize', 12))
-    if size not in (12, 24, 48): raise ValueError('每页请选择 12、24 或 48 款')
-    rows = db._fetch_all(f'''SELECT p.id,p.sku,p.color_name,p.is_active,p.main_image_url,
-        {style_catalog.style_sql()} AS style_code,c.category_key,
-        COALESCE(t.name,p.sku) AS name,s.size_code,s.sort_order,h.cost_cny,h.effective_date,
-        COALESCE(v.revision,0) AS revision
-      FROM products p JOIN product_categories c ON c.id=p.category_id
-      LEFT JOIN product_translations t ON t.product_id=p.id AND t.lang_code='zh'
-      JOIN product_size_prices s ON s.product_id=p.id
-      LEFT JOIN finance_cost_versions v ON v.product_id=p.id AND v.size_code=s.size_code
-      LEFT JOIN LATERAL (SELECT cost_cny,effective_date FROM finance_cost_history h
-        WHERE h.product_id=p.id AND h.size_code=s.size_code AND h.effective_date<=%s
-        ORDER BY effective_date DESC LIMIT 1) h ON true ORDER BY p.id,s.sort_order,s.size_code''', (effective,))
-    groups = {}
-    for r in rows:
-        group = groups.setdefault(r['style_code'], {'styleCode':r['style_code'],'name':r['name'],'variants':{},'sizes':[]})
-        variant = group['variants'].setdefault(r['id'], {'id':r['id'],'sku':r['sku'],'color':r['color_name'],
-            'image':r['main_image_url'],'active':r['is_active'],'category':r['category_key'],'sizes':[]})
-        variant['sizes'].append({'sizeCode':r['size_code'],'costCny':money(r['cost_cny']),
-            'effectiveDate':str(r['effective_date']) if r['effective_date'] else None,'version':str(r['revision'])})
-        if r['size_code'] not in group['sizes']: group['sizes'].append(r['size_code'])
-    codes = {s.casefold() for s in terms(args.get('styleCodes', ''))}
-    keyword = str(args.get('keyword', '')).strip().casefold()
-    result = []
-    for group in groups.values():
-        variants = list(group['variants'].values()); group['variants'] = variants
-        if codes and group['styleCode'].casefold() not in codes: continue
-        if args.get('category') and not any(v['category']==args['category'] for v in variants): continue
-        if keyword and keyword not in ' '.join([group['styleCode'], *[v['sku']+' '+v['color'] for v in variants]]).casefold(): continue
-        if str(args.get('missingOnly','')).lower() in ('1','true') and not any(s['costCny'] is None for v in variants for s in v['sizes']): continue
-        result.append(group)
-    result.sort(key=lambda r:r['styleCode'])
-    return {'items':result[(page-1)*size:page*size], 'total':len(result),'page':page,'pageSize':size,'effectiveDate':str(effective)}
+    page=integer(args.get('page',1)); size=integer(args.get('pageSize',20))
+    if size not in (12,20,24,48): raise ValueError('每页请选择 12、20、24 或 48 款')
+    codes=terms(args.get('styleCodes',''))
+    keyword=str(args.get('keyword','')).strip()
+    if len(keyword)>200:raise ValueError('查询关键字最多 200 字符')
+    where=[];params=[]
+    if codes:where.append('lower(p.style_code)=ANY(%s)');params.append([c.lower() for c in codes])
+    if keyword:
+        where.append('EXISTS(SELECT 1 FROM catalog k WHERE k.style_code=p.style_code AND (k.sku ILIKE %s OR k.color_name ILIKE %s OR k.style_code ILIKE %s))')
+        params.extend(['%'+keyword+'%']*3)
+    if args.get('category'):
+        where.append('EXISTS(SELECT 1 FROM catalog k WHERE k.style_code=p.style_code AND k.category_key=%s)');params.append(args['category'])
+    if str(args.get('missingOnly','')).lower() in ('1','true'):where.append('c.cost_cny IS NULL')
+    # Filter and page whole styles in SQL. No title, image, color/size matrix or N+1.
+    source=f"""WITH catalog AS (SELECT {style_catalog.style_sql()} AS style_code,p.sku,p.color_name,c.category_key
+        FROM products p JOIN product_categories c ON c.id=p.category_id),
+      styles AS (SELECT DISTINCT style_code FROM catalog)
+      SELECT p.style_code,c.cost_cny,COALESCE(c.revision,0) AS revision,c.updated_at
+      FROM styles p LEFT JOIN finance_style_costs c ON c.style_code=p.style_code"""
+    if where:source+=' WHERE '+' AND '.join(where)
+    total=db._fetch_one('SELECT count(*) AS n FROM ('+source+') q',params)['n']
+    rows=db._fetch_all(source+' ORDER BY p.style_code LIMIT %s OFFSET %s',(*params,size,(page-1)*size))
+    return {'items':[{'styleCode':r['style_code'],'costCny':money(r['cost_cny']),
+        'version':str(r['revision']),'updatedAt':db._iso(r['updated_at']) if r['updated_at'] else None} for r in rows],
+        'total':total,'page':page,'pageSize':size,'costBasis':COST_BASIS}
 
 
 def normalized(payload):
-    if not isinstance(payload, dict): raise ValueError('请求格式无效')
-    effective = day(payload.get('effectiveDate'))
-    changes = payload.get('changes')
-    if not isinstance(changes, list) or not 1 <= len(changes) <= 2000: raise ValueError('每次保存 1–2000 个尺码成本')
-    result = []; seen = set()
+    if not isinstance(payload,dict):raise ValueError('请求格式无效')
+    if any(key in payload for key in ('effectiveDate','effectiveAt')):
+        raise ValueError('整款成本从服务端保存时间起生效，请刷新页面后保存')
+    changes=payload.get('changes')
+    if not isinstance(changes,list) or not 1<=len(changes)<=2000:raise ValueError('每次保存 1–2000 个款号成本')
+    result=[];seen=set()
     for row in changes:
-        if not isinstance(row, dict): raise ValueError('成本格式无效')
-        pid = integer(row.get('productId')); size = row.get('sizeCode')
-        if not isinstance(size, str) or not size.strip() or len(size)>200: raise ValueError('尺码无效')
-        if (pid,size) in seen: raise ValueError('同一商品尺码重复')
-        seen.add((pid,size))
+        if not isinstance(row,dict):raise ValueError('成本格式无效')
+        code=row.get('styleCode')
+        if not isinstance(code,str) or not code.strip() or len(code)>200 or '\x00' in code:raise ValueError('请选择有效款号')
+        code=code.strip()
+        if 'productId' in row or 'sizeCode' in row:raise ValueError('成本不再区分颜色尺码，请刷新页面后保存')
+        if 'effectiveDate' in row or 'effectiveAt' in row:
+            raise ValueError('成本生效时间由服务端确定，不接受自定义时间')
+        if code in seen:raise ValueError('同一款号重复')
+        seen.add(code)
         if 'costCny' not in row:raise ValueError('缺少成本字段；填写金额或显式传入 null 清空')
         cost=None if row['costCny'] is None else money(number(row['costCny']))
-        result.append({'productId':pid,'sizeCode':size,'costCny':cost,
-            'version':str(integer(row.get('version'),0))})
-    return effective, sorted(result,key=lambda r:(r['productId'],r['sizeCode']))
+        result.append({'styleCode':code,'costCny':cost,'version':str(integer(row.get('version'),0))})
+    return sorted(result,key=lambda r:r['styleCode'])
 
 
-def preview(payload, lock=False):
-    effective, changes = normalized(payload)
-    ids = sorted({r['productId'] for r in changes})
-    products = {r['id']:r for r in db._fetch_all(f'SELECT p.id,p.sku,{style_catalog.style_sql()} AS style_code FROM products p WHERE p.id=ANY(%s) ORDER BY p.id'+(' FOR SHARE' if lock else ''),(ids,))}
-    sizes = {(r['product_id'],r['size_code']) for r in db._fetch_all('SELECT product_id,size_code FROM product_size_prices WHERE product_id=ANY(%s) ORDER BY product_id,size_code'+(' FOR SHARE' if lock else ''),(ids,))}
+def preview(payload,lock=False):
+    changes=normalized(payload);codes=[r['styleCode'] for r in changes]
     if lock:
-        for r in changes:
-            key=(r['productId'],r['sizeCode'])
-            db._fetch_one('INSERT INTO finance_cost_versions(product_id,size_code) VALUES(%s,%s) ON CONFLICT DO NOTHING RETURNING revision',key)
-        db._fetch_all('SELECT * FROM finance_cost_versions WHERE product_id=ANY(%s) ORDER BY product_id,size_code FOR UPDATE',(ids,))
-    versions={(r['product_id'],r['size_code']):str(r['revision']) for r in db._fetch_all('SELECT * FROM finance_cost_versions WHERE product_id=ANY(%s)',(ids,))}
-    history=defaultdict(list)
-    for r in db._fetch_all('SELECT * FROM finance_cost_history WHERE product_id=ANY(%s) ORDER BY effective_date',(ids,)):
-        history[(r['product_id'],r['size_code'])].append(r)
-    # One batch lookup for impact, no per-order or per-line queries.
-    orders=db._fetch_all('''SELECT DISTINCT o.id,i.product_id,i.size_code,(o.created_at AT TIME ZONE 'Asia/Shanghai')::date AS day
-      FROM orders o JOIN order_items i ON i.order_id=o.id WHERE i.product_id=ANY(%s) AND o.status=ANY(%s)''',(ids,STATES))
-    output=[]; affected=set()
-    for r in changes:
-        key=(r['productId'],r['sizeCode'])
-        if key not in sizes: raise workbench.Conflict('商品或尺码已移除，请刷新并核对成本草稿')
-        if r['version'] != versions.get(key,'0'): raise workbench.Conflict('成本已被其他人更新，请刷新后核对；当前输入已保留')
-        records=history[key]; earlier=[v for v in records if v['effective_date']<=effective]
-        later=[v['effective_date'] for v in records if v['effective_date']>effective]
-        end=min(later) if later else None
-        matching={v['id'] for v in orders if (v['product_id'],v['size_code'])==key and v['day']>=effective and (end is None or v['day']<end)}
-        affected.update(matching)
-        output.append({**r,'sku':products[key[0]]['sku'],'styleCode':products[key[0]]['style_code'],
-            'oldCostCny':money(earlier[-1]['cost_cny']) if earlier else None,
-            'effectiveDate':str(effective),'untilExclusive':str(end) if end else None,'affectedOrders':len(matching)})
-    result={'changes':output,'affectedOrders':len(affected),'effectiveDate':str(effective)}
+        # Also serialize first writes, when no cost/version row exists yet. Stable
+        # lock order avoids deadlocks between overlapping multi-style batches.
+        for code in codes:
+            db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('finance-style:'+code,))
+    products=db._fetch_all(f'SELECT p.id,{style_catalog.style_sql()} AS style_code FROM products p WHERE {style_catalog.style_sql()}=ANY(%s) ORDER BY p.id'+(' FOR SHARE' if lock else ''),(codes,))
+    existing={p['style_code'] for p in products}
+    costs={r['style_code']:r for r in db._fetch_all('SELECT * FROM finance_style_costs WHERE style_code=ANY(%s) ORDER BY style_code'+(' FOR UPDATE' if lock else ''),(codes,))}
+    initialized={r['style_code'] for r in db._fetch_all('SELECT style_code FROM finance_style_cost_audit WHERE style_code=ANY(%s) AND is_initial',(codes,))}
+    initial_codes=[r['styleCode'] for r in changes if r['costCny'] is not None and r['styleCode'] not in initialized]
+    # Only an initial amount fills missing historical orders. Later changes,
+    # including re-entering a cleared cost, never reprice existing orders.
+    orders=db._fetch_all(f'''SELECT DISTINCT o.id,{style_catalog.style_sql()} AS style_code
+      FROM orders o JOIN order_items i ON i.order_id=o.id JOIN products p ON p.id=i.product_id
+      WHERE {style_catalog.style_sql()}=ANY(%s) AND o.status=ANY(%s)''',(initial_codes,STATES)) if initial_codes else []
+    output=[];affected=set()
+    for row in changes:
+        code=row['styleCode'];old=costs.get(code)
+        if code not in existing:raise workbench.Conflict('款号已变更或商品已移除，请刷新后核对成本草稿')
+        if row['version']!=str(old['revision'] if old else 0):raise workbench.Conflict('成本已被其他人更新，请刷新后核对；当前输入已保留')
+        matching={r['id'] for r in orders if r['style_code']==code};affected.update(matching)
+        output.append({**row,'oldCostCny':money(old['cost_cny']) if old else None,
+            'initialCost':code in initial_codes,'affectedOrders':len(matching)})
+    # Do not put a moving timestamp in the preview hash. The database assigns it
+    # on save; only the first amount also applies before that timestamp.
+    result={'changes':output,'affectedOrders':len(affected),'costBasis':COST_BASIS,'effectiveMode':'initial_then_on_save'}
     return {**result,'previewHash':digest(result)}
 
 
+def cost_save_time():
+    """Use the database clock once, after all style/version locks are held."""
+    return db._fetch_one('SELECT clock_timestamp() AS saved_at')['saved_at']
+
+
 def save_costs(payload):
-    try: rid=str(uuid.UUID(str(payload.get('requestId',''))))
-    except (ValueError, AttributeError): raise ValueError('缺少有效提交编号')
-    effective, changes=normalized(payload)
-    fingerprint=digest({'effectiveDate':effective,'changes':changes,'previewHash':payload.get('previewHash')})
+    if not isinstance(payload,dict):raise ValueError('请求格式无效')
+    try:rid=str(uuid.UUID(str(payload.get('requestId',''))))
+    except (ValueError,AttributeError):raise ValueError('缺少有效提交编号')
+    changes=normalized(payload)
+    fingerprint=digest({'costBasis':COST_BASIS,'changes':changes,'previewHash':payload.get('previewHash')})
     db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('finance:'+rid,))
     previous=db._fetch_one('SELECT * FROM finance_cost_receipts WHERE request_id=%s',(rid,))
     if previous:
-        if previous['actor_id']!=g.current_user['id'] or previous['fingerprint']!=fingerprint: raise workbench.Conflict('提交编号已用于其他修改')
+        if previous['actor_id']!=g.current_user['id'] or previous['fingerprint']!=fingerprint:raise workbench.Conflict('提交编号已用于其他修改')
         return {**previous['result'],'replayed':True}
     result=preview(payload,lock=True)
-    if result['previewHash']!=payload.get('previewHash'): raise workbench.Conflict('预览已变化，请重新预览确认后保存')
+    if result['previewHash']!=payload.get('previewHash'):raise workbench.Conflict('预览已变化，请重新预览确认后保存')
     actor={key:g.current_user.get(key) for key in ('id','name','role')}
-    for r in result['changes']:
-        key=(r['productId'],r['sizeCode'],effective)
-        old=db._fetch_one('SELECT cost_cny FROM finance_cost_history WHERE product_id=%s AND size_code=%s AND effective_date=%s',key)
-        db._fetch_one('''INSERT INTO finance_cost_history(product_id,size_code,effective_date,cost_cny,sku,style_code,actor)
-          VALUES(%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(product_id,size_code,effective_date)
-          DO UPDATE SET cost_cny=EXCLUDED.cost_cny,sku=EXCLUDED.sku,style_code=EXCLUDED.style_code,actor=EXCLUDED.actor,updated_at=clock_timestamp() RETURNING product_id''',
-          (*key,None if r['costCny'] is None else Decimal(r['costCny']),r['sku'],r['styleCode'],Jsonb(actor)))
-        db._fetch_one('UPDATE finance_cost_versions SET revision=revision+1 WHERE product_id=%s AND size_code=%s RETURNING revision',key[:2])
-        db._fetch_one('''INSERT INTO finance_cost_audit(product_id,size_code,effective_date,before_data,after_data,actor,request_id)
-          VALUES(%s,%s,%s,%s,%s,%s,%s) RETURNING id''',(*key,Jsonb({'costCny':money(old['cost_cny']) if old else None}),Jsonb(r),Jsonb(actor),rid))
-    response={'saved':len(changes),'replayed':False}
+    effective_at=cost_save_time()
+    for row in result['changes']:
+        cost=None if row['costCny'] is None else Decimal(row['costCny'])
+        old=None if row['oldCostCny'] is None else Decimal(row['oldCostCny'])
+        db._fetch_one("""INSERT INTO finance_style_costs(style_code,cost_cny,revision,actor,updated_at) VALUES(%s,%s,1,%s,%s)
+            ON CONFLICT(style_code) DO UPDATE SET cost_cny=EXCLUDED.cost_cny,
+            revision=finance_style_costs.revision+1,actor=EXCLUDED.actor,updated_at=EXCLUDED.updated_at RETURNING revision""",(row['styleCode'],cost,Jsonb(actor),effective_at))
+        db._fetch_one("""INSERT INTO finance_style_cost_audit(style_code,old_cost_cny,cost_cny,actor,request_id,created_at,effective_at,is_initial)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",(row['styleCode'],old,cost,Jsonb(actor),rid,effective_at,effective_at,row['initialCost']))
+    response={'saved':len(changes),'replayed':False,'effectiveAt':db._iso(effective_at)}
     db._fetch_one('INSERT INTO finance_cost_receipts(request_id,actor_id,fingerprint,result) VALUES(%s,%s,%s,%s) RETURNING request_id',(rid,g.current_user['id'],fingerprint,Jsonb(response)))
     return response
 
@@ -262,46 +299,11 @@ def style_history(args):
     if not code or len(code)>200:raise ValueError('请选择有效款号')
     page=integer(args.get('page',1))
     if integer(args.get('pageSize',20))!=20:raise ValueError('成本历史每页显示 20 条')
-    # Live products follow the same canonical identity as the cost matrix. Deleted
-    # products follow their saved audit identity, never a guessed title/SKU prefix.
-    scope=f'''((p.id IS NOT NULL AND {style_catalog.style_sql()}=%s)
-      OR (p.id IS NULL AND a.after_data->>'styleCode'=%s))'''
-    current=db._fetch_all(f'''SELECT p.id,p.sku,p.color_name FROM products p
-      WHERE {style_catalog.style_sql()}=%s ORDER BY p.id''',(code,))
-    variants={r['id']:{'productId':r['id'],'sku':r['sku'],'color':r['color_name'],'deleted':False} for r in current}
-    identities=db._fetch_all(f'''SELECT a.product_id,a.size_code,MAX(a.id) AS last_id,
-        (array_agg(a.after_data->>'sku' ORDER BY a.id DESC))[1] AS sku
-      FROM finance_cost_audit a LEFT JOIN products p ON p.id=a.product_id WHERE {scope}
-      GROUP BY a.product_id,a.size_code ORDER BY last_id DESC''',(code,code))
-    for row in identities:
-        variants.setdefault(row['product_id'],{'productId':row['product_id'],'sku':row['sku'] or str(row['product_id']),
-                                             'color':'','deleted':True})
-    current_sizes=db._fetch_all('''SELECT size_code FROM product_size_prices
-      WHERE product_id=ANY(%s) ORDER BY product_id,sort_order,size_code''',([r['id'] for r in current],))
-    sizes=list(dict.fromkeys([r['size_code'] for r in current_sizes]+[r['size_code'] for r in identities]))
-    conditions=[scope];params=[code,code]
-    if args.get('productId'):
-        pid=integer(args['productId'])
-        if pid not in variants:raise ValueError('所选颜色不属于该款号')
-        conditions.append('a.product_id=%s');params.append(pid)
-    if args.get('sizeCode'):
-        size=str(args['sizeCode'])
-        if len(size)>200:raise ValueError('尺码无效')
-        conditions.append('a.size_code=%s');params.append(size)
-    source='FROM finance_cost_audit a LEFT JOIN products p ON p.id=a.product_id WHERE '+' AND '.join(conditions)
-    rows=db._fetch_all('SELECT a.* '+source+' ORDER BY a.id DESC LIMIT 20 OFFSET %s',(*params,(page-1)*20))
-    items=[]
-    for row in rows:
-        after=row['after_data'];before=row['before_data']
-        # New effective dates have no previous row at that date. Their saved
-        # preview still records the prior effective cost in after.oldCostCny.
-        old=after['oldCostCny'] if 'oldCostCny' in after else before.get('costCny')
-        items.append({'id':row['id'],'productId':row['product_id'],'sku':after.get('sku') or variants[row['product_id']]['sku'],
-            'sizeCode':row['size_code'],'oldCostCny':old,'costCny':after.get('costCny'),
-            'effectiveDate':str(row['effective_date']),'actor':row['actor'],'createdAt':db._iso(row['created_at'])})
-    return {'styleCode':code,'items':items,'page':page,'pageSize':20,
-        'total':db._fetch_one('SELECT count(*) AS n '+source,tuple(params))['n'],
-        'options':{'variants':list(variants.values()),'sizes':sizes}}
+    rows=db._fetch_all('SELECT * FROM finance_style_cost_audit WHERE style_code=%s ORDER BY id DESC LIMIT 20 OFFSET %s',(code,(page-1)*20))
+    return {'styleCode':code,'items':[{'id':r['id'],'styleCode':r['style_code'],'oldCostCny':money(r['old_cost_cny']),
+        'costCny':money(r['cost_cny']),'actor':r['actor'],'createdAt':db._iso(r['created_at']),
+        'effectiveAt':db._iso(r['effective_at']),'initialCost':r['is_initial']} for r in rows],
+        'page':page,'pageSize':20,'total':db._fetch_one('SELECT count(*) AS n FROM finance_style_cost_audit WHERE style_code=%s',(code,))['n']}
 
 
 def report(payload, paginate=True):
@@ -333,14 +335,14 @@ def _report(payload, paginate=True):
     rows=db._fetch_all(f'''SELECT o.id AS order_id,o.order_no,o.created_at,o.status,o.contact_name,
         o.store_user_id,su.name AS account_name,su.company_name,COALESCE(a.name,'未分配') AS salesperson,
         o.owner_admin_id,i.id AS item_id,i.product_id,i.sku,i.size_code,i.quantity,i.unit_price,
-        {style} AS style_code,h.cost_cny,h.effective_date
+        {style} AS style_code,h.cost_cny,h.effective_at AS cost_effective_at,h.is_initial
       FROM orders o JOIN order_items i ON i.order_id=o.id
       LEFT JOIN store_users su ON su.id=o.store_user_id LEFT JOIN admin_users a ON a.id=o.owner_admin_id
       LEFT JOIN products p ON p.id=i.product_id
       LEFT JOIN LATERAL (SELECT style_code FROM finance_cost_history c WHERE c.product_id=i.product_id AND c.size_code=i.size_code ORDER BY effective_date DESC LIMIT 1) ch ON true
-      LEFT JOIN LATERAL (SELECT cost_cny,effective_date FROM finance_cost_history c
-        WHERE c.product_id=i.product_id AND c.size_code=i.size_code AND COALESCE(i.size_code,'')<>''
-          AND c.effective_date <= (o.created_at AT TIME ZONE 'Asia/Shanghai')::date ORDER BY effective_date DESC LIMIT 1) h ON true
+      LEFT JOIN LATERAL (SELECT c.cost_cny,c.effective_at,c.is_initial FROM finance_style_cost_audit c
+        WHERE c.style_code=({style}) AND (c.effective_at<=o.created_at OR c.is_initial)
+        ORDER BY c.effective_at DESC,c.id DESC LIMIT 1) h ON true
       WHERE {' AND '.join(where)} ORDER BY o.created_at DESC,o.id DESC,i.id''',params)
     groups={}; lines=[]
     for r in rows:
@@ -351,7 +353,8 @@ def _report(payload, paginate=True):
             'salesperson':r['salesperson'],'styleCode':r['style_code'],'sku':r['sku'],'sizeCode':r['size_code'] or '',
             'productId':r['product_id'],'quantity':r['quantity'],'salesUsd':money(usd),'salesCny':money(cny),
             'unitCostCny':money(r['cost_cny']),'costCny':money(cost),'profitCny':money(cny-cost) if cost is not None else None,
-            'costEffectiveDate':str(r['effective_date']) if r['effective_date'] else None}
+            'costEffectiveAt':db._iso(r['cost_effective_at']) if r['cost_effective_at'] else None,
+            'costMatch':('首次成本补算' if r['is_initial'] and r['cost_effective_at']>r['created_at'] else '下单时生效成本') if cost is not None else '未设置成本'}
         lines.append(line)
         key=(r['style_code'],r['product_id'],r['sku'],r['size_code'])
         groups.setdefault(key,[]).append(line)
@@ -374,7 +377,7 @@ def _report(payload, paginate=True):
         'salespersonIds':people,'styleCodes':codes,'statuses':states,'exchangeRate':str(rate)}
     return {'items':items[(page-1)*page_size:page*page_size] if paginate else items,
         'total':len(items),'page':page,'pageSize':page_size,'summary':aggregate(lines),
-        'filters':filters,'generatedAt':datetime.now(TZ).isoformat(),**({'lines':lines} if not paginate else {})}
+        'filters':filters,'costBasis':COST_BASIS,'generatedAt':datetime.now(TZ).isoformat(),**({'lines':lines} if not paginate else {})}
 
 
 def export(payload):
@@ -391,7 +394,7 @@ def export(payload):
             cell.alignment=Alignment(vertical='center',wrap_text=True)
     amount=lambda v:Decimal(v) if v is not None else '待补全'
     append(summary,['GINGTTO 商品成本核算']); append(summary,['生成时间',data['generatedAt']])
-    append(summary,['口径','人民币成本；美元销售额按本次汇率换算；不含运费、税费及其他费用；未付款订单不代表实际回款。'])
+    append(summary,['口径','每款首次成本补算此前订单；后续成本按订单下单时间匹配，从保存时间起生效，不覆盖旧订单；清空期间为未设置。美元销售额按本次汇率换算；不含运费、税费及其他费用；未付款订单不代表实际回款。'])
     labels={'dateFrom':'下单日期起（北京时间）','dateTo':'下单日期止（北京时间）','customerName':'客户名称关键词',
         'customerId':'商城账号','salespersonIds':'业务员','styleCodes':'款号','statuses':'订单状态','exchangeRate':'本次汇率（1 USD = CNY）',
         'orderCount':'涉及订单数','quantity':'商品件数','salesUsd':'商品销售额 USD','salesCny':'折合销售额 CNY',
@@ -411,10 +414,10 @@ def export(payload):
     for r in data['items']:
         append(summary,[r['styleCode'],r['sku'],r['sizeCode'],r['orderCount'],r['quantity'],*[amount(r[k]) for k in ('salesUsd','salesCny','minCostCny','maxCostCny','knownCostCny','totalCostCny','profitCny')],r['missingQuantity']])
     detail=book.create_sheet('订单明细');missing=book.create_sheet('成本缺失')
-    columns=[('orderNo','订单号'),('createdAt','下单时间（北京时间）'),('customerName','客户'),('accountName','商城账号'),('salesperson','业务员'),('styleCode','款号'),('sku','SKU'),('sizeCode','尺码'),('quantity','数量'),('salesUsd','销售额 USD'),('salesCny','折合销售额 CNY'),('unitCostCny','单件成本 CNY'),('costEffectiveDate','成本生效日期'),('costCny','成本 CNY'),('profitCny','商品毛利 CNY')]
+    columns=[('orderNo','订单号'),('createdAt','下单时间（北京时间）'),('customerName','客户'),('accountName','商城账号'),('salesperson','业务员'),('styleCode','款号'),('sku','SKU'),('sizeCode','尺码'),('quantity','数量'),('salesUsd','销售额 USD'),('salesCny','折合销售额 CNY'),('unitCostCny','单件成本 CNY'),('costEffectiveAt','成本生效时间（北京时间）'),('costCny','成本 CNY'),('profitCny','商品毛利 CNY'),('costMatch','成本匹配方式')]
     for sheet in (detail,missing): append(sheet,[label for _,label in columns])
     for row in data['lines']:
-        vals=[amount(row[k]) if k.endswith(('Cny','Usd')) else datetime.fromisoformat(row[k]).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if k=='createdAt' else row[k] for k,_ in columns]
+        vals=[amount(row[k]) if k.endswith(('Cny','Usd')) else datetime.fromisoformat(row[k]).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if k in ('createdAt','costEffectiveAt') and row[k] else row[k] for k,_ in columns]
         append(detail,vals)
         if row['costCny'] is None: append(missing,vals)
     if missing.max_row==1: append(missing,['无缺失成本'])

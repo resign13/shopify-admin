@@ -1,5 +1,5 @@
 <template>
-  <section class="finance-panel">
+  <section class="finance-panel" :class="{'finance-cost-mode':tab==='costs'}">
     <div class="finance-tabs">
       <div class="finance-tab-nav"><ElButton :class="{'finance-tab-active':tab==='report'}" :aria-pressed="tab==='report'" @click="changeTab('report')">成本统计</ElButton><ElButton :class="{'finance-tab-active':tab==='costs'}" :aria-pressed="tab==='costs'" @click="changeTab('costs')">商品成本</ElButton></div>
       <div class="finance-header-actions">
@@ -17,48 +17,49 @@
     <ElAlert v-if="rateError" :title="rateError" type="error" :closable="false" class="finance-gap" />
     <ElAlert v-if="error" :title="error" type="error" :closable="false" class="finance-gap" />
     <template v-if="tab==='costs'">
-      <form class="finance-filters finance-cost-filters" @submit.prevent="loadCosts(1)">
-        <label>款号<ElInput v-model="costQuery.styleCodes" placeholder="多个款号用逗号分隔" clearable /></label>
-        <label>SKU / 颜色<ElInput v-model="costQuery.keyword" placeholder="输入 SKU 或颜色" clearable /></label>
-        <label>分类<ElSelect v-model="costQuery.category" clearable placeholder="全部分类"><ElOption v-for="c in options.categories" :key="c.key" :label="c.key" :value="c.key" /></ElSelect></label>
-        <label>成本生效日期<ElDatePicker v-model="costQuery.effectiveDate" type="date" value-format="YYYY-MM-DD" :clearable="false" aria-label="成本生效日期" /></label>
-        <ElCheckbox v-model="costQuery.missingOnly">仅未设置成本</ElCheckbox>
-        <ElButton native-type="submit" type="primary" :loading="costLoading">查询 / 应用日期</ElButton>
-      </form>
-      <div class="finance-toolbar">
-        <ElCheckbox :model-value="allSelected" :indeterminate="selected.length>0&&!allSelected" @change="selectAll">当前页全选</ElCheckbox>
-        <span>已选 {{ selected.length }} 个颜色 SKU</span>
-        <ElSelect v-model="bulkSize" placeholder="全部尺码" aria-label="批量成本尺码" style="width:160px"><ElOption label="全部尺码" value=""/><ElOption v-for="s in selectedSizes" :key="s" :label="s" :value="s"/></ElSelect>
-        <ElInputNumber v-model="bulkCost" :min="0" :max="9999999999.99" :precision="2" controls-position="right" placeholder="成本（元）" aria-label="批量成本金额" />
-        <ElButton :disabled="!selected.length||saving||costLoading" @click="applyBatch">批量应用</ElButton>
-        <ElButton :disabled="!clearableTargets.length||saving||costLoading" title="清空勾选颜色的所选尺码，保存后变为未设置，保留历史" @click="clearBatch">清空</ElButton>
-        <ElButton type="primary" :disabled="!dirty||saving||costLoading" @click="previewSave">保存成本（{{ changes.length }}）</ElButton>
+      <div ref="costWorkspace" class="cost-workspace">
+        <form class="finance-filters finance-cost-filters" @submit.prevent="loadCosts(1)">
+          <label>款号<ElInput v-model="costQuery.styleCodes" placeholder="多个款号用逗号分隔" clearable><template #prefix><ElIcon><Search /></ElIcon></template></ElInput></label>
+          <label>SKU / 颜色<ElInput v-model="costQuery.keyword" placeholder="输入 SKU 或颜色查找款号" clearable /></label>
+          <label>分类<ElSelect v-model="costQuery.category" clearable placeholder="全部分类"><ElOption v-for="c in options.categories" :key="c.key" :label="c.key" :value="c.key" /></ElSelect></label>
+          <div class="cost-filter-actions"><ElCheckbox v-model="costQuery.missingOnly">仅未设置</ElCheckbox><ElButton native-type="submit" type="primary" :loading="costLoading">查询</ElButton></div>
+        </form>
+        <div class="cost-sheet">
+          <div class="cost-sheet-caption">
+            <div class="cost-sheet-selection"><ElCheckbox :model-value="allSelected" :indeterminate="selected.length>0&&!allSelected" :disabled="!groups.length||saving||costLoading" @change="selectAll">当前页全选</ElCheckbox><span class="cost-result-count">共 <b>{{ costTotal }}</b> 款</span></div>
+            <div class="cost-sheet-meta"><span><span class="cost-shared-label">整款共用 <i>·</i></span> CNY / 件</span><ElPopover trigger="click" placement="bottom-end" :width="320" popper-style="max-width:calc(100vw - 32px)">
+              <template #reference><ElButton text circle aria-label="成本填写说明"><ElIcon><QuestionFilled /></ElIcon></ElButton></template>
+              <div class="finance-cost-help">每个款号一个人民币单件成本，全部颜色和尺码共用。空白表示未设置，0 为明确零成本。<br/>首次填写成本会补算此前订单；之后改价从保存时间起生效，旧订单按对应历史成本核算。<br/>清空后的新订单为未设置成本，再次填写不补算清空期间。批量应用和清空仅修改草稿，保存后生效，历史记录保留。</div>
+            </ElPopover></div>
+          </div>
+          <div class="cost-ledger" v-loading="costLoading" :class="{'cost-ledger-single':costColumns.length<2}">
+            <div v-for="(column,index) in costColumns" :key="index" class="cost-ledger-column">
+              <table class="style-cost-table" :aria-label="costColumns.length>1?`整款成本 第 ${index+1} 组`:'整款成本'">
+                <colgroup><col class="cost-select-col"/><col/><col class="cost-amount-col"/><col class="cost-history-col"/></colgroup>
+                <thead><tr><th class="style-select" scope="col"><span class="cost-sr-only">选择</span></th><th scope="col">款号</th><th class="cost-amount-heading" scope="col">单件成本</th><th scope="col"><span class="cost-sr-only">历史操作</span></th></tr></thead>
+                <tbody><tr v-for="group in column" :key="group.styleCode" :class="{'cost-changed':isChanged(group),'cost-selected':selected.includes(group.styleCode)}">
+                  <td class="style-select"><ElCheckbox :model-value="selected.includes(group.styleCode)" :aria-label="`选择 ${group.styleCode}`" :disabled="saving||costLoading" @change="value=>selectStyle(group.styleCode,value)" /></td>
+                  <td class="style-code"><span :title="group.styleCode">{{ group.styleCode }}</span><span v-if="isChanged(group)" class="cost-edit-dot" :aria-label="`${group.styleCode} 未保存`" title="未保存"/></td>
+                  <td class="cost-amount-cell"><div class="cost-input-shell" :class="{'cost-input-empty':costValue(group.draftCost)===null}"><span class="cost-currency" aria-hidden="true">¥</span><ElInputNumber v-model="group.draftCost" :precision="2" :min="0" :max="9999999999.99" :controls="false" :disabled="saving||costLoading" placeholder="未设置" :aria-label="`${group.styleCode} 成本`" title="Enter 下一个款号，Shift + Enter 上一个" @keydown.enter.prevent="focusCostInput($event.shiftKey?-1:1)" /></div></td>
+                  <td class="cost-history-cell"><ElButton text class="cost-history-button" :aria-label="`${group.styleCode} 成本历史`" @click="showHistory(group)"><ElIcon><Clock /></ElIcon><span>历史</span></ElButton></td>
+                </tr></tbody>
+              </table>
+            </div>
+            <div v-if="!groups.length" class="style-cost-empty" role="status">{{ costLoading?'正在加载成本…':'暂无匹配款号，请调整筛选条件' }}</div>
+          </div>
+          <div class="cost-sheet-bottom"><span>每页 {{ financeCostPageSize }} 款<span class="cost-pagination-hint">，勾选后可批量填写</span></span><ElPagination :current-page="costPage" :page-size="financeCostPageSize" :total="costTotal" layout="prev, pager, next" @current-change="loadCosts" /></div>
+        </div>
+        <div class="cost-actionbar" :class="{'cost-actionbar-selected':selected.length>0}" aria-label="成本操作">
+          <div v-if="selected.length" class="cost-batch-controls">
+            <span class="cost-selected-count">已选 <b>{{ selected.length }}</b> 款</span>
+            <div class="cost-batch-input"><span aria-hidden="true">¥</span><ElInputNumber v-model="bulkCost" :min="0" :max="9999999999.99" :precision="2" :controls="false" placeholder="批量成本" aria-label="批量成本金额" :disabled="saving||costLoading" /></div>
+            <ElButton :disabled="saving||costLoading" @click="applyBatch">批量应用</ElButton>
+            <ElButton text type="danger" :disabled="!clearableTargets.length||saving||costLoading" title="清空勾选款号的成本，保存后为未设置，保留历史" @click="clearBatch">清空</ElButton>
+          </div>
+          <span v-else class="cost-action-hint"><ElIcon><EditPen /></ElIcon>直接填写成本，或勾选款号批量设置</span>
+          <div class="cost-save-controls"><span class="cost-save-state" :class="{'cost-save-pending':dirty}" role="status"><span class="cost-state-dot"/>{{ dirty?changes.length+' 款未保存':'暂无修改' }}</span><ElButton type="primary" :disabled="!dirty||saving||costLoading" :loading="saving" @click="previewSave">保存成本（{{ changes.length }}）</ElButton></div>
+        </div>
       </div>
-      <div class="finance-cost-note">
-        <span>正在编辑 {{ costEffective }} 生效的成本</span>
-        <ElPopover trigger="click" placement="bottom-start" :width="340" popper-style="max-width:calc(100vw - 32px)">
-          <template #reference><ElButton text circle aria-label="成本填写说明"><ElIcon><QuestionFilled /></ElIcon></ElButton></template>
-          <div class="finance-cost-help">空白表示未设置，0 为明确零成本。批量应用、清空都只修改草稿，保存后生效。<br/>更改生效日期后，点击“查询 / 应用日期”才切换编辑日期。<br/>清空从所选生效日期起改为未设置，至下一条成本生效前有效；保留历史，不删除记录。补录以前日期会影响重新查询的历史报表。</div>
-        </ElPopover>
-      </div>
-      <div v-loading="costLoading">
-        <ElEmpty v-if="!groups.length&&!costLoading" description="暂无匹配商品" />
-        <article v-for="group in groups" :key="group.styleCode" class="cost-group">
-          <header>
-            <ElCheckbox :model-value="group.variants.every(v=>selected.includes(v.id))" :indeterminate="group.variants.some(v=>selected.includes(v.id))&&!group.variants.every(v=>selected.includes(v.id))" @change="value=>selectGroup(group,value)"><strong>{{ group.styleCode }}</strong></ElCheckbox>
-            <small>{{ group.variants.length }} 个颜色</small>
-            <div class="cost-header-actions"><span class="cost-unit">成本 CNY / 件</span><ElButton text class="cost-history-button" :aria-label="`${group.styleCode} 成本历史`" @click="showHistory(group)">成本历史</ElButton><ElButton text circle :aria-label="`${group.styleCode} ${group.collapsed?'展开尺码':'收起尺码'}`" :aria-expanded="!group.collapsed" @click="group.collapsed=!group.collapsed"><ElIcon :class="{'cost-expanded':!group.collapsed}"><ArrowDown /></ElIcon></ElButton></div>
-          </header>
-          <div v-show="!group.collapsed" class="finance-scroll"><table class="cost-matrix"><thead><tr><th>颜色 / SKU</th><th v-for="s in group.sizes" :key="s">{{ s }}</th></tr></thead><tbody>
-            <tr v-for="variant in group.variants" :key="variant.id"><td><ElCheckbox :model-value="selected.includes(variant.id)" :aria-label="`选择 ${variant.sku}`" @change="value=>selectVariant(variant.id,value)"/><div><strong>{{ variant.sku }}</strong><small>{{ variant.color }}{{ variant.active?'':' · 已下架' }}</small></div></td>
-              <td v-for="size in group.sizes" :key="size" :class="{'cost-changed':isChanged(variant,size)}">
-                <template v-if="findSize(variant,size)"><ElInputNumber v-model="findSize(variant,size).draftCost" :precision="2" :min="0" :max="9999999999.99" :controls="false" :disabled="saving" placeholder="未设置" :aria-label="`${variant.sku} ${size} 成本`"/></template><span v-else>—</span>
-              </td>
-            </tr>
-          </tbody></table></div>
-        </article>
-      </div>
-      <ElPagination :current-page="costPage" :page-size="12" :total="costTotal" layout="total, prev, pager, next" @current-change="loadCosts" />
     </template>
     <template v-else>
       <form class="finance-filters finance-report-filters" @submit.prevent="queryReport(1)">
@@ -73,12 +74,12 @@
         </div>
       </form>
       <div v-if="reportChips.length" class="report-filter-chips" aria-label="已选筛选条件"><ElTag v-for="chip in reportChips" :key="chip.key" :data-filter="chip.key" closable effect="plain" :title="chip.label" @close="removeReportFilter(chip.key)">{{ chip.label }}</ElTag></div>
-      <p v-if="reportOutdated" class="finance-rate-notice" role="status">{{ reportRateChanged?'汇率已修改，请重新查询后导出；下方结果仍使用汇率 '+result.filters.exchangeRate+'。':'条件已修改，查询后更新；下方仍为上次查询结果。' }}</p>
-      <div class="report-context"><span>商品核算 · 不含运费及其他费用</span><ElPopover trigger="click" placement="bottom-start" :width="340" popper-style="max-width:calc(100vw - 32px)"><template #reference><ElButton text aria-label="核算说明"><ElIcon><QuestionFilled /></ElIcon>核算说明</ElButton></template><div class="finance-cost-help">按北京时间下单日期匹配历史人民币成本，销售额使用订单成交价格。不含运费、税费及其他费用；包含未付款订单时不代表实际回款。<br/>人民币折算逐订单商品行四舍五入至分后汇总。历史成本补录、订单修改会影响重新查询结果。<br/>导出包含全部筛选结果及完整字段，不限当前分页，使用导出时的数据库快照核算。</div></ElPopover></div>
+      <p v-if="reportOutdated" class="finance-rate-notice" role="status">{{ reportCostChanged?'整款成本已修改，请重新查询后导出；下方仍为上次查询结果。':reportRateChanged?'汇率已修改，请重新查询后导出；下方结果仍使用汇率 '+result.filters.exchangeRate+'。':'条件已修改，查询后更新；下方仍为上次查询结果。' }}</p>
+      <div class="report-context"><span>首次成本补算历史，后续按下单时间匹配 · 不含运费及其他费用</span><ElPopover trigger="click" placement="bottom-start" :width="340" popper-style="max-width:calc(100vw - 32px)"><template #reference><ElButton text aria-label="核算说明"><ElIcon><QuestionFilled /></ElIcon>核算说明</ElButton></template><div class="finance-cost-help">每款首次填写成本时补算此前订单；之后改价只用于保存后的新订单，已有订单按对应历史成本核算。销售额使用订单成交价格。清空后的新订单为未设置成本，再次填写不补算清空期间。<br/>不含运费、税费及其他费用；包含未付款订单时不代表实际回款。人民币折算逐订单商品行四舍五入至分后汇总。<br/>导出包含全部筛选结果及完整字段，不限当前分页，使用导出时的数据库快照核算。</div></ElPopover></div>
       <template v-if="result">
         <div class="finance-summary" aria-label="核算金额汇总">
           <article><span>商品销售额 <small>USD</small></span><strong>${{ result.summary.salesUsd }}</strong><small>折合 ¥{{ result.summary.salesCny }} CNY</small></article>
-          <article><span>商品成本 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.totalCostCny===null}">{{ result.summary.totalCostCny===null?'待补全':'¥'+result.summary.totalCostCny }}</strong><small v-if="result.summary.totalCostCny===null">已知成本 ¥{{ result.summary.knownCostCny }}</small><small v-else>按下单日期匹配成本</small></article>
+          <article><span>商品成本 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.totalCostCny===null}">{{ result.summary.totalCostCny===null?'待补全':'¥'+result.summary.totalCostCny }}</strong><small v-if="result.summary.totalCostCny===null">已知成本 ¥{{ result.summary.knownCostCny }}</small><small v-else>按下单时的历史成本核算</small></article>
           <article><span>商品毛利 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.profitCny===null}">{{ result.summary.profitCny===null?'待补全':'¥'+result.summary.profitCny }}</strong><small v-if="result.summary.profitCny===null">已设置部分 ¥{{ result.summary.knownProfitCny }}</small><small v-else>折合销售额 − 商品成本</small></article>
         </div>
         <div class="report-quantity-summary"><span>{{ result.summary.orderCount }} 个订单</span><span>{{ result.summary.quantity }} 件商品</span><span v-if="result.summary.missingQuantity" class="report-missing" role="status">{{ result.summary.missingQuantity }} 件成本未设置 · 完整成本与毛利待补全</span></div>
@@ -88,7 +89,7 @@
             <ElTableColumn prop="orderNo" label="订单号" min-width="230"/><ElTableColumn prop="customerName" label="客户" min-width="130"/><ElTableColumn prop="accountName" label="商城账号" min-width="130"/><ElTableColumn prop="salesperson" label="业务员" width="100"/>
             <ElTableColumn label="下单时间" width="175"><template #default="{row:line}">{{ dateTime(line.createdAt) }}</template></ElTableColumn>
             <ElTableColumn prop="quantity" label="数量" width="70"/><ElTableColumn prop="salesUsd" label="销售额 USD" width="110" align="right"/>
-            <ElTableColumn label="单件成本 CNY" width="120" align="right"><template #default="{row:line}">{{ line.unitCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn prop="costEffectiveDate" label="成本生效日期" width="120"/>
+            <ElTableColumn label="单件成本 CNY" width="120" align="right"><template #default="{row:line}">{{ line.unitCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="成本生效时间" width="175"><template #default="{row:line}">{{ line.costEffectiveAt?dateTime(line.costEffectiveAt):'—' }}<small v-if="line.costMatch==='首次成本补算'" class="cost-history-note">首次成本补算</small></template></ElTableColumn>
             <ElTableColumn label="成本 CNY" width="110" align="right"><template #default="{row:line}">{{ line.costCny??'待补全' }}</template></ElTableColumn><ElTableColumn label="商品毛利 CNY" width="120" align="right"><template #default="{row:line}">{{ line.profitCny??'待补全' }}</template></ElTableColumn>
           </ElTable></div></template></ElTableColumn>
           <ElTableColumn prop="styleCode" label="款号" min-width="125"/><ElTableColumn prop="sku" label="颜色 SKU" min-width="160"/><ElTableColumn prop="sizeCode" label="尺码" width="90"/><ElTableColumn prop="quantity" label="销量" width="80"/>
@@ -100,25 +101,18 @@
       </template><div v-else class="report-empty" role="status">{{ rateValid?'选择条件后点击“查询核算”':'填写核算汇率，选择条件后查询' }}</div>
     </template>
   </section>
-  <ElDialog v-model="previewOpen" title="确认成本生效及影响范围" width="min(1050px, 95vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
+  <ElDialog v-model="previewOpen" title="确认保存整款成本" width="min(760px, 95vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
     <ElAlert v-if="error" :title="error" type="error" :closable="false" />
-    <template v-if="preview"><ElAlert :title="`${preview.effectiveDate} 起生效，影响 ${preview.affectedOrders} 个有效订单。${preview.changes.some(c=>c.costCny===null)?'其中 '+preview.changes.filter(c=>c.costCny===null).length+' 项清空为未设置，历史记录保留。':''}历史报表重新查询时会重新计算。`" type="warning" :closable="false"/>
-      <ElTable :data="preview.changes" max-height="430"><ElTableColumn prop="sku" label="SKU" min-width="140"/><ElTableColumn prop="sizeCode" label="尺码" width="90"/><ElTableColumn label="原成本"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="新成本 CNY"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn><ElTableColumn prop="effectiveDate" label="生效日"/><ElTableColumn label="截止日（不含）"><template #default="{row}">{{ row.untilExclusive||'长期有效' }}</template></ElTableColumn><ElTableColumn prop="affectedOrders" label="影响订单数"/></ElTable>
+    <template v-if="preview"><ElAlert :title="preview.changes.some(row=>row.initialCost)?`首次填写的款号将补算此前 ${preview.affectedOrders} 个有效订单；已设置过成本的款号仅从保存时间起变更，不覆盖旧订单。清空后的历史区间不补算，全部记录保留。`:'本次均为后续修改，仅用于保存后的新订单；已有订单继续按对应历史成本核算。清空后仅影响新订单，全部历史记录保留。'" type="info" :closable="false"/>
+      <ElTable :data="preview.changes" max-height="430"><ElTableColumn prop="styleCode" label="款号" min-width="140"/><ElTableColumn label="原成本 CNY"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="新成本 CNY"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="生效范围" min-width="160"><template #default="{row}">{{ row.initialCost?'含历史订单':'保存后的新订单' }}</template></ElTableColumn></ElTable>
     </template><template #footer><ElButton :disabled="saving" @click="previewOpen=false">返回修改</ElButton><ElButton type="primary" :loading="saving" @click="commitCosts">确认保存</ElButton></template>
   </ElDialog>
-  <ElDialog v-model="historyOpen" :title="historyTitle" width="min(1000px,95vw)" class="cost-history-dialog" @close="closeHistory">
-    <div class="cost-history-filters">
-      <label>颜色 SKU<ElSelect v-model="historyFilters.productId" filterable clearable placeholder="全部颜色 SKU" aria-label="历史颜色 SKU" @change="loadHistory(1)"><ElOption v-for="v in historyOptions.variants" :key="v.productId" :value="v.productId" :label="v.sku+(v.deleted?'（已删除）':v.color?' · '+v.color:'')"/></ElSelect></label>
-      <label>尺码<ElSelect v-model="historyFilters.sizeCode" clearable placeholder="全部尺码" aria-label="历史尺码" @change="loadHistory(1)"><ElOption v-for="s in historyOptions.sizes" :key="s" :value="s" :label="s"/></ElSelect></label>
-    </div>
+  <ElDialog v-model="historyOpen" :title="historyTitle" width="min(680px,95vw)" class="cost-history-dialog" @close="closeHistory">
     <div v-if="historyError" class="cost-history-error"><ElAlert :title="historyError" type="error" :closable="false"/><ElButton :loading="historyLoading" @click="loadHistory(historyPage)">重试</ElButton></div>
     <ElTable v-if="historyLoading||history?.items.length" :data="history?.items||[]" v-loading="historyLoading" size="small" max-height="55vh" row-key="id">
-      <ElTableColumn label="保存时间" width="175"><template #default="{row}">{{ dateTime(row.createdAt) }}</template></ElTableColumn>
-      <ElTableColumn prop="sku" label="颜色 SKU" min-width="165"/>
-      <ElTableColumn prop="sizeCode" label="尺码" width="90"/>
-      <ElTableColumn label="原成本 CNY" width="110"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn>
-      <ElTableColumn label="新成本 CNY" width="110"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn>
-      <ElTableColumn prop="effectiveDate" label="生效日期" width="115"/>
+      <ElTableColumn label="生效时间" min-width="175"><template #default="{row}">{{ dateTime(row.effectiveAt) }}<small v-if="row.initialCost" class="cost-history-note">首次设置 · 含历史订单</small></template></ElTableColumn>
+      <ElTableColumn label="原成本 CNY" min-width="110"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn>
+      <ElTableColumn label="新成本 CNY" min-width="110"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn>
       <ElTableColumn label="操作者" min-width="110"><template #default="{row}">{{ row.actor?.name||'—' }}</template></ElTableColumn>
     </ElTable>
     <ElEmpty v-else-if="!historyError" description="暂无成本变动" :image-size="80"/>
@@ -132,12 +126,11 @@ import { authenticatedFetch } from '../authTransport';
 import {computed,onMounted,onBeforeUnmount,reactive,ref} from 'vue';
 import {onBeforeRouteLeave} from 'vue-router';
 import {ElMessage} from 'element-plus';
-import {ArrowDown,QuestionFilled} from '@element-plus/icons-vue';
+import {ArrowDown,QuestionFilled,Search,Clock,EditPen} from '@element-plus/icons-vue';
 import {api,save,confirm,dateTime,statusNames} from '../composables/workbench';
 import {API_BASE} from '../api';
-import {useAdminAuthStore} from '../stores/auth';
-import {financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
-const auth=useAdminAuthStore(),tab=ref('report'),error=ref(''),options=reactive({customers:[],salespeople:[],styles:[],categories:[]});
+import {financeCostPageSize,financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
+const tab=ref('report'),error=ref(''),options=reactive({customers:[],salespeople:[],styles:[],categories:[]});
 const activeStates=financeActiveStates,today=financeToday();
 const filters=reactive({...financeReportDates(today),customerName:'',customerId:null,salespersonIds:[],styleCodes:[],statuses:[...activeStates],exchangeRate:null});
 const advancedOpen=ref(false);
@@ -175,17 +168,21 @@ async function saveRate(){
     else rateError.value=e.message;
   }finally{rateSaving.value=false;}
 }
-const costQuery=reactive({keyword:'',styleCodes:'',category:'',missingOnly:false,effectiveDate:today});
-const costEffective=ref(today),costPage=ref(1),costTotal=ref(0),groups=ref([]),selected=ref([]),bulkSize=ref(''),bulkCost=ref(null),costLoading=ref(false),saving=ref(false);
-const variants=computed(()=>groups.value.flatMap(g=>g.variants)),changes=computed(()=>costChanges(variants.value)),dirty=computed(()=>changes.value.length>0);
-const selectedSizes=computed(()=>[...new Set(variants.value.filter(v=>selected.value.includes(v.id)).flatMap(v=>v.sizes.map(s=>s.sizeCode)))]);
-const allSelected=computed(()=>variants.value.length>0&&variants.value.every(v=>selected.value.includes(v.id)));
-const clearableTargets=computed(()=>clearBatchTargets(variants.value,selected.value,bulkSize.value));
-const findSize=(v,s)=>v.sizes.find(x=>x.sizeCode===s);
-const isChanged=(v,s)=>{const x=findSize(v,s);return x&&costValue(x.draftCost)!==x.costCny;};
-const selectVariant=(id,value)=>{selected.value=value?[...new Set([...selected.value,id])]:selected.value.filter(v=>v!==id);};
-const selectGroup=(group,value)=>group.variants.forEach(v=>selectVariant(v.id,value));
-const selectAll=value=>{selected.value=value?variants.value.map(v=>v.id):[];};
+const costQuery=reactive({keyword:'',styleCodes:'',category:'',missingOnly:false});
+const costPage=ref(1),costTotal=ref(0),groups=ref([]),selected=ref([]),bulkCost=ref(null),costLoading=ref(false),saving=ref(false);
+const costWorkspace=ref(null);
+const changes=computed(()=>costChanges(groups.value)),dirty=computed(()=>changes.value.length>0);
+const costColumns=computed(()=>{const rows=groups.value;if(!rows.length)return [];if(rows.length===1)return [rows];const middle=Math.ceil(rows.length/2);return [rows.slice(0,middle),rows.slice(middle)];});
+function focusCostInput(step){
+  const inputs=[...(costWorkspace.value?.querySelectorAll('.cost-amount-cell input')||[])],index=inputs.indexOf(document.activeElement);
+  if(index<0)return;
+  const next=inputs[index+step];if(next&&!next.disabled){next.focus();next.select();}else inputs[index].blur();
+}
+const allSelected=computed(()=>groups.value.length>0&&groups.value.every(g=>selected.value.includes(g.styleCode)));
+const clearableTargets=computed(()=>clearBatchTargets(groups.value,selected.value));
+const isChanged=group=>costValue(group.draftCost)!==group.costCny;
+const selectStyle=(code,value)=>{selected.value=value?[...new Set([...selected.value,code])]:selected.value.filter(v=>v!==code);};
+const selectAll=value=>{selected.value=value?groups.value.map(g=>g.styleCode):[];};
 async function leaveDraft(){return !saving.value&&(!dirty.value||await confirm('有尚未保存的成本修改。确认放弃修改并离开？取消可继续编辑。'));}
 onBeforeRouteLeave(leaveDraft);
 function unload(event){if(dirty.value){event.preventDefault();event.returnValue='';}}
@@ -195,78 +192,80 @@ async function changeTab(value){if(value===tab.value)return;if(tab.value==='cost
 async function loadCosts(page=1,discard=false){
   if(costLoading.value||saving.value||(!discard&&!await leaveDraft()))return;
   costLoading.value=true;error.value='';
-  try{const response=await api('finance/costs?'+new URLSearchParams({...costQuery,page,pageSize:12}));
-    groups.value=response.items.map(g=>({...g,variants:g.variants.map(v=>({...v,sizes:v.sizes.map(s=>({...s,draftCost:s.costCny===null?undefined:Number(s.costCny)}))}))}));
-    costPage.value=response.page;costTotal.value=response.total;costEffective.value=response.effectiveDate;selected.value=[];bulkSize.value='';
+  try{const response=await api('finance/costs?'+new URLSearchParams({...costQuery,page,pageSize:financeCostPageSize}));
+    groups.value=response.items.map(g=>({...g,draftCost:g.costCny===null?undefined:Number(g.costCny)}));
+    costPage.value=response.page;costTotal.value=response.total;selected.value=[];
   }catch(e){error.value=e.message;}finally{costLoading.value=false;}
 }
 async function applyBatch(){
+  if(saving.value||costLoading.value)return;
   if(bulkCost.value===null||bulkCost.value===undefined||!Number.isFinite(bulkCost.value)){error.value='请填写批量成本';return;}
-  const targets=batchTargets(variants.value,selected.value,bulkSize.value);
-  if(!targets.length){error.value='所选颜色中没有该尺码';return;}
-  const count=targets.filter(({size})=>costValue(size.draftCost)!==null&&costValue(size.draftCost)!==costValue(bulkCost.value)).length;
-  if(count&&!await confirm(`将覆盖 ${count} 个尺码已有的不同成本，共应用 ${targets.length} 项。仅修改页面草稿，保存后才生效。`))return;
-  targets.forEach(({size})=>size.draftCost=bulkCost.value);error.value='';
+  const targets=batchTargets(groups.value,selected.value);
+  if(!targets.length)return;
+  const count=targets.filter(g=>costValue(g.draftCost)!==null&&costValue(g.draftCost)!==costValue(bulkCost.value)).length;
+  if(count&&!await confirm(`将覆盖 ${count} 款已有的不同成本，共应用 ${targets.length} 款。仅修改页面草稿，保存后才生效。`))return;
+  targets.forEach(g=>g.draftCost=bulkCost.value);error.value='';
 }
 async function clearBatch(){
   if(saving.value||costLoading.value)return;
   const targets=clearableTargets.value;
   if(!targets.length)return;
-  if(!await confirm(`将清空已勾选颜色中「${bulkSize.value||'全部尺码'}」的 ${targets.length} 项成本，改为未设置。仅修改页面草稿；保存后从 ${costEffective.value} 起生效，历史记录保留。`))return;
-  targets.forEach(({size})=>size.draftCost=undefined);error.value='';
-  ElMessage.success(`已清空 ${targets.length} 项草稿${dirty.value?'，保存成本后生效':'，已保存数据未改变'}`);
+  if(!await confirm(`将清空已勾选的 ${targets.length} 款成本，改为未设置。仅修改页面草稿；保存后仅新订单按未设置成本核算，旧订单仍使用当时的历史成本，历史记录保留。`))return;
+  targets.forEach(g=>g.draftCost=undefined);error.value='';
+  ElMessage.success(`已清空 ${targets.length} 款草稿${dirty.value?'，保存成本后生效':'，已保存数据未改变'}`);
 }
 const preview=ref(null),previewOpen=ref(false);let pendingSave=null;
 async function previewSave(){
   error.value='';
   saving.value=true;
-  try{const body={effectiveDate:costEffective.value,changes:changes.value};preview.value=await save('finance/costs/preview',body,'POST');pendingSave={...body,previewHash:preview.value.previewHash,requestId:crypto.randomUUID()};previewOpen.value=true;}
+  try{const body={changes:changes.value};preview.value=await save('finance/costs/preview',body,'POST');pendingSave={...body,previewHash:preview.value.previewHash,requestId:crypto.randomUUID()};previewOpen.value=true;}
   catch(e){error.value=e.message;}finally{saving.value=false;}
 }
 async function commitCosts(){
   saving.value=true;error.value='';
-  try{await save('finance/costs/save',pendingSave,'POST');previewOpen.value=false;ElMessage.success('成本已保存');saving.value=false;await loadCosts(costPage.value,true);}
+  try{await save('finance/costs/save',pendingSave,'POST');previewOpen.value=false;reportCostChanged.value=Boolean(result.value);ElMessage.success('成本已保存');saving.value=false;await loadCosts(costPage.value,true);}
   catch(e){error.value=e.message;if(e.status)previewOpen.value=false;}finally{saving.value=false;}
 }
 const historyOpen=ref(false),history=ref(null),historyTitle=ref(''),historyStyle=ref(''),historyLoading=ref(false),historyError=ref(''),historyPage=ref(1);
-const historyFilters=reactive({productId:null,sizeCode:''}),historyOptions=reactive({variants:[],sizes:[]});let historyRequest=0,historyController;
+let historyRequest=0,historyController;
 function closeHistory(){++historyRequest;historyController?.abort();historyLoading.value=false;history.value=null;}
 async function showHistory(group){
   closeHistory();historyStyle.value=group.styleCode;historyTitle.value=`成本历史 · ${group.styleCode}`;
-  Object.assign(historyFilters,{productId:null,sizeCode:''});
-  Object.assign(historyOptions,{variants:group.variants.map(v=>({productId:v.id,sku:v.sku,color:v.color,deleted:false})),sizes:[...group.sizes]});
   historyError.value='';historyOpen.value=true;await loadHistory(1);
 }
 async function loadHistory(page=1){
   if(!historyOpen.value)return;
   const id=++historyRequest;historyController?.abort();historyController=new AbortController();historyPage.value=page;historyLoading.value=true;historyError.value='';history.value=null;
-  const params={styleCode:historyStyle.value,page};if(historyFilters.productId)params.productId=historyFilters.productId;if(historyFilters.sizeCode)params.sizeCode=historyFilters.sizeCode;
-  try{const data=await api('finance/costs/history?'+new URLSearchParams(params),{signal:historyController.signal,skipGlobalLoading:true});if(id===historyRequest&&historyOpen.value){history.value=data;Object.assign(historyOptions,data.options);}}
+  const params={styleCode:historyStyle.value,page};
+  try{const data=await api('finance/costs/history?'+new URLSearchParams(params),{signal:historyController.signal,skipGlobalLoading:true});if(id===historyRequest&&historyOpen.value){history.value=data;}}
   catch(e){if(e.name!=='AbortError'&&id===historyRequest&&historyOpen.value)historyError.value=e.message;}
   finally{if(id===historyRequest)historyLoading.value=false;}
 }
-const result=ref(null),reportLoading=ref(false),exporting=ref(false);
+const result=ref(null),reportLoading=ref(false),exporting=ref(false),reportCostChanged=ref(false);
 const reportRateChanged=computed(()=>Boolean(result.value)&&(!rateValid.value||filters.exchangeRate!==Number(result.value.filters.exchangeRate)));
-const reportOutdated=computed(()=>Boolean(result.value)&&financeReportKey(filters)!==financeReportKey(result.value.filters));
+const reportOutdated=computed(()=>Boolean(result.value)&&(reportCostChanged.value||financeReportKey(filters)!==financeReportKey(result.value.filters)));
 async function queryReport(page=1,existing=false){
   if(reportLoading.value)return;reportLoading.value=true;error.value='';
   try{const query=existing?result.value.filters:{...filters,styleCodes:financeCodes(filters.styleCodes.join(','))};
     const data=await save('finance/reports/query',{...query,page,pageSize:25},'POST');
-    data.items.forEach(r=>r.rowKey=JSON.stringify([r.styleCode,r.productId,r.sku,r.sizeCode]));result.value=data;
+    data.items.forEach(r=>r.rowKey=JSON.stringify([r.styleCode,r.productId,r.sku,r.sizeCode]));result.value=data;reportCostChanged.value=false;
   }catch(e){error.value=e.message;}finally{reportLoading.value=false;}
 }
 async function exportReport(){
   if(!result.value||reportOutdated.value||reportLoading.value||exporting.value)return;
   exporting.value=true;error.value='';
   try{const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/reports/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result.value.filters)});
-    if(!response.ok){if(response.status===401)throw new Error((await response.json().catch(()=>({}))).message||'导出失败');}
+    if(!response.ok)throw new Error((await response.json().catch(()=>({}))).message||'导出失败');
     const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='财务成本核算.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
   }catch(e){error.value=e.message;}finally{exporting.value=false;}
 }
 </script>
 
 <style scoped>
-.finance-panel{background:#fff;padding:22px;border:1px solid #e1e6ee;border-radius:10px}.finance-tabs,.finance-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.finance-tabs{padding-bottom:18px;border-bottom:1px solid #e8edf4}.finance-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:14px;padding:20px 0}.finance-filters > label:not(.el-checkbox){display:flex;flex-direction:column;gap:7px;width:210px;color:#596b83;font-size:12px}.finance-filters :deep(.el-select),.finance-filters :deep(.el-date-editor),.finance-filters :deep(.el-input-number){width:100%}.finance-toolbar{background:#f4f7fb;padding:14px;border-radius:8px;font-size:12px}.finance-note{font-size:12px;line-height:1.8;color:#6b7b90;margin:15px 0}.finance-gap{margin-top:18px}.cost-group{border:1px solid #e1e6ee;border-radius:8px;margin:18px 0;overflow:hidden}.cost-group header{display:flex;gap:18px;align-items:center;padding:12px 16px;background:#f7f9fc;flex-wrap:wrap}.cost-group header small{color:#789}.finance-scroll{overflow:auto}.cost-matrix{border-collapse:collapse;min-width:100%;font-size:12px}.cost-matrix th,.cost-matrix td{padding:12px;border-bottom:1px solid #edf0f4;text-align:center;min-width:148px}.cost-matrix th{color:#5d718a;font-weight:500}.cost-matrix small{display:block;margin-top:5px;color:#8994a2;font-size:11px}.cost-matrix td:first-child{min-width:225px;text-align:left;white-space:nowrap}.cost-matrix td:first-child>div{display:inline-block;vertical-align:middle;margin-left:12px}.cost-matrix :deep(.el-input-number){width:132px}.cost-changed{background:#fff8e7}.finance-link{display:block;margin:6px auto 0;border:0;background:none;font-size:11px;color:#446d9e;cursor:pointer}.finance-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px;margin:20px 0}.finance-cards>div{background:#f6f8fb;border:1px solid #e3e9f0;border-radius:7px;padding:16px}.finance-cards span{display:block;font-size:12px;color:#61738c;margin-bottom:10px}.finance-cards strong{font-size:19px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}.line-detail{padding:16px;background:#f6f8fb}.missing{display:block;color:#c17820;font-size:11px}.finance-panel :deep(.el-checkbox__inner){width:20px;height:20px}.finance-panel :deep(.el-checkbox__inner:after){left:7px;top:4px}.finance-panel :deep(.el-checkbox){min-height:32px}.finance-panel :deep(.el-table .cell){overflow-wrap:anywhere}@media(max-width:700px){.finance-panel{padding:12px}.finance-filters > label:not(.el-checkbox){width:calc(50% - 7px)}.finance-cards{grid-template-columns:repeat(2,minmax(0,1fr))}.finance-toolbar{gap:10px}.cost-group header{gap:10px}.finance-tabs :deep(.el-button){flex:1}.finance-panel :deep(.el-pagination){overflow:auto}}
+.finance-panel{background:#fff;padding:22px;border:1px solid #e1e6ee;border-radius:10px;min-width:0}.finance-tabs{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.finance-tabs{border-bottom:1px solid #e8edf4}.finance-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:14px;padding:20px 0}.finance-filters>label:not(.el-checkbox){display:flex;flex-direction:column;gap:7px;color:#596b83;font-size:12px}.finance-filters :deep(.el-select),.finance-filters :deep(.el-date-editor),.finance-filters :deep(.el-input-number){width:100%}.finance-gap{margin-top:18px}.cost-changed{background:#fff8e7}.line-detail{padding:16px;background:#f6f8fb}.missing{display:block;color:#c17820;font-size:11px}.finance-panel :deep(.el-checkbox__inner){width:20px;height:20px}.finance-panel :deep(.el-checkbox__inner:after){left:7px;top:4px}.finance-panel :deep(.el-checkbox){min-height:32px}.finance-panel :deep(.el-table .cell){overflow-wrap:anywhere}.cost-expanded{transform:rotate(180deg)}
+.cost-history-error{display:flex;align-items:center;gap:10px}.cost-history-error>.el-alert{flex:1}.cost-history-dialog :deep(.el-table){font-size:12px}
+.cost-history-note{display:block;font-size:11px;color:#8391a5;line-height:1.6}
+@media(max-width:700px){.finance-panel{padding:12px}.finance-panel :deep(.el-pagination){overflow:auto}}
 </style>
 
 <style scoped>
@@ -285,27 +284,8 @@ async function exportReport(){
 .finance-report-filters>.el-button{margin:0}
 @media(max-width:1300px){.finance-report-filters{grid-template-columns:minmax(245px,1.4fr) repeat(3,minmax(0,1fr))}.report-filter-actions{grid-column:1/-1;justify-content:flex-end}}
 @media(max-width:1100px){.finance-header-actions{width:100%;margin-left:0;justify-content:flex-start}.finance-report-filters{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:700px){.finance-report-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.finance-report-filters>label:not(.el-checkbox){width:auto}.report-date-field{grid-column:1/-1}.finance-tab-nav{width:100%}.finance-tabs .finance-header-actions :deep(.el-button){flex:none}.finance-rate-control{width:100%}.finance-rate-control :deep(.el-input-number){flex:1;width:auto}.finance-header-actions{gap:10px}.cost-matrix td:first-child,.cost-matrix th:first-child{min-width:148px}}
-.finance-cost-filters{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr)) auto auto;align-items:end}
-.finance-cost-filters>label:not(.el-checkbox){width:auto;min-width:0}.finance-cost-filters>.el-button{margin:0}
-.finance-toolbar{padding:12px;gap:10px}.finance-toolbar>.el-button:last-child{margin-left:auto}
-.finance-cost-note{display:flex;align-items:center;gap:6px;margin:10px 0;color:#6b7b90;font-size:12px;line-height:1.6}
-.finance-cost-note :deep(.el-button){color:#8290a2}.finance-cost-help{font-size:12px;line-height:1.8;color:#61738a}
-.cost-group{margin:12px 0;border-radius:7px}.cost-group header{padding:8px 12px;gap:12px}
-.cost-group header small{font-size:11px}.cost-group header :deep(.el-checkbox__label){font-size:13px}
-.cost-header-actions{margin-left:auto;display:flex;align-items:center;gap:6px;min-width:0}
-.cost-header-actions :deep(.el-button+.el-button){margin-left:0}.cost-unit{font-size:11px;color:#8994a2;margin-right:6px;white-space:nowrap}
-.cost-header-actions :deep(.el-icon){transition:transform .15s}.cost-expanded{transform:rotate(180deg)}
-.cost-matrix th,.cost-matrix td{padding:10px 12px;min-width:136px;vertical-align:middle}
-.cost-matrix th{background:#fbfcfe;padding-top:9px;padding-bottom:9px}.cost-matrix td:first-child,.cost-matrix th:first-child{position:sticky;left:0;min-width:200px;z-index:1;background:#fff}
-.cost-matrix th:first-child{z-index:2;background:#fbfcfe}.cost-matrix td:first-child>div{margin-left:10px}.cost-matrix td:first-child strong{font-weight:500}
-.cost-matrix :deep(.el-input-number){width:112px;height:32px}.cost-matrix :deep(.el-input__inner){font-size:12px;font-variant-numeric:tabular-nums}
-.cost-matrix :deep(.el-input__inner::placeholder){font-size:11px}.cost-matrix small{margin-top:2px;font-size:11px}
-.cost-history-filters{display:flex;gap:12px;margin-bottom:16px}.cost-history-filters>label{display:flex;flex-direction:column;gap:7px;font-size:12px;color:#596b83;flex:1;min-width:0}
-.cost-history-error{display:flex;align-items:center;gap:10px}.cost-history-error>.el-alert{flex:1}.cost-history-dialog :deep(.el-table){font-size:12px}
-.cost-history-dialog :deep(.el-pagination){overflow:auto}.cost-history-dialog :deep(.el-select__wrapper){min-height:32px}
-@media(max-width:1250px){.finance-cost-filters{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:700px){.finance-cost-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.cost-group header{gap:8px}.cost-header-actions{gap:3px}.cost-unit{display:none}.cost-group header small{font-size:11px}.cost-matrix td:first-child,.cost-matrix th:first-child{min-width:148px}.cost-matrix th,.cost-matrix td{padding:10px;min-width:128px}.finance-toolbar>.el-button:last-child{margin-left:0}}
+@media(max-width:700px){.finance-report-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.finance-report-filters>label:not(.el-checkbox){width:auto}.report-date-field{grid-column:1/-1}.finance-tab-nav{width:100%}.finance-tabs .finance-header-actions :deep(.el-button){flex:none}.finance-rate-control{width:100%}.finance-rate-control :deep(.el-input-number){flex:1;width:auto}.finance-header-actions{gap:10px}}
+.finance-cost-help{font-size:12px;line-height:1.8;color:#61738a}
 .finance-tabs{padding-bottom:12px;gap:12px}.finance-tab-nav{gap:12px}
 .finance-tab-nav :deep(.el-button){border:0;border-bottom:2px solid transparent;border-radius:0;background:transparent;padding:8px 10px;color:#6b7b90}
 .finance-tab-nav :deep(.finance-tab-active){border-bottom-color:#2563eb;color:#2563eb;font-weight:600}
@@ -334,4 +314,57 @@ async function exportReport(){
 .report-empty{text-align:center;padding:40px 12px;font-size:12px;color:#8994a2;border-top:1px solid #edf0f4}
 @media(max-width:700px){.report-advanced-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.report-filter-actions{justify-content:flex-start}.finance-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 0}.finance-summary>article{padding:0 10px}.finance-summary>article:first-child{grid-column:1/-1;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:0}.finance-summary>article:first-child>span{grid-column:1/-1}.finance-summary>article:first-child>small{align-self:center;text-align:right}.finance-summary>article:nth-child(2){border-left:0;padding-left:0}.finance-summary strong{font-size:17px}.finance-summary strong.summary-incomplete{font-size:13px}.report-table-scroll>.finance-report-table{min-width:900px}.report-filter-chips :deep(.el-tag__content){max-width:260px}.report-table-scroll .line-detail{padding:10px}}
 @media(max-width:700px){:global(.finance-report-date-popper .el-date-range-picker){width:calc(100vw - 24px);max-width:646px;max-height:60vh;overflow-y:auto}:global(.finance-report-date-popper .el-date-range-picker__content){width:100%;float:none;box-sizing:border-box;padding:12px}:global(.finance-report-date-popper .el-date-range-picker__content.is-right){border-left:0;border-top:1px solid #e8edf4}}
+</style>
+
+<style scoped>
+/* A compact ledger, not a full-width form stretched across the page. */
+.cost-workspace{padding-top:20px;color:#334155;font-size:12px;--cost-line:#e7ecf2;--cost-muted:#8190a5}
+.finance-cost-mode .finance-cost-filters{display:grid;grid-template-columns:minmax(200px,1.2fr) minmax(180px,1fr) minmax(140px,.65fr) auto;align-items:end;gap:14px;padding:0 0 20px}
+.finance-cost-mode .finance-cost-filters>label{width:auto;min-width:0;gap:6px;font-size:11px;color:#6e7f95}
+.finance-cost-filters :deep(.el-input__inner),.finance-cost-filters :deep(.el-select__placeholder){font-size:12px}
+.cost-filter-actions{display:flex;align-items:center;gap:14px;height:32px;white-space:nowrap}
+.cost-filter-actions :deep(.el-checkbox__label){font-size:12px;padding-left:6px}.cost-filter-actions>.el-button{margin:0;padding-inline:18px}
+.cost-sheet{border:1px solid var(--cost-line);border-radius:9px;overflow:hidden;background:#fff}
+.cost-sheet-caption{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 16px;background:#fafbfd;border-bottom:1px solid var(--cost-line)}
+.cost-sheet-selection,.cost-sheet-meta{display:flex;align-items:center;gap:16px;min-width:0}
+.cost-sheet-selection :deep(.el-checkbox__label){font-size:12px;color:#50627a;padding-left:8px}
+.cost-result-count{color:var(--cost-muted);border-left:1px solid #e0e6ee;padding-left:16px;white-space:nowrap;font-size:11px}.cost-result-count b{font-weight:500;color:#50627a}
+.cost-sheet-meta{gap:3px;color:var(--cost-muted);font-size:11px;white-space:nowrap}.cost-sheet-meta i{font-style:normal;margin:0 6px;color:#c0c9d4}.cost-sheet-meta :deep(.el-button){padding:4px;height:24px;width:24px;color:#8999ac}
+.cost-ledger{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));min-height:100px;padding:0 16px}
+.cost-ledger-column{min-width:0;padding-right:20px}.cost-ledger-column+ .cost-ledger-column{border-left:1px solid var(--cost-line);padding-left:20px;padding-right:0}
+.cost-ledger-single{grid-template-columns:1fr}.cost-ledger-single .cost-ledger-column{padding-right:0;max-width:720px}
+.style-cost-table{width:100%;border-collapse:collapse;table-layout:fixed;text-align:left;font-size:12px}
+.cost-select-col{width:34px}.cost-amount-col{width:162px}.cost-history-col{width:72px}
+.style-cost-table th{height:36px;font-weight:400;color:#8a98aa;font-size:11px;border-bottom:1px solid #edf1f5}
+.style-cost-table th,.style-cost-table td{padding:7px 8px;box-sizing:border-box;vertical-align:middle}
+.style-cost-table td{height:48px;border-bottom:1px solid #edf1f5;transition:background-color .12s}
+.style-cost-table tr:last-child td{border-bottom:0}.style-cost-table tbody tr:hover{background:#f8fafc}
+.style-cost-table .style-select{padding-left:0;padding-right:0}
+.style-cost-table .style-code{color:#334155;font-weight:600;letter-spacing:.15px;overflow-wrap:anywhere}
+.style-code>span:first-child{vertical-align:middle}.cost-edit-dot{display:inline-block;width:5px;height:5px;background:#c99135;border-radius:50%;margin-left:7px;vertical-align:middle}
+.style-cost-table .cost-selected{background:#f5f8ff}.style-cost-table .cost-changed{background:#fffbf1}.style-cost-table .cost-changed:hover{background:#fff8e6}
+.style-cost-table .cost-amount-heading{padding-left:8px}.cost-input-shell,.cost-batch-input{display:flex;align-items:center;border:1px solid #e0e6ee;border-radius:5px;background:#fff;min-width:0;transition:border-color .15s,box-shadow .15s}
+.cost-input-shell:hover,.cost-batch-input:hover{border-color:#b9c8dc}.cost-input-shell:focus-within,.cost-batch-input:focus-within{border-color:#407cf5;box-shadow:0 0 0 2px #eaf1ff}
+.cost-currency,.cost-batch-input>span{padding-left:10px;color:#91a0b4;font-size:12px;flex-shrink:0}
+.cost-input-shell :deep(.el-input-number),.cost-batch-input :deep(.el-input-number){width:100%;min-width:0;height:32px}
+.cost-input-shell :deep(.el-input__wrapper),.cost-batch-input :deep(.el-input__wrapper){padding:0 10px 0 5px;background:transparent;box-shadow:none!important;border-radius:5px}
+.cost-input-shell :deep(.el-input__inner),.cost-batch-input :deep(.el-input__inner){height:30px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums;color:#34455f}
+.cost-input-shell :deep(.el-input__inner::placeholder),.cost-batch-input :deep(.el-input__inner::placeholder){font-size:11px;color:#9aa7b8;font-weight:400}
+.cost-input-empty{border-color:#e9edf3;background:#fafbfd}.cost-input-empty .cost-currency{color:#b5becb}
+.cost-history-cell{text-align:right}.cost-history-button :deep(.el-icon){font-size:13px;margin-right:4px}.style-cost-table .cost-history-button{font-size:11px;font-weight:400;color:#7e8ea3;padding:6px 0;height:32px}
+.style-cost-table .cost-history-button:hover{color:#2563eb;background:transparent}
+.style-cost-empty{grid-column:1/-1;text-align:center;padding:50px 12px;color:var(--cost-muted)}
+.cost-sheet-bottom{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:54px;padding:8px 16px;border-top:1px solid var(--cost-line);color:#95a1b1;font-size:11px}
+.cost-sheet-bottom :deep(.el-pagination){padding:0;font-size:12px}.cost-sheet-bottom :deep(.el-pager li){min-width:28px;font-size:12px}
+.cost-actionbar{position:sticky;bottom:16px;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-top:14px;padding:12px 14px;border:1px solid var(--cost-line);border-radius:8px;background:#fff;box-shadow:0 4px 16px #24385005}
+.cost-actionbar-selected{border-color:#dce6f6;background:#fbfcff}.cost-batch-controls,.cost-save-controls{display:flex;align-items:center;gap:10px;min-width:0;flex-wrap:wrap}
+.cost-selected-count{color:#58739b;white-space:nowrap;font-size:11px}.cost-selected-count b{font-weight:600;color:#2f65b8}
+.cost-batch-input{width:126px}.cost-batch-controls>.el-button+.el-button{margin-left:0}.cost-batch-controls>.el-button{font-size:12px;height:32px;padding:8px 12px}
+.cost-save-controls{margin-left:auto;gap:14px}.cost-save-controls>.el-button{margin:0;height:32px;padding-inline:18px;font-size:12px}
+.cost-save-state{display:flex;align-items:center;gap:5px;color:#99a4b3;white-space:nowrap;font-size:11px}.cost-state-dot{width:5px;height:5px;background:#c2ccd8;border-radius:50%}.cost-save-pending{color:#b5802e}.cost-save-pending .cost-state-dot{background:#d6a247}
+.cost-action-hint{display:flex;align-items:center;gap:6px;color:#93a0b1;font-size:11px}.cost-action-hint :deep(.el-icon){font-size:13px}
+.finance-cost-mode :deep(.el-checkbox__inner){width:17px;height:17px;border-radius:3px}.finance-cost-mode :deep(.el-checkbox__inner:after){left:5px;top:2px}.finance-cost-mode :deep(.el-checkbox){height:32px;min-height:32px;margin-right:0}
+.cost-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(max-width:1250px){.cost-actionbar{position:static}.finance-cost-mode .finance-cost-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.cost-filter-actions{grid-column:1/-1;justify-content:flex-end}.cost-ledger{grid-template-columns:1fr}.cost-ledger-column,.cost-ledger-column+ .cost-ledger-column{border-left:0;padding:0}.cost-ledger-column+ .cost-ledger-column{border-top:1px solid var(--cost-line)}.cost-ledger-column+ .cost-ledger-column thead{display:none}.cost-amount-col{width:190px}.cost-history-col{width:80px}}
+@media(max-width:700px){.cost-workspace{padding-top:16px}.finance-cost-mode .finance-cost-filters{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;padding-bottom:16px}.finance-cost-mode .finance-cost-filters>label:first-child{grid-column:1/-1}.cost-filter-actions{justify-content:space-between;gap:8px;grid-column:1/-1}.cost-sheet-caption{padding:8px 12px;gap:8px;flex-wrap:wrap}.cost-sheet-selection{gap:10px}.cost-result-count{padding-left:10px}.cost-sheet-meta{gap:0}.cost-sheet-meta>span{font-size:10px}.cost-shared-label{display:none}.cost-sheet-meta i{margin:0 3px}.cost-ledger{padding:0 10px}.cost-select-col{width:26px}.cost-amount-col{width:112px}.cost-history-col{width:42px}.style-cost-table th,.style-cost-table td{padding:6px 5px}.style-cost-table td{height:52px}.style-cost-table .style-code{font-size:11px}.style-code>span:first-child{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;max-height:34px;line-height:17px}.style-cost-table .style-code{position:relative}.style-code>span:first-child{padding-right:6px}.style-code .cost-edit-dot{position:absolute;right:3px;top:calc(50% - 2px);margin:0;width:4px;height:4px}.cost-currency{padding-left:7px}.cost-input-shell :deep(.el-input__wrapper){padding-right:7px}.style-cost-table .cost-history-button{font-size:11px}.cost-history-button :deep(.el-icon){display:none}.cost-sheet-bottom{padding:8px 10px;gap:4px}.cost-pagination-hint{display:none}.cost-actionbar{position:static;gap:12px;padding:12px;margin-top:12px}.cost-action-hint{width:100%}.cost-batch-controls{width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.cost-selected-count{grid-column:1;grid-row:1;min-width:46px}.cost-batch-input{grid-column:1;grid-row:2;width:auto;min-width:95px;max-width:none}.cost-batch-controls>.el-button{padding-inline:8px}.cost-batch-controls>.el-button:nth-last-child(2){grid-column:2;grid-row:2}.cost-batch-controls>.el-button:last-child{grid-column:2;grid-row:1;justify-self:end}.cost-save-controls{width:100%;margin:0;justify-content:space-between;padding-top:10px;border-top:1px solid var(--cost-line);gap:8px}.cost-save-controls>.el-button{padding-inline:14px}}
 </style>
