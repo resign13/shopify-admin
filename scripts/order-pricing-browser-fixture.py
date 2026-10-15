@@ -22,7 +22,7 @@ if not store:
     with application.app.test_client() as client:
         response=client.post('/api/admin/orders',json={'requestId':str(uuid.uuid4()),'userId':1,
             'contactName':'Browser Quote','phone':'123456','country':'CN','address':'Fixture Street',
-            'currency':'CNY','exchangeRate':7.2,'shippingFee':10,'items':[
+            'currency':'USD','exchangeRate':None,'shippingFee':10,'items':[
                 {'productId':1,'sizeCode':'M','quantity':2,'unitPrice':80,'priceSource':'manual'},
                 {'productId':1,'sizeCode':'L','quantity':1,'unitPrice':90,'priceSource':'manual'}]},
             headers={'Authorization':'Bearer '+tokens['admin']})

@@ -4,7 +4,7 @@
     <button v-if="clickable" class="order-number-text order-number-link" type="button" :aria-label="parts.full" @click="$emit('open')"><span class="order-number-fixed">{{ parts.prefix }}</span><span class="order-number-name">{{ parts.name }}</span><span class="order-number-fixed">{{ parts.suffix }}</span></button>
     <span v-else class="order-number-text"><span class="order-number-fixed">{{ parts.prefix }}</span><span class="order-number-name">{{ parts.name }}</span><span class="order-number-fixed">{{ parts.suffix }}</span></span>
     <ElTooltip v-if="warehousePrinted" content="仓库已打单" :trigger="['hover', 'focus', 'click']" placement="top">
-      <span class="order-printed-mark" role="img" aria-label="仓库已打单" title="仓库已打单" tabindex="0"><Printer /></span>
+      <span class="order-printed-mark" data-testid="warehouse-printed-mark" role="img" aria-label="仓库已打单" title="仓库已打单" tabindex="0"><Printer /></span>
     </ElTooltip></span>
     <span v-if="secondary" class="order-number-secondary" :title="secondary">
       <span class="order-number-text"><span class="order-number-fixed">{{ subParts.prefix }}</span><span class="order-number-name">{{ subParts.name }}</span><span class="order-number-fixed">{{ subParts.suffix }}</span></span>

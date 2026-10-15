@@ -5,6 +5,7 @@ from unittest.mock import patch
 from flask.testing import FlaskClient
 from psycopg.errors import ForeignKeyViolation
 from openpyxl import load_workbook
+from werkzeug.security import generate_password_hash
 from test_workbench import application, db, seed
 import order_printing
 
@@ -58,6 +59,27 @@ class OrderPrintingTest(unittest.TestCase):
             order_printing.migrate(conn.cursor())
             order_printing.migrate(conn.cursor())
         self.assertEqual(self.marks(), first)
+
+    def test_mark_visible_to_every_authorized_department_with_order_scope_preserved(self):
+        db._fetch_one('UPDATE orders SET owner_admin_id=2 WHERE id=1 RETURNING id')
+        self.assertEqual(self.call('orders/export?orderIds=1&includeImages=0', 'POST').status_code, 200)
+        finance = db.create_admin_user({'name':'财务验收','email':'finance-print@gingtto.test',
+            'passwordHash':generate_password_hash('Fixture-Only',method='pbkdf2:sha256:1000'),
+            'role':'finance','status':'active','permissions':['finance','orders']})
+        self.tokens['finance'] = db.create_admin_session(finance['id'])
+        for role in ('admin','sales','warehouse','finance'):
+            with self.subTest(role=role):
+                order = self.call('orders/1', role=role).json['order']
+                self.assertTrue(order['warehousePrinted'])
+                rows = self.call('orders?page=1&pageSize=25', role=role).json['items']
+                self.assertTrue(next(row for row in rows if row['id']==1)['warehousePrinted'])
+        db._fetch_one('UPDATE orders SET owner_admin_id=NULL WHERE id=1 RETURNING id')
+        self.assertEqual(self.call('orders/1', role='sales').status_code, 404)
+        rows = self.call('orders?page=1&pageSize=25', role='sales').json['items']
+        self.assertNotIn(1, [row['id'] for row in rows])
+        db._fetch_one("UPDATE admin_users SET permissions='[\"finance\"]' WHERE id=%s RETURNING id",(finance['id'],))
+        self.assertEqual(self.call('orders/1', role='finance').status_code, 403)
+        self.assertEqual(self.call('orders/1', role='customer').status_code, 403)
 
     def test_nonwarehouse_exports_and_empty_results_do_not_mark(self):
         for kind in ('export', 'export-by-sheet'):

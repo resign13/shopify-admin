@@ -106,7 +106,8 @@ async (page) => {
     const box=item.querySelector('.el-select__wrapper,.el-input__wrapper').getBoundingClientRect();
     return {top:box.top,height:box.height};
   }));
-  check(quoteBoxes.length===3&&quoteBoxes.every(box=>Math.abs(box.height-32)<1&&Math.abs(box.top-quoteBoxes[0].top)<1),'Currency, FX and freight controls are not aligned at 32px');
+  check(quoteBoxes.length===1&&quoteBoxes.every(box=>Math.abs(box.height-32)<1&&Math.abs(box.top-quoteBoxes[0].top)<1),'Freight control is not 32px');
+  check(await editor.getByRole('combobox',{name:'订单币种',exact:true}).count()===0 && await editor.getByRole('spinbutton',{name:'本单汇率',exact:true}).count()===0,'Currency switch or per-order FX editor remains');
   check(await quoteControls.locator('.el-input-number__increase,.el-input-number__decrease').count()===0,'Freight stepper buttons remain');
   check(await weightSummary.locator('.order-weight-caption').count()===0,'Redundant weight caption remains');
   check((await summary.innerText()).includes('$89.70'), 'Goods amount calculated incorrectly');
@@ -274,7 +275,7 @@ async (page) => {
   await warehouseDetail.getByRole('button', {name: '关闭', exact: true}).click();
   return {dateAfterOrderNo: true,oldColumnPreferences: true,customerSearch: true,
     noSizeUnitPrice: true,noProductSubtotal: true,goodsSummaryPosition: true,
-    quoteControlsAligned: true,shippingNoStepper: true,compactEditorHints: true,
+    usdOnlyEditor: true,shippingNoStepper: true,compactEditorHints: true,
     itemCountsPreserved: true,amountsAndShippingPreserved: true,draftWeightAndMissingWarning: true,
     compactWeightHint: true,missingDetailsPopover: true,unsetWeightSmallFont: true,narrowWeightSummary: true,
     currentWeightRefresh: true,weightFailureRecovery: true,completedListReopen: true,
