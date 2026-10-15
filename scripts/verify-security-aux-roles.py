@@ -20,7 +20,7 @@ os.environ.update(APP_ENV='test', DB_SCHEMA_AUTO_MIGRATE='1', PRIVATE_STORAGE_BU
 import test_workbench as fixtures
 fixtures.seed()
 db = fixtures.db
-business_tables = ['orders', 'order_items', 'products', 'product_size_prices', 'finance_cost_history', 'store_users', 'admin_users']
+business_tables = ['orders', 'order_items', 'products', 'product_size_prices', 'finance_cost_history','finance_style_costs','finance_style_cost_audit', 'store_users', 'admin_users']
 
 
 def business_fingerprint():
@@ -54,10 +54,10 @@ for kind in ['maintenance', 'exporter']:
                 try: conn.execute(statement)
                 except psycopg.errors.InsufficientPrivilege: pass
                 else: raise AssertionError('Read-only snapshot role gained write/DDL access')
-            for table in ['orders', 'products', 'finance_cost_history', 'admin_users']:
+            for table in ['orders', 'products', 'finance_cost_history','finance_style_costs','finance_style_cost_audit', 'admin_users']:
                 conn.execute('SELECT count(*) FROM ' + table).fetchone()
         else:
-            for table in ['orders', 'products', 'finance_cost_history', 'admin_users']:
+            for table in ['orders', 'products', 'finance_cost_history','finance_style_costs','finance_style_cost_audit', 'admin_users']:
                 try: conn.execute('SELECT 1 FROM ' + table + ' LIMIT 1')
                 except psycopg.errors.InsufficientPrivilege: pass
                 else: raise AssertionError('Maintenance role gained business access')

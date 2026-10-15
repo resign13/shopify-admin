@@ -300,3 +300,39 @@ CREATE TABLE IF NOT EXISTS finance_settings (
   revision BIGINT NOT NULL DEFAULT 1,
   updated_by BIGINT REFERENCES admin_users(id) ON DELETE SET NULL,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());
+
+    -- Keep the legacy variant timelines intact; they are not the active cost source.
+    -- No product/size FK: changing or deleting catalog rows must not erase cost history.
+    CREATE TABLE IF NOT EXISTS finance_style_costs (
+      style_code TEXT PRIMARY KEY CHECK(length(btrim(style_code)) BETWEEN 1 AND 200),
+      cost_cny NUMERIC(12,2) CHECK(cost_cny>=0), revision BIGINT NOT NULL DEFAULT 0,
+      actor JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp());
+    CREATE TABLE IF NOT EXISTS finance_style_cost_audit (
+      id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, style_code TEXT NOT NULL,
+      old_cost_cny NUMERIC(12,2), cost_cny NUMERIC(12,2), actor JSONB NOT NULL,
+      request_id UUID NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      effective_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+      is_initial BOOLEAN NOT NULL DEFAULT false);
+    -- Preserve the actual original save time when upgrading existing cost events.
+    ALTER TABLE finance_style_cost_audit ADD COLUMN IF NOT EXISTS effective_at TIMESTAMPTZ;
+    UPDATE finance_style_cost_audit SET effective_at=created_at WHERE effective_at IS NULL;
+    ALTER TABLE finance_style_cost_audit ALTER COLUMN effective_at SET DEFAULT clock_timestamp();
+    ALTER TABLE finance_style_cost_audit ALTER COLUMN effective_at SET NOT NULL;
+    ALTER TABLE finance_style_cost_audit ADD COLUMN IF NOT EXISTS is_initial BOOLEAN NOT NULL DEFAULT false;
+    INSERT INTO finance_style_cost_audit(style_code,old_cost_cny,cost_cny,actor,request_id,created_at,effective_at)
+      SELECT c.style_code,NULL,c.cost_cny,c.actor,md5('finance-style-baseline:'||c.style_code)::uuid,c.updated_at,c.updated_at
+      FROM finance_style_costs c WHERE NOT EXISTS (
+        SELECT 1 FROM finance_style_cost_audit a WHERE a.style_code=c.style_code);
+    WITH initial AS (
+      SELECT DISTINCT ON (a.style_code) a.id FROM finance_style_cost_audit a
+      WHERE a.cost_cny IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM finance_style_cost_audit b WHERE b.style_code=a.style_code AND b.is_initial)
+      ORDER BY a.style_code,a.effective_at,a.id)
+    UPDATE finance_style_cost_audit a SET is_initial=true FROM initial i WHERE a.id=i.id;
+    CREATE UNIQUE INDEX IF NOT EXISTS finance_style_cost_audit_initial
+      ON finance_style_cost_audit(style_code) WHERE is_initial;
+    CREATE INDEX IF NOT EXISTS finance_style_cost_audit_style
+      ON finance_style_cost_audit(style_code,id DESC);
+    CREATE INDEX IF NOT EXISTS finance_style_cost_audit_timeline
+      ON finance_style_cost_audit(style_code,effective_at DESC,id DESC);

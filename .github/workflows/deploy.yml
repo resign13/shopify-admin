@@ -218,6 +218,10 @@ jobs:
           npx --yes --package @playwright/cli playwright-cli -s=financeci run-code --filename scripts/login-finance-browser-fixture.js
           npx --yes --package @playwright/cli playwright-cli -s=financeci run-code --filename scripts/verify-finance-browser.js | tee "$RUNNER_TEMP/finance-result.log"
           grep -Eq '"financeBrowser":[[:space:]]*true' "$RUNNER_TEMP/finance-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=financeci snapshot
+          npx --yes --package @playwright/cli playwright-cli -s=financeci run-code --filename scripts/verify-finance-cost-ui-browser.js | tee "$RUNNER_TEMP/finance-ui-result.log"
+          grep -Eq '"twoColumnLedger":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
+          grep -Eq '"renderOnlyNoWrites":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=financeci close
   deploy:
     needs: verify
