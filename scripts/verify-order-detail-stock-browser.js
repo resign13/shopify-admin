@@ -37,7 +37,11 @@ async (page) => {
   const refresh=async(detail)=>{
     const response=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders/1') && r.request().method()==='GET');
     await detail.getByRole('button',{name:'刷新详情',exact:true}).click();
-    check((await response).status()===200,'Detail refresh failed');
+    const result=await response;check(result.status()===200,'Detail refresh failed');
+    await result.finished();
+    // A network response event precedes response.json() and Vue's render tick.
+    // Wait for the actual UI recovery, including when the stock value is unchanged.
+    await detail.getByTestId('order-stock-stale').waitFor({state:'hidden'});
   };
   const hint=(detail,pid=1,size='M')=>detail.getByTestId(`detail-stock-${pid}-${size}`);
   await page.setViewportSize({width:1920,height:1080});
