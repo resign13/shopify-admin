@@ -95,6 +95,7 @@ async (page) => {
   await page.getByTestId('cancel-note-mark').waitFor();
   await page.getByTestId('cancel-note-mark').focus();
   await page.getByRole('tooltip').filter({hasText:'List reason'}).waitFor();
+  check(await page.getByRole('tooltip').filter({hasText:'List reason'}).evaluate(el=>getComputedStyle(el).pointerEvents==='none'),'Note tooltip blocks row actions');
   await openDetail();
   check((await drawer().getByTestId('cancel-note-detail').textContent()).includes('List reason'),'Detail note missing');
   await applyNote('Updated reason\n<img src=x onerror=alert(1)>');
@@ -158,7 +159,7 @@ async (page) => {
   const events=(await api(`orders/${id}/operations`)).items;
   check(events.some(e=>e.changes.some(c=>c.field==='cancelNote' && c.after==='Warehouse amended')),'Note audit missing');
   return {listCancel:true,discardNoWrite:true,conflictKeepsInput:true,refreshThenConfirm:true,stockReturnedOnce:true,
-    tooltipKeyboardAndMobileTap:true,detailNoteEditAndClear:true,plainTextEscaping:true,ordinaryNoteAndMoneyUnchanged:true,
+    tooltipKeyboardAndMobileTap:true,tooltipDoesNotBlockActions:true,detailNoteEditAndClear:true,plainTextEscaping:true,ordinaryNoteAndMoneyUnchanged:true,
     restoreClears:true,recancelBlank:true,fullEditorEntry:true,warehouseEntry:true,warehouseMoneyHidden:true,
     salesOwnOrderVisible:true,narrowLayout:true,audit:true};
 }

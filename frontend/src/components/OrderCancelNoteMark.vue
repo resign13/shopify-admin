@@ -1,5 +1,6 @@
 <template>
-  <ElTooltip v-if="note" :trigger="['hover', 'focus', 'click']" placement="top" :show-after="100">
+  <ElTooltip v-if="note" :trigger="['hover', 'focus', 'click']" placement="top" :show-after="100"
+    :enterable="false" :popper-style="{ pointerEvents: 'none' }">
     <template #content><div class="cancel-note-text">{{ note }}</div></template>
     <button type="button" class="cancel-note-mark" aria-label="查看取消备注" data-testid="cancel-note-mark"><ChatDotRound /></button>
   </ElTooltip>
