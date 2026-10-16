@@ -223,7 +223,10 @@ class AdminOrdersTest(unittest.TestCase):
                 updated = self.change_status(completed, target, trackingNo='REOPEN-FIXTURE' if target == 'shipped' else '')
                 self.assertEqual(updated['status'], target)
                 self.assertFalse(updated['completedAt'])
-                self.assertEqual(updated['items'], completed['items'])
+                self.assertEqual([{k:v for k,v in r.items() if k!='currentStock'} for r in updated['items']],
+                                 [{k:v for k,v in r.items() if k!='currentStock'} for r in completed['items']])
+                for old, now in zip(completed['items'], updated['items']):
+                    self.assertEqual(now['currentStock'],old['currentStock']+(old['quantity'] if target=='cancelled' else 0))
                 self.assertEqual(updated['totalAmount'], 127.5)
                 self.assertEqual(updated['shippingFee'], 12.5)
                 expected = stock_before_creation if target == 'cancelled' else stock_before_creation - 5
@@ -291,12 +294,14 @@ class AdminOrdersTest(unittest.TestCase):
         completed = self.change_status(self.create(), 'completed')
         db.update_product_inventory(1, {'M': 2147483645, 'L': 0, 'Tall XL': 0})
         before = self.stock()
+        # Inventory was intentionally changed after the earlier detail snapshot.
+        before_order = self.call(f"orders/{completed['id']}").json['order']
         response = self.call(f"orders/{completed['id']}", 'PUT', {
             'version': completed['version'], 'status': 'cancelled', 'shippingFee': 12.5,
         })
         self.assertEqual(response.status_code, 400, response.json)
         self.assertEqual(self.stock(), before)
-        self.assertEqual(self.call(f"orders/{completed['id']}").json['order'], completed)
+        self.assertEqual(self.call(f"orders/{completed['id']}").json['order'], before_order)
         self.assertEqual(self.call(f"orders/{completed['id']}/operations").json['total'], 1)
 
     def test_completed_reopen_respects_owner_role_module_and_warehouse_redaction(self):

@@ -197,6 +197,34 @@ jobs:
           npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-order-number-browser.js | tee "$RUNNER_TEMP/order-number-result.log"
           grep -q '"orderNumberUI":true' "$RUNNER_TEMP/order-number-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=weightsci close
+      - name: Isolated cancellation notes and current-stock browser lifecycle
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_order_notes_stock_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          set -euo pipefail
+          python scripts/order-notes-stock-browser-fixture.py > "$RUNNER_TEMP/order-notes-stock.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5360/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/order-notes-stock.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5360/api/health >/dev/null
+          npx --yes --package @playwright/cli playwright-cli -s=notesstockci open http://127.0.0.1:5360/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=notesstockci run-code --filename scripts/login-weights-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=notesstockci run-code --filename scripts/verify-order-cancel-note-browser.js | tee "$RUNNER_TEMP/cancel-note-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/cancel-note-result.log"; then exit 1; fi
+          grep -q '"stockReturnedOnce":true' "$RUNNER_TEMP/cancel-note-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=notesstockci run-code --filename scripts/verify-order-detail-stock-browser.js | tee "$RUNNER_TEMP/detail-stock-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/detail-stock-result.log"; then exit 1; fi
+          grep -q '"cancelledNotDoubleReturned":true' "$RUNNER_TEMP/detail-stock-result.log"
+          grep -q '"lateResponseIgnored":true' "$RUNNER_TEMP/detail-stock-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=notesstockci close
       - name: Isolated finance browser lifecycle
         env:
           PGHOST: 127.0.0.1

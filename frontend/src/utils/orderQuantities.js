@@ -14,3 +14,10 @@ export function orderVariantInventory(stock, before = 0, next = 0, oldStatus = '
   return { current: stock ?? '待刷新', change: change > 0 ? `+${change}` : change,
     after: stock == null ? '待刷新' : Number(stock) + change };
 }
+
+// Presentation only: callers decide whether this is a current or preview balance.
+export function variantStockHint(stock, unavailableText = '库存不可用') {
+  const known = typeof stock === 'number' && Number.isInteger(stock);
+  const shortage = known && stock < 0;
+  return { shortage, text: known ? `库存 ${stock}${shortage ? ' · 欠货' : ''}` : unavailableText };
+}

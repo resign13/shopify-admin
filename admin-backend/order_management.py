@@ -11,6 +11,7 @@ import sales_ownership
 import order_reorder
 import order_numbering
 import order_pricing
+import order_cancellation
 
 
 def amount(value, label):
@@ -135,6 +136,8 @@ def save_order(payload, order_id=None):
         raise ValueError('订单状态无效')
     if not old and next_status != 'pending_payment':
         raise ValueError('新增订单必须为待付款状态')
+    cancel_note = payload.get('cancelNote', order_cancellation.MISSING)
+    order_cancellation.next_note((old or {}).get('status'), next_status, cancel_note, (old or {}).get('cancellation_note',''))
     if old:
         db._fetch_one('UPDATE orders SET owner_admin_id=%s WHERE id=%s RETURNING id', (owner_id, order_id))
         db.validate_admin_order_transition(old["status"], next_status)
@@ -268,7 +271,7 @@ def save_order(payload, order_id=None):
         db._fetch_one('UPDATE orders SET label_image_urls=%s,label_pdf_url=%s WHERE id=%s RETURNING id',
                       (json.dumps(image_urls, ensure_ascii=False), legacy_files[0] if legacy_files else '', order_id))
     if old:
-        db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping)
+        db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping, cancel_note=cancel_note)
     if origin:
         order_reorder.audit(order_id, origin)
     from private_media import bind_current, attachment_urls

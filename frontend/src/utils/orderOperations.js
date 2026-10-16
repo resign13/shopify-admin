@@ -7,7 +7,7 @@ export const operationFields = {
   secondaryOrderNo: '副单号', currency:'订单币种', exchangeRate:'本单汇率（1 USD = CNY）',
   status: '订单状态', customerId: '商城账号编号', contactName: '联系人',
   country: '国家', apartment: '公寓 / 单元', city: '城市', state: '省 / 州',
-  note: '备注', trackingNo: '物流单号', ownerAdminId: '业务员编号',
+  note: '备注', cancelNote: '取消备注', trackingNo: '物流单号', ownerAdminId: '业务员编号',
   shippingFee: '运费', totalAmount: '应付总额', attachments: '订单附件',
   quantity: '数量', unitPrice: '单价',
 };

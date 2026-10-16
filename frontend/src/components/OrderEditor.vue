@@ -128,11 +128,11 @@
                 size="small"
                 @update:model-value="setMatrixQuantity(row, sizeCode, $event)"
               />
-              <small v-if="sizeAvailable(row, sizeCode)" class="order-size-stock"
-                :class="{ 'is-shortage': inventoryFor(row, sizeCode).after < 0 }"
+              <VariantStockHint v-if="sizeAvailable(row, sizeCode)" class="order-size-stock"
+                :stock="inventoryFor(row, sizeCode).after" unavailable-text="库存 待刷新"
                 :data-testid="`size-stock-${row.productId}-${sizeCode}`"
                 :title="`当前库存 ${inventoryFor(row, sizeCode).current}；预计保存后库存，实际以保存时为准`"
-              >库存 {{ inventoryFor(row, sizeCode).after }}{{ inventoryFor(row, sizeCode).after < 0 ? ' · 欠货' : '' }}</small>
+              />
               <small v-else class="order-size-stock is-unavailable">—</small>
             </div></template
         ></ElTableColumn
@@ -233,7 +233,7 @@
       </div>
       <div v-if="id" class="detail-grid">
         <ElFormItem label="订单状态"
-          ><ElSelect v-model="form.status"
+          ><ElSelect v-model="form.status" @change="form.cancelNote = ''"
             ><ElOption
               v-for="(label, value) in statusNames"
               :key="value"
@@ -247,6 +247,9 @@
           ><ElInput v-model.trim="form.paymentLink"
         /></ElFormItem>
       </div>
+      <ElFormItem v-if="id && form.status === 'cancelled'" label="取消备注（选填）">
+        <ElInput v-model="form.cancelNote" type="textarea" :rows="3" maxlength="500" show-word-limit aria-label="取消备注（选填）" placeholder="填写取消原因，仅后台可见" />
+      </ElFormItem>
       <ElFormItem label="备注"
         ><ElInput
           v-model="form.note"
@@ -316,6 +319,7 @@ import { customerFields, customerProfile, applyCustomerProfile } from "../utils/
 import { compareProductCategories } from "../utils/catalogOrder";
 import { useAdminAuthStore } from "../stores/auth";
 import { orderProductQuantity, orderVariantInventory } from "../utils/orderQuantities";
+import VariantStockHint from './VariantStockHint.vue';
 import { formatWeightKg, orderWeightPreviewItems } from "../utils/productWeights";
 import { reorderForm, reorderPriceChanges, applyReorderPrices, attachmentHref } from "../utils/orderReorder";
 import {
@@ -351,6 +355,7 @@ const form = reactive({
   state: "",
   zip: "",
   note: "",
+  cancelNote: "",
   labelImageUrls: [],
   labelPdfUrl: "",
   inheritedAttachmentUrls: [],
@@ -653,6 +658,7 @@ watch(
           state: "",
           zip: "",
           note: "",
+          cancelNote: "",
           labelImageUrls: [],
           labelPdfUrl: "",
           inheritedAttachmentUrls: [], pendingItems: [], ownerConfirmed: true,
@@ -816,7 +822,7 @@ async function submit() {
   }
   if (
     !(await confirm(
-      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}（${form.currency}）。${props.id ? `原总额 ${formatMoney(originalTotal.value,originalCurrency.value)}。` : ''}${status.value==='paid'?'已付款订单改价，请核对补款或退款；付款状态不自动改变。':''}${willClearPayment.value?'保存后清空旧付款链接。':''}${props.sourceOrderId || form.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}库存仅按商品数量差额调整。`,
+      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}（${form.currency}）。${props.id ? `原总额 ${formatMoney(originalTotal.value,originalCurrency.value)}。` : ''}${status.value==='paid'?'已付款订单改价，请核对补款或退款；付款状态不自动改变。':''}${willClearPayment.value?'保存后清空旧付款链接。':''}${props.sourceOrderId || form.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}${form.status === "cancelled" && status.value !== "cancelled" ? "取消后返还订单商品库存。" : "库存仅按商品数量差额调整。"}`,
     ))
   )
     return;
@@ -846,7 +852,7 @@ async function submit() {
     );
     markClean();
     emit("update:open", false);
-    emit("saved", result.order?.id);
+    emit("saved", result.order?.id, result.order);
     ElMessage.success(props.id ? "订单修改已保存" : "订单已创建");
   } catch (e) {
     error.value = e.message;
@@ -895,8 +901,7 @@ async function adoptLatest() {
 .order-quote-controls :deep(.el-input-number){width:150px;height:32px;line-height:30px}
 .order-quote-controls :deep(.el-select__wrapper),.order-quote-controls :deep(.el-input__wrapper){min-height:32px;box-sizing:border-box;font-size:12px}
 .quote-notice{font-size:12px;color:#b45309;line-height:1.6;margin:10px 0}
-.order-size-stock { display: block; color: var(--muted); font-size: 11px; line-height: 1.5; font-weight: 400; white-space: normal; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
-.order-size-stock.is-shortage { color: var(--el-color-danger); }
+.order-size-stock.is-unavailable { display:block; font-size:11px; line-height:1.5; }
 .order-size-stock.is-unavailable { color: #a8abb2; }
 
 .reorder-pricing { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; color: #64748b; font-size: 12px; padding: 0 0 12px; }

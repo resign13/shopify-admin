@@ -2,6 +2,7 @@ from __future__ import annotations
 import safe_excel
 import order_pricing
 import order_printing
+import order_cancellation
 
 import module_permissions
 import sales_ownership
@@ -2847,22 +2848,40 @@ def export_order_invoice(order_id: int) -> Any:
     )
 
 
+def admin_order_snapshot(order_id):
+    """Canonical detail response: totals, current weight/stock and edit version."""
+    item = get_order_by_id(order_id, include_weight=True, include_stock=True)
+    if not item:
+        return None
+    item['version'] = workbench.version('orders', order_id)
+    item['goodsAmount'] = round(sum(float(row['totalPrice']) for row in item['items']), 2)
+    return redact_order_amounts_for_warehouse(item) if g.current_user.get('role') == 'warehouse' else item
+
+
 @app.put("/api/admin/orders/<int:order_id>")
 @require_auth
 @require_roles("admin", "sales", "warehouse")
 def update_order_route(order_id: int) -> Any:
     payload = request.get_json(silent=True) or {}
-    status = str(payload.get("status", "")).strip()
-    tracking_no = str(payload.get("trackingNo", "")).strip()
-    payment_link = str(payload.get("paymentLink", "")).strip()
-    from order_management import amount
-    shipping_fee = amount(payload.get("shippingFee", 0), "运费")
-    if g.current_user.get("role") == "warehouse":
-        current = workbench.db._fetch_one(
-            "SELECT shipping_fee, payment_link FROM orders WHERE id=%s", (order_id,)
-        )
-        if not current:
+    if "cancelNote" in payload and not payload.get("version"):
+        return jsonify({"message": "请读取最新订单后提交取消备注"}), 400
+    if "cancelNote" in payload and set(payload) <= {"cancelNote", "version"}:
+        order = workbench.db.update_order_cancel_note(order_id, payload["cancelNote"])
+        if not order:
             return jsonify({"message": "Order not found"}), 404
+        order = admin_order_snapshot(order_id)
+        return jsonify({"message": "取消备注已保存", "order": order})
+    current = workbench.db._fetch_one(
+        "SELECT shipping_fee,payment_link,tracking_no FROM orders WHERE id=%s FOR UPDATE", (order_id,)
+    )
+    if not current:
+        return jsonify({"message": "Order not found"}), 404
+    status = str(payload.get("status", "")).strip()
+    tracking_no = str(payload.get("trackingNo", current["tracking_no"] or "")).strip()
+    payment_link = str(payload.get("paymentLink", current["payment_link"] or "")).strip()
+    from order_management import amount
+    shipping_fee = amount(payload.get("shippingFee", current["shipping_fee"]), "运费")
+    if g.current_user.get("role") == "warehouse":
         shipping_fee = current["shipping_fee"]
         payment_link = current["payment_link"] or ""
     if not status:
@@ -2871,11 +2890,11 @@ def update_order_route(order_id: int) -> Any:
         return jsonify({"message": "Invalid status"}), 400
     if status == "shipped" and not tracking_no:
         return jsonify({"message": "Missing trackingNo"}), 400
-    order = update_order_status(order_id, status, tracking_no, payment_link, shipping_fee)
+    order = update_order_status(order_id, status, tracking_no, payment_link, shipping_fee,
+                                cancel_note=payload.get("cancelNote", order_cancellation.MISSING))
     if not order:
         return jsonify({"message": "Order not found"}), 404
-    if g.current_user.get("role") == "warehouse":
-        order = redact_order_amounts_for_warehouse(order)
+    order = admin_order_snapshot(order_id)
     return jsonify({"message": "Order updated", "order": order})
 
 
@@ -2986,7 +3005,9 @@ def order_weight_preview_route():
 @require_roles('admin', 'sales')
 def create_admin_order():
     from order_management import save_order
-    return jsonify(save_order(request.get_json(silent=True) or {}))
+    result = save_order(request.get_json(silent=True) or {})
+    result['order'] = admin_order_snapshot(result['order']['id'])
+    return jsonify(result)
 
 
 @app.get('/api/admin/orders/<int:order_id>/reorder-draft')
@@ -3041,7 +3062,9 @@ def order_draft_delete(draft_id):
 @require_roles('admin', 'sales')
 def edit_admin_order(order_id):
     from order_management import save_order
-    return jsonify(save_order(request.get_json(silent=True) or {}, order_id))
+    result = save_order(request.get_json(silent=True) or {}, order_id)
+    result['order'] = admin_order_snapshot(order_id)
+    return jsonify(result)
 
 
 @app.get('/api/admin/orders/templates')
@@ -3232,12 +3255,8 @@ def inventory_detail_route(product_id):
 @require_auth
 @require_roles('admin', 'sales', 'warehouse')
 def order_detail_route(order_id):
-    item = get_order_by_id(order_id, include_weight=True)
+    item = admin_order_snapshot(order_id)
     if not item: return jsonify({'message':'订单不存在'}),404
-    item['version'] = workbench.version('orders', order_id)
-    item['goodsAmount'] = round(sum(float(row['totalPrice']) for row in item['items']),2)
-    if g.current_user.get("role") == "warehouse":
-        item = redact_order_amounts_for_warehouse(item)
     return jsonify({'order': item})
 
 

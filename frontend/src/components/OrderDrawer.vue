@@ -9,7 +9,9 @@
         <small>订单详情</small>
         <OrderNumber v-if="order" :value="order.orderNo" :secondary="order.secondaryOrderNo" :warehouse-printed="order.warehousePrinted" expanded />
       </div>
-    </template><ElSkeleton v-if="loading" :rows="10" animated /><template v-if="order">
+    </template><ElSkeleton v-if="loading && !order" :rows="10" animated />
+    <ElAlert v-if="!order && !loading && error" :title="error" type="error" :closable="false"><ElButton text @click="refreshDetails">重试读取详情</ElButton></ElAlert>
+    <template v-if="order">
       <OrderEditor
         v-if="fullEditing"
         ref="editor"
@@ -54,10 +56,17 @@
             </div>
           </div>
         </div>
+        <section v-if="order.status === 'cancelled'" class="detail-section cancel-note-section" data-testid="cancel-note-detail">
+          <div class="panel-title"><h3>取消备注</h3>
+            <ElButton v-if="auth.can('orders')" link type="primary" :disabled="editing || busy || loading" @click="cancelNoteOpen = true">{{ order.cancelNote ? '修改取消备注' : '填写取消备注' }}</ElButton>
+          </div>
+          <p class="cancel-note-text">{{ order.cancelNote || '未填写' }}</p>
+        </section>
         <div class="detail-section">
           <div class="panel-title"><h3>商品明细 · {{ order.itemCount }} 件</h3>
             <ElButton :disabled="editing || busy" :loading="loading" @click="refreshDetails">刷新详情</ElButton>
           </div>
+          <ElAlert v-if="stockRefreshError" :title="stockRefreshError" type="warning" :closable="false" data-testid="order-stock-stale" />
           <ElTable :data="order.items"
             ><ElTableColumn label="商品" min-width="230"
               ><template #default="{ row }"
@@ -72,9 +81,12 @@
             ><ElTableColumn
               prop="quantity"
               label="数量"
-              width="70"
+              min-width="120"
               align="right"
-            /><ElTableColumn v-if="!warehouseStatusOnly" label="单价" width="85" align="right"
+            ><template #default="{ row }"><div class="order-detail-quantity">
+              <span>{{ row.quantity }}</span>
+              <VariantStockHint :stock="row.currentStock" :title="stockTitle(row)" :data-testid="`detail-stock-${row.productId}-${row.sizeCode}`" />
+            </div></template></ElTableColumn><ElTableColumn v-if="!warehouseStatusOnly" label="单价" width="85" align="right"
               ><template #default="{ row }">{{
                 money(row.unitPrice)
               }}</template></ElTableColumn
@@ -133,7 +145,7 @@
               label="订单状态"
               prop="status"
               :rules="[{ required: true, message: '请选择状态' }]"
-              ><ElSelect v-model="form.status"
+              ><ElSelect v-model="form.status" @change="form.cancelNote = ''"
                 ><ElOption
                   v-for="(label, value) in statusNames"
                   :key="value"
@@ -162,8 +174,11 @@
                 v-model.trim="form.paymentLink"
                 :disabled="warehouseStatusOnly"
                 placeholder="填写付款地址"
-            /></ElFormItem></div
-        ></ElForm>
+            /></ElFormItem></div>
+          <ElFormItem v-if="editing && form.status === 'cancelled'" label="取消备注（选填）">
+            <ElInput v-model="form.cancelNote" type="textarea" :rows="3" maxlength="500" show-word-limit aria-label="取消备注（选填）" placeholder="填写取消原因，仅后台可见" />
+          </ElFormItem>
+        </ElForm>
         <ElAlert
           v-if="changes.length"
           type="info"
@@ -223,12 +238,15 @@
       >
     </template></ElDrawer
   >
+  <OrderCancellationDialog v-model:open="cancelNoteOpen" :order="order" note-only @saved="cancelNoteSaved" />
 </template>
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import { orderWeightText } from "../utils/productWeights";
 import { ElMessage } from "element-plus";
 import OrderEditor from "./OrderEditor.vue";
+import OrderCancellationDialog from "./OrderCancellationDialog.vue";
+import VariantStockHint from './VariantStockHint.vue';
 import OrderNumber from "./OrderNumber.vue";
 import OrderOperations from "./OrderOperations.vue";
 import ProductImage from "./ProductImage.vue";
@@ -250,6 +268,18 @@ const props = defineProps({ open: Boolean, id: [Number, String] }),
   auth = useAdminAuthStore();
 const editing = ref(false),
   editor = ref();
+const cancelNoteOpen = ref(false);
+const stockRefreshError = ref('');
+let detailSerial = 0;
+function stockTitle(row) {
+  const scope = row.currentStock == null ? '未匹配到该颜色与尺码的库存，历史商品或尺码可能已移除。' : '该颜色与尺码的当前总库存余额，非本单独立欠货';
+  return (stockRefreshError.value ? '刷新失败，当前显示上次读取结果。' : '') + scope;
+}
+function cancelNoteSaved(item) {
+  if (!props.open || String(props.id) !== String(item?.id)) return;
+  ++detailSerial; loading.value = false;
+  populate(item); emit('saved');
+}
 const fullEditing = computed(
   () => editing.value && auth.canEditOrders,
 );
@@ -262,6 +292,7 @@ const order = ref(),
   saving = ref(false),
   form = reactive({
     status: "",
+    cancelNote: "",
     shippingFee: 0,
     trackingNo: "",
     paymentLink: "",
@@ -272,35 +303,30 @@ const order = ref(),
   latest = ref();
 const { dirty, markClean, canLeave } = useDirty(() => form);
 const money=(value)=>formatMoney(value,order.value?.currency||'USD');
-function populate(item) {
+function populate(item, fresh = true) {
   editing.value = false;
   order.value = item;
   Object.assign(form, {
     status: item.status,
+    cancelNote: item.cancelNote || "",
     shippingFee: item.shippingFee,
     trackingNo: item.trackingNo,
     paymentLink: item.paymentLink,
   });
   markClean();
   error.value = "";
+  if (fresh) stockRefreshError.value = '';
   conflict.value = false;
   latest.value = null;
 }
 watch(
   () => [props.open, props.id],
-  async ([open, id]) => {
-    if (!open || !id) return;
+  ([open, id]) => {
+    if (!open || !id) { ++detailSerial; loading.value = false; return; }
     editing.value = false;
-    loading.value = true;
     order.value = null;
-    try {
-      populate((await api(`orders/${id}`)).order);
-    } catch (e) {
-      error.value = e.message;
-      notifyError(e);
-    } finally {
-      loading.value = false;
-    }
+    error.value = ''; stockRefreshError.value = '';
+    return loadDetails();
   },
   { immediate: true },
 );
@@ -308,6 +334,7 @@ const changes = computed(() => {
   if (!order.value) return [];
   const labels = {
     status: "状态",
+    cancelNote: "取消备注",
     shippingFee: "运费",
     trackingNo: "物流单号",
     paymentLink: "付款链接",
@@ -345,11 +372,13 @@ async function close(done) {
 async function submit() {
   if (saving.value || !(await formRef.value.validate().catch(() => false)))
     return;
+  if (form.status === 'cancelled' && order.value.status !== 'cancelled' &&
+    !(await confirm('确认取消订单？商品库存将按现有规则返还。'))) return;
   saving.value = true;
   error.value = "";
   try {
-    await save(`orders/${props.id}`, { ...form, version: order.value.version });
-    populate((await api(`orders/${props.id}`)).order);
+    const result = await save(`orders/${props.id}`, { ...form, version: order.value.version });
+    populate(result.order);
     ElMessage.success("订单已保存");
     emit("saved");
   } catch (e) {
@@ -361,13 +390,22 @@ async function submit() {
 }
 async function refreshDetails() {
   if (editing.value || busy.value || loading.value) return;
+  await loadDetails();
+}
+async function loadDetails() {
+  if (!props.open || !props.id) return;
   const id = props.id;
+  const serial = ++detailSerial;
   loading.value = true;
   try {
     const item = (await api(`orders/${id}`)).order;
-    if (props.open && props.id === id) populate(item);
-  } catch (e) { notifyError(e); }
-  finally { loading.value = false; }
+    if (serial === detailSerial && props.open && props.id === id) populate(item);
+  } catch (e) {
+    if (serial !== detailSerial || !props.open || props.id !== id) return;
+    if (order.value) stockRefreshError.value = '刷新失败，以下库存为上次读取结果，请点击“刷新详情”重试。';
+    else error.value = e.message;
+    notifyError(e);
+  } finally { if (serial === detailSerial) loading.value = false; }
 }
 async function readLatest() {
   try {
@@ -386,15 +424,11 @@ async function cancelEdit() {
   if (busy.value) return;
   if (fullEditing.value && !(await editor.value?.canClose())) return;
   if (!(await canLeave())) return;
-  populate(order.value);
+  populate(order.value, false);
 }
-async function detailsSaved() {
-  try {
-    populate((await api(`orders/${props.id}`)).order);
-    emit("saved");
-  } catch (e) {
-    notifyError(e);
-  }
+function detailsSaved(_id, snapshot) {
+  // The save response already contains the committed stock snapshot and version.
+  cancelNoteSaved(snapshot);
 }
 async function exportInvoice() {
   try {
@@ -416,4 +450,6 @@ async function exportInvoice() {
 .order-weight-summary span, .order-weight-summary small { color: #64748b; }
 .order-weight-summary strong { font-size: 16px; color: #0f172a; }
 .order-weight-summary .weight-incomplete { color: #b45309; font-size: 14px; }
+.cancel-note-text { white-space:pre-wrap; overflow-wrap:anywhere; color:#475569; margin:8px 0 0; }
+.order-detail-quantity { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
 </style>

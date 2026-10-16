@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { orderProductQuantity, orderVariantInventory } from './orderQuantities.js';
+import { orderProductQuantity, orderVariantInventory, variantStockHint } from './orderQuantities.js';
 
 test('sums every size in one color SKU without mixing other products', () => {
   const items = [
@@ -58,4 +58,17 @@ test('cancel and restore use original inventory rules; unknown stock is not zero
   assert.equal(orderVariantInventory(18,3,3,'cancelled','cancelled').after,18);
   assert.equal(orderVariantInventory(undefined,0,2).after,'待刷新');
   assert.equal(orderVariantInventory(null,0,2).after,'待刷新');
+});
+
+test('shared stock hints preserve signed balances and distinguish unavailable from zero', () => {
+  for (const stock of [12, 0, -5, -2147483648, 2147483647]) {
+    const result = variantStockHint(stock);
+    assert.equal(result.text, `库存 ${stock}${stock < 0 ? ' · 欠货' : ''}`);
+    assert.equal(result.shortage, stock < 0);
+  }
+  for (const stock of [null, undefined, '', '12', '待刷新', false, NaN, Infinity, 1.2]) {
+    assert.deepEqual(variantStockHint(stock), {text:'库存不可用', shortage:false});
+  }
+  assert.equal(variantStockHint(orderVariantInventory(12, 0, 17).after).text, '库存 -5 · 欠货');
+  assert.equal(variantStockHint(undefined, '库存 待刷新').text, '库存 待刷新');
 });
