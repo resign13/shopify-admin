@@ -78,8 +78,9 @@ with db._connect() as conn:
     conn.execute(sql.SQL('GRANT UPDATE(updated_at) ON public.store_users TO {}').format(store))
     conn.execute(sql.SQL('GRANT UPDATE(stock,updated_at) ON public.products TO {}').format(store))
     conn.execute(sql.SQL('GRANT UPDATE(stock) ON public.product_size_prices TO {}').format(store))
-    # The final immutable LM number is assigned after INSERT obtains its ID.
-    conn.execute(sql.SQL('GRANT UPDATE(order_no,status,updated_at) ON public.orders TO {}').format(store))
+    # Number assignment and customer cancellation need only these columns.
+    # Do not grant table-wide UPDATE (prices, ownership and payment data stay locked).
+    conn.execute(sql.SQL('GRANT UPDATE(order_no,status,updated_at,cancellation_note) ON public.orders TO {}').format(store))
     for name in ['orders_id_seq','order_items_id_seq','store_sessions_id_seq','security_audit_events_id_seq']:
         if name in sequences: conn.execute(sql.SQL('GRANT USAGE,SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
 print('Database roles provisioned; runtime DDL and storefront finance/account-management access removed')

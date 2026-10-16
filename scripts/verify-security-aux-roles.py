@@ -43,6 +43,18 @@ for script in ['provision-db-roles.py', 'provision-security-roles.py']:
     result = subprocess.run([sys.executable, str(root / 'scripts' / script), '--expected-db', args.expected_db, '--prefix', args.prefix], env=env, capture_output=True, text=True, timeout=60)
     if result.returncode: raise RuntimeError('Auxiliary role setup failed')
 base = dict(host='127.0.0.1', port=int(env['PGPORT']), dbname=args.expected_db, autocommit=True)
+with psycopg.connect(**base, user=args.prefix + '_store', password=passwords['store']) as conn:
+    assert not conn.execute("SELECT has_table_privilege(current_user,'orders','UPDATE')").fetchone()[0]
+    assert conn.execute("SELECT has_column_privilege(current_user,'orders','cancellation_note','UPDATE')").fetchone()[0]
+    # Exercise the real privilege, then roll back both the value and its audit.
+    with conn.transaction(force_rollback=True):
+        row = conn.execute("UPDATE orders SET cancellation_note='runtime-note-fixture' WHERE id=%s RETURNING cancellation_note", (ids[0],)).fetchone()
+        assert row == ('runtime-note-fixture',)
+    for column in ('total_amount','shipping_fee','payment_link','owner_admin_id','note'):
+        assert not conn.execute('SELECT has_column_privilege(current_user,\'orders\',%s,\'UPDATE\')', (column,)).fetchone()[0]
+        try: conn.execute('UPDATE orders SET ' + column + '=' + column + ' WHERE FALSE')
+        except psycopg.errors.InsufficientPrivilege: pass
+        else: raise AssertionError('Store runtime can modify a restricted order column')
 for kind in ['maintenance', 'exporter']:
     with psycopg.connect(**base, user=args.prefix + '_' + kind, password=passwords[kind]) as conn:
         flags = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
@@ -95,4 +107,6 @@ print(json.dumps({'maintenanceBusinessAccessDenied': True, 'maintenanceJobPassed
     'notificationRetentionPassed': True, 'publicationStatePreserved': True, 'businessFingerprintsUnchanged': True,
     'maintenanceCannotReadSessionSecrets': True, 'runtimeVoiceFlagAndMismatchVerified': True,
     'snapshotReadOnlyDefault': True, 'snapshotWritesAndSequenceAdvanceDenied': True,
-    'runtimeDdlDenied': True, 'existingExportChannelChanged': False, 'productionModified': False}))
+    'runtimeDdlDenied': True, 'storeCancellationNoteColumnAllowed': True,
+    'storeOrderAmountsOwnershipAndPaymentWritesDenied': True,
+    'existingExportChannelChanged': False, 'productionModified': False}))
