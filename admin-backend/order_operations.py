@@ -15,6 +15,7 @@ ORDER_FIELDS = {
     'contact_name': 'contactName', 'country': 'country',
     'apartment': 'apartment', 'city': 'city', 'state': 'state',
     'note': 'note', 'tracking_no': 'trackingNo',
+    'cancellation_note': 'cancelNote',
     'owner_admin_id': 'ownerAdminId',
     'secondary_order_no': 'secondaryOrderNo',
     'shipping_fee': 'shippingFee', 'total_amount': 'totalAmount',

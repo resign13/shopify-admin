@@ -57,7 +57,16 @@ class ReorderTest(unittest.TestCase):
         new = results[0].json['order']; self.assertNotEqual(new['id'], oid)
         self.assertEqual(new['status'], 'pending_payment'); self.assertEqual(new['trackingNo'], '')
         self.assertEqual(new['totalAmount'], 162); self.assertEqual(new['shippingFee'], 12.5)
-        self.assertEqual(self.call(f'orders/{oid}').json['order'], before)
+        current_source = self.call(f'orders/{oid}').json['order']
+        # New order reserves stock globally; the original saved order is unchanged.
+        source_snapshot = copy.deepcopy(current_source)
+        previous_snapshot = copy.deepcopy(before)
+        for order in (source_snapshot, previous_snapshot):
+            for row in order['items']: row.pop('currentStock', None)
+        self.assertEqual(source_snapshot, previous_snapshot)
+        for row in current_source['items']:
+            self.assertEqual(row['currentStock'],db._fetch_one('SELECT stock FROM product_size_prices WHERE product_id=%s AND size_code=%s',
+                                                             (row['productId'],row['sizeCode']))['stock'])
         self.assertEqual(self.stock()['stock'], initial['stock'] - 5)
         for old, now in zip(initial['sizePrices'], self.stock()['sizePrices']):
             for key in ['contractPending','pendingInspection','pendingInbound','defectivePending','temporaryInbound']:

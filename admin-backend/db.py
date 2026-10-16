@@ -10,6 +10,7 @@ import order_notification_schema
 import order_numbering
 import order_pricing
 import order_printing
+import order_cancellation
 import os
 import secrets
 from contextlib import contextmanager
@@ -192,6 +193,7 @@ def _empty_bundle() -> dict[str, str]:
 
 
 def _apply_schema_migrations(cur: Any) -> None:
+    order_cancellation.migrate(cur)
     order_pricing.migrate(cur)
     order_printing.migrate(cur)
     from workbench import migrate
@@ -2148,9 +2150,10 @@ def delete_admin_sessions_for_user(user_id: int) -> None:
     security_core.revoke(sys.modules[__name__], 'admin', user_id=user_id)
 
 
-def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None, include_weight: bool = False) -> list[dict[str, Any]]:
+def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None, include_weight: bool = False, include_stock: bool = False) -> list[dict[str, Any]]:
     weight_column = ", psp.weight_grams AS current_weight_grams" if include_weight else ""
-    weight_join = "LEFT JOIN product_size_prices psp ON psp.product_id=oi.product_id AND psp.size_code=oi.size_code AND oi.size_code<>''" if include_weight else ""
+    stock_column = ", psp.stock AS current_stock" if include_stock else ""
+    weight_join = "LEFT JOIN product_size_prices psp ON psp.product_id=p.id AND psp.size_code=oi.size_code AND oi.size_code<>''" if include_weight or include_stock else ""
     query = f"""
         SELECT
           o.id,
@@ -2179,7 +2182,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           oi.product_name,
           oi.sku,
           oi.size_code,
-          oi.quantity{weight_column},
+          oi.quantity{weight_column}{stock_column},
           oi.price_source,
           oi.reference_price_usd,
           oi.unit_price,
@@ -2206,6 +2209,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           o.completed_at,
           o.shipping_address,
           o.note,
+          o.cancellation_note,
           p.main_image_url
         FROM orders o
         JOIN store_users su ON su.id = o.store_user_id
@@ -2244,6 +2248,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                 "createdAt": _iso(row["created_at"]),
                 "updatedAt": _iso(row["updated_at"]),
                 "status": row["status"],
+                "cancelNote": row["cancellation_note"] if row["status"] == 'cancelled' else '',
                 "ownerAdminId": row["owner_admin_id"],
                 "ownerAdminName": row["owner_admin_name"] or "未分配",
                 "createdByAdminId": row["created_by_admin_id"],
@@ -2288,6 +2293,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                     "categoryKey": row.get("category_key") or "",
                     "categoryLabel": row.get("category_label") or "",
                     "sizeCode": row["size_code"] or "",
+                    **({"currentStock": row["current_stock"]} if include_stock else {}),
                     **({"unitWeightGrams": row["current_weight_grams"],
                         "lineWeightGrams": str(int(row["current_weight_grams"]) * quantity) if row["current_weight_grams"] is not None else None} if include_weight else {}),
                     "quantity": quantity,
@@ -2307,8 +2313,8 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
     return items
 
 
-def get_order_by_id(order_id: int, *, include_weight: bool = False) -> dict[str, Any] | None:
-    items = list_orders(order_ids=[order_id], include_weight=include_weight)
+def get_order_by_id(order_id: int, *, include_weight: bool = False, include_stock: bool = False) -> dict[str, Any] | None:
+    items = list_orders(order_ids=[order_id], include_weight=include_weight, include_stock=include_stock)
     return next((item for item in items if item["id"] == order_id), None)
 
 
@@ -2437,15 +2443,17 @@ def validate_admin_order_transition(previous, next_status):
 
 
 def update_order_status(
-    order_id: int, status: str, tracking_no: str = "", payment_link: str = "", shipping_fee: Any = 0
+    order_id: int, status: str, tracking_no: str = "", payment_link: str = "", shipping_fee: Any = 0,
+    cancel_note=order_cancellation.MISSING,
 ) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT status,total_amount,currency FROM orders WHERE id=%s FOR UPDATE', (order_id,))
+            cur.execute('SELECT status,total_amount,currency,cancellation_note FROM orders WHERE id=%s FOR UPDATE', (order_id,))
             previous = cur.fetchone()
             if not previous:
                 return None
             validate_admin_order_transition(previous['status'], status)
+            cancellation_note = order_cancellation.next_note(previous['status'], status, cancel_note, previous['cancellation_note'])
             if previous['status'] != 'cancelled' and status == 'cancelled':
                 inventory_policy.return_order_stock(cur, [order_id])
             elif previous['status'] == 'cancelled' and status != 'cancelled':
@@ -2509,7 +2517,24 @@ def update_order_status(
                 )
             if not cur.fetchone():
                 return None
+            if cancellation_note != previous['cancellation_note']:
+                cur.execute('UPDATE orders SET cancellation_note=%s,updated_at=NOW() WHERE id=%s', (cancellation_note,order_id))
         conn.commit()
+    return get_order_by_id(order_id)
+
+
+def update_order_cancel_note(order_id, value):
+    """Note-only branch: never recalculates money or touches inventory."""
+    note = order_cancellation.normalize(value)
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute('SELECT status,cancellation_note FROM orders WHERE id=%s FOR UPDATE',(order_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        if row['status'] != 'cancelled':
+            raise ValueError('仅已取消订单可填写取消备注')
+        if row['cancellation_note'] != note:
+            cur.execute('UPDATE orders SET cancellation_note=%s,updated_at=NOW() WHERE id=%s',(note,order_id))
     return get_order_by_id(order_id)
 
 

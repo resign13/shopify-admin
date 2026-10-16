@@ -36,6 +36,12 @@ for kind in ['admin','store']:
         except psycopg.errors.InsufficientPrivilege: pass
         else: raise AssertionError('Runtime DDL succeeded')
         if kind=='store':
+            assert not conn.execute("SELECT has_table_privilege(current_user,'orders','UPDATE')").fetchone()[0]
+            assert conn.execute("SELECT has_column_privilege(current_user,'orders','cancellation_note','UPDATE')").fetchone()[0]
+            for column in ('total_amount','shipping_fee','payment_link','owner_admin_id','note'):
+                try: conn.execute('UPDATE orders SET '+column+'='+column+' WHERE FALSE')
+                except psycopg.errors.InsufficientPrivilege: pass
+                else: raise AssertionError('Store runtime can modify a restricted order column')
             for table in ['finance_cost_history','finance_style_costs','finance_style_cost_audit','admin_users','admin_sessions','admin_audit_logs']:
                 try: conn.execute('SELECT 1 FROM '+table+' LIMIT 1')
                 except psycopg.errors.InsufficientPrivilege: pass
@@ -68,6 +74,9 @@ if is_store:
     oid=created.json['order']['id']
     cancelled=client.post('/api/store/orders/'+str(oid)+'/cancel',headers=headers)
     assert cancelled.status_code==200,'Runtime cancellation failed'
+    assert 'cancelNote' not in cancelled.json['order'] and 'cancellation_note' not in cancelled.json['order']
+    again=client.post('/api/store/orders/'+str(oid)+'/cancel',headers=headers)
+    assert again.status_code==200,'Repeated runtime cancellation failed'
     with db._connect() as conn: restored=conn.execute("SELECT stock FROM product_size_prices WHERE product_id=1 AND size_code='M'").fetchone()['stock']
     assert restored==before,'Cancellation did not restore stock'
     assert client.get('/api/catalog/styles').status_code==200

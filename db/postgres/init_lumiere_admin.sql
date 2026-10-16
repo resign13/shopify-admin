@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS orders (
   country VARCHAR(120),
   shipping_address TEXT NOT NULL,
   note TEXT,
+  cancellation_note TEXT NOT NULL DEFAULT '',
   total_amount NUMERIC(12, 2) NOT NULL DEFAULT 0 CHECK (total_amount >= 0),
   payment_link TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -362,3 +363,11 @@ CREATE TABLE IF NOT EXISTS order_warehouse_prints (
     printed_by_name TEXT NOT NULL DEFAULT '',
     export_kind TEXT NOT NULL CHECK (export_kind IN ('export', 'export-by-sheet'))
 );
+
+-- Internal cancellation notes; additive and repeatable, no historical note rewrite.
+ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_note TEXT NOT NULL DEFAULT '';
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='orders_cancellation_note_length' AND conrelid='orders'::regclass) THEN
+    ALTER TABLE orders ADD CONSTRAINT orders_cancellation_note_length CHECK (char_length(cancellation_note)<=500);
+  END IF;
+END $$;

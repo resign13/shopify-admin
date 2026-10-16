@@ -133,7 +133,7 @@
                   : 'primary'
           "
           >{{ statusNames[row.status] }}</ElTag
-        ></template
+        ><OrderCancelNoteMark v-if="row.status === 'cancelled'" :note="row.cancelNote" /></template
       ><template #createdAt="{ row }"
         ><small>{{ dateTime(row.createdAt) }}</small></template
       ><template #actions="{ row }"
@@ -150,6 +150,7 @@
     >
   </section>
   <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" @reorder="reorder" />
+  <OrderCancellationDialog v-model:open="cancelOpen" :order="cancelOrder" @saved="cancelSaved" />
   <OrderEditor v-model:open="editorOpen" :source-order-id="reorderSourceId" :draft-id="selectedDraftId" @saved="orderSaved" />
   <OrderDrafts v-if="canEditDetails" v-model:open="draftsOpen" @select="openDraft" />
   <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
@@ -163,6 +164,8 @@ import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
 import OrderNumber from "../components/OrderNumber.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
+import OrderCancellationDialog from "../components/OrderCancellationDialog.vue";
+import OrderCancelNoteMark from "../components/OrderCancelNoteMark.vue";
 import OrderEditor from "../components/OrderEditor.vue";
 import OrderDrafts from "../components/OrderDrafts.vue";
 import CustomerTemplates from "../components/CustomerTemplates.vue";
@@ -188,6 +191,8 @@ const auth = useAdminAuthStore(),
   detailId = ref(),
   exporting = ref(false);
 const statusBusy = ref(false);
+const cancelOpen = ref(false), cancelOrder = ref();
+function cancelSaved() { clear(); list.load(); }
 const templatesOpen = ref(false);
 function statusOptions(row) {
   if (!auth.can("orders") || !["admin", "sales", "warehouse", "finance"].includes(auth.userRole)) return [];
@@ -197,6 +202,7 @@ function statusOptions(row) {
 }
 async function updateStatus(row, status) {
   if (statusBusy.value || !statusOptions(row).includes(status)) return;
+  if (status === 'cancelled') { cancelOrder.value = row; cancelOpen.value = true; return; }
   statusBusy.value = true;
   try {
     let trackingNo = row.trackingNo || "";
@@ -287,7 +293,7 @@ const columns = computed(() => [
         },
       ]
     : []),
-  { prop: "status", label: "状态", width: 85 },
+  { prop: "status", label: "状态", width: 115 },
   { prop: "actions", label: "操作", width: 170 },
 ]);
 watch(

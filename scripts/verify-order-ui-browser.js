@@ -168,6 +168,15 @@ async (page) => {
   check((await missingHint().innerText()).includes('3 件未设置'), 'All-missing count incorrect');
   await page.setViewportSize({width:390,height:844});
   await weightSummary.scrollIntoViewIfNeeded(); await settleDrawer();
+  // Drawer width transitions can still be running after a viewport resize.
+  // Wait for the exact layout assertion rather than sampling one animation frame.
+  await page.waitForFunction(() => {
+    const el=document.querySelector('[data-testid="order-goods-summary"] .order-quote-controls');
+    return el && [...el.querySelectorAll('.el-select__wrapper,.el-input-number')].every(input=>{
+      const box=input.getBoundingClientRect();
+      return box.left>=-1 && box.right<=innerWidth+1 && Math.abs(box.height-32)<1;
+    });
+  });
   check(await quoteControls.evaluate(el=>[...el.querySelectorAll('.el-select__wrapper,.el-input-number')].every(input=>{
     const box=input.getBoundingClientRect();return box.left>=-1&&box.right<=innerWidth+1&&Math.abs(box.height-32)<1;
   })),'Quote controls overflow or change height on mobile');
