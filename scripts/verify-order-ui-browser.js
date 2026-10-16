@@ -82,16 +82,16 @@ async (page) => {
   }
   await editor.getByRole('button', {name: '＋ 添加商品', exact: true}).click();
   const picker = page.getByRole('dialog', {name: '选择商品', exact: true});
-  const picked = picker.locator('.el-table__row').filter({has: page.getByText('GT-2026-1', {exact: true})});
-  // Element Plus hides the native checkbox input; click its visible label.
-  await picked.locator('.el-checkbox').click();
-  await picker.getByRole('button', {name: '加入所选并完成', exact: true}).click();
+  await picker.getByRole('spinbutton', {name: 'GT-2026-1 M 数量', exact: true}).fill('2');
+  await picker.getByRole('spinbutton', {name: 'GT-2026-1 L 数量', exact: true}).fill('1');
+  await picker.locator('.picker-product-row').filter({has:page.getByText('GT-2026-1',{exact:true})}).getByRole('button',{name:'加入',exact:true}).click();
+  await picker.getByRole('button', {name: '完成', exact: true}).click();
   await picker.waitFor({state: 'hidden'});
-  const matrix = editor.locator('.el-table').nth(0);
+  const matrix = editor.getByTestId('order-product-list');
   await matrix.getByRole('spinbutton').first().waitFor();
-  const sizes = (await matrix.getByRole('columnheader').allTextContents()).map(t => t.trim());
+  const sizes = await matrix.locator('.order-size-label').allTextContents();
   for (const [size, count] of [['M', 2], ['L', 1]]) {
-    const input = matrix.getByRole('spinbutton').nth(sizes.indexOf(size) - 1);
+    const input = matrix.getByRole('spinbutton').nth(sizes.indexOf(size));
     await input.fill(String(count)); await input.press('Tab');
   }
   await editor.getByRole('spinbutton', {name: '运费（USD）', exact: true}).fill('12.5');
@@ -111,18 +111,18 @@ async (page) => {
   check(await quoteControls.locator('.el-input-number__increase,.el-input-number__decrease').count()===0,'Freight stepper buttons remain');
   check(await weightSummary.locator('.order-weight-caption').count()===0,'Redundant weight caption remains');
   check((await summary.innerText()).includes('$89.70'), 'Goods amount calculated incorrectly');
-  check(await summary.evaluate(el => el.previousElementSibling?.classList.contains('el-table')), 'Goods amount not below matrix');
+  check(await summary.evaluate(el => el.previousElementSibling?.classList.contains('order-product-list')), 'Goods amount not below matrix');
   check(await editor.getByRole('columnheader',{name:'库存核对 / SKU',exact:true}).count()===0,'Separate stock table remains');
   const currentSizes=(await api('inventory/1')).product.sizePrices;
   for(const [size,qty] of [['M',2],['L',1]]) {
     const stock=currentSizes.find(item=>item.sizeCode===size).stock;
     check((await editor.getByTestId(`size-stock-1-${size}`).innerText()).includes(`库存 ${stock-qty}`),'Inline stock delta incorrect');
   }
-  const firstStock=currentSizes.find(item=>item.sizeCode===sizes[1]).stock;
+  const firstStock=currentSizes.find(item=>item.sizeCode===sizes[0]).stock;
   const firstQuantity=matrix.getByRole('spinbutton').first();
   const oldQuantity=await firstQuantity.inputValue();
   await firstQuantity.fill(String(Math.max(0,firstStock)+3)); await firstQuantity.press('Tab');
-  const shortage=editor.getByTestId(`size-stock-1-${sizes[1]}`);
+  const shortage=editor.getByTestId(`size-stock-1-${sizes[0]}`);
   check((await shortage.innerText()).includes('欠货') && (await shortage.getAttribute('class')).includes('is-shortage'),'Shortage not highlighted');
   check(await editor.getByText('保存后存在欠货，仍可提交。入库时会抵减欠货余额。',{exact:true}).count()===0,'Redundant shortage banner remains');
   await firstQuantity.fill('0'); await firstQuantity.press('Tab');

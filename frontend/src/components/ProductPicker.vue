@@ -1,5 +1,8 @@
 <template>
-  <ElDrawer v-model="open" title="选择商品" size="820px"
+  <OrderQuantityPicker v-if="quantityMode" :visible="visible" :items="items" :categories="categories"
+    :disabled="disabled" :currency="currency" :exchange-rate="exchangeRate" :apply-quantities="applyQuantities"
+    @update:visible="emit('update:visible', $event)" />
+  <ElDrawer v-else v-model="open" title="选择商品" size="820px"
     ><form
       class="filters"
       @submit.prevent="
@@ -77,10 +80,17 @@
 <script setup>
 import { computed, reactive, ref, watch } from "vue";
 import { api } from "../composables/workbench";
+import OrderQuantityPicker from './OrderQuantityPicker.vue';
 const props = defineProps({
     visible: Boolean,
     modelValue: { type: Array, default: () => [] },
     categories: Array,
+    quantityMode: Boolean,
+    items: { type: Array, default: () => [] },
+    disabled: Boolean,
+    currency: String,
+    exchangeRate: [Number, String],
+    applyQuantities: Function,
   }),
   emit = defineEmits(["update:visible", "select", "select-many"]);
 const table = ref(),
@@ -96,6 +106,7 @@ const open = computed({
   error = ref("");
 let serial = 0;
 async function load() {
+  if (props.quantityMode) return;
   const id = ++serial;
   loading.value = true;
   error.value = "";

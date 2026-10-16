@@ -56,6 +56,9 @@ jobs:
         run: npm ci && npm audit --audit-level=high
       - name: Release configuration tests
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
+      - name: Order quantity selection unit tests
+        working-directory: frontend
+        run: node --test src/utils/orderSelection.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
         run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
@@ -225,6 +228,43 @@ jobs:
           grep -q '"cancelledNotDoubleReturned":true' "$RUNNER_TEMP/detail-stock-result.log"
           grep -q '"lateResponseIgnored":true' "$RUNNER_TEMP/detail-stock-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=notesstockci close
+      - name: Isolated order size and quantity selection lifecycle
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_order_selection_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          set -euo pipefail
+          python scripts/order-selection-browser-fixture.py > "$RUNNER_TEMP/order-selection.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5360/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/order-selection.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5360/api/health >/dev/null
+          npx --yes --package @playwright/cli playwright-cli -s=selectionci open http://127.0.0.1:5360/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/login-weights-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-browser.js | tee "$RUNNER_TEMP/order-selection-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/order-selection-result.log"; then exit 1; fi
+          grep -q '"crossPageStaging":true' "$RUNNER_TEMP/order-selection-result.log"
+          grep -q '"createDeductsOnce":true' "$RUNNER_TEMP/order-selection-result.log"
+          grep -q '"zeroOnlyExplicitJoin":true' "$RUNNER_TEMP/order-selection-result.log"
+          grep -q '"finishNeverAddsNewSku":true' "$RUNNER_TEMP/order-selection-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-edit-browser.js | tee "$RUNNER_TEMP/order-selection-edit-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/order-selection-edit-result.log"; then exit 1; fi
+          grep -q '"manualQuoteRetained":true' "$RUNNER_TEMP/order-selection-edit-result.log"
+          grep -q '"lockedStatuses":true' "$RUNNER_TEMP/order-selection-edit-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-size-standards-browser.js | tee "$RUNNER_TEMP/order-size-standards-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/order-size-standards-result.log"; then exit 1; fi
+          grep -q '"independentSizeRows":true' "$RUNNER_TEMP/order-size-standards-result.log"
+          grep -q '"mixedDraftRestore":true' "$RUNNER_TEMP/order-size-standards-result.log"
+          grep -q '"mainEditorIndependentSizes":true' "$RUNNER_TEMP/order-size-standards-result.log"
+          grep -q '"zeroOnlyDraftRestore":true' "$RUNNER_TEMP/order-size-standards-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=selectionci close
       - name: Isolated finance browser lifecycle
         env:
           PGHOST: 127.0.0.1
