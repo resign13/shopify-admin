@@ -92,7 +92,7 @@
       <div class="panel-title section-gap">
         <h3>商品明细</h3>
         <div class="order-product-actions"><ElButton size="small" :disabled="readOnly || saving || loading || lockedLines || !matrixRows.length" @click="pricingOpen=true" data-testid="order-unified-pricing">统一改价</ElButton>
-        <ElButton :disabled="lockedLines" @click="picker = true"
+        <ElButton :disabled="lockedLines || readOnly || saving || loading" @click="picker = true"
           >＋ 添加商品</ElButton
         ></div>
       </div>
@@ -105,52 +105,30 @@
         type="info"
         :closable="false"
       />
-      <ElTable :data="matrixRows" empty-text="请添加颜色商品并填写至少一个尺码数量"
-        ><ElTableColumn label="款号" min-width="125"
-          ><template #default="{ row }"
-            ><span class="product-name" :title="row.sku">{{ row.sku }}</span></template
-          ></ElTableColumn
-        ><ElTableColumn
-          v-for="sizeCode in matrixSizes"
-          :key="sizeCode"
-          :label="sizeCode"
-          min-width="76"
-          align="center"
-          ><template #default="{ row }"
-            ><div class="order-size-matrix-cell">
-              <ElInputNumber
-                :model-value="quantityFor(row, sizeCode)"
-                :min="0"
-                :max="2147483647"
-                :precision="0"
-                :disabled="lockedLines || !sizeAvailable(row, sizeCode)"
-                :controls="false"
-                size="small"
-                @update:model-value="setMatrixQuantity(row, sizeCode, $event)"
-              />
-              <VariantStockHint v-if="sizeAvailable(row, sizeCode)" class="order-size-stock"
-                :stock="inventoryFor(row, sizeCode).after" unavailable-text="库存 待刷新"
+      <div class="order-product-list" role="list" aria-label="订单商品尺码数量" data-testid="order-product-list">
+        <div class="order-product-list-header" aria-hidden="true"><span>颜色 SKU</span><span>尺码及数量</span><span>操作</span></div>
+        <div v-for="row in matrixRows" :key="row.productId" class="order-product-row" role="listitem" :data-testid="`order-product-${row.productId}`">
+          <div class="order-product-identity"><span class="product-name" :title="row.sku">{{ row.sku }}</span>
+            <small>{{ orderProductQuantity(form.items, row.productId) }} 件</small></div>
+          <div class="order-product-sizes">
+            <div v-for="sizeCode in productSizes(row)" :key="sizeCode" class="order-size-unit">
+              <label :for="`order-qty-${editorId}-${row.productId}-${encodeURIComponent(sizeCode)}`" class="order-size-label">{{ sizeCode }}</label>
+              <!-- ElInputNumber snapshots aria-disabled at mount; remount only
+                   across lock/loading/save boundaries to keep accessibility current. -->
+              <ElInputNumber :key="String(lockedLines || readOnly || saving || loading)" :id="`order-qty-${editorId}-${row.productId}-${encodeURIComponent(sizeCode)}`"
+                :aria-label="`${row.sku} ${sizeCode} 数量`" :model-value="quantityFor(row, sizeCode)"
+                :min="0" :max="2147483647" :precision="0" :controls="false" size="small"
+                :disabled="lockedLines || readOnly || saving || loading"
+                @update:model-value="setMatrixQuantity(row, sizeCode, $event)" />
+              <VariantStockHint class="order-size-stock" :stock="inventoryFor(row, sizeCode).after" unavailable-text="库存不可用"
                 :data-testid="`size-stock-${row.productId}-${sizeCode}`"
-                :title="`当前库存 ${inventoryFor(row, sizeCode).current}；预计保存后库存，实际以保存时为准`"
-              />
-              <small v-else class="order-size-stock is-unavailable">—</small>
-            </div></template
-        ></ElTableColumn
-        ><ElTableColumn label="总件数" width="85" align="right"
-          ><template #default="{ row }">{{ orderProductQuantity(form.items, row.productId) }} 件</template
-        ></ElTableColumn
-        ><ElTableColumn label="操作" width="70"
-          ><template #default="{ row }"
-            ><ElButton
-              link
-              type="danger"
-              :disabled="lockedLines"
-              @click="removeMatrixProduct(row)"
-              >移除</ElButton
-            ></template
-          ></ElTableColumn
-        ></ElTable
-      >
+                :title="`当前库存 ${inventoryFor(row, sizeCode).current ?? '不可用'}；预计保存后库存，实际以保存时为准`" />
+            </div>
+          </div>
+          <ElButton link type="danger" class="order-product-remove" :disabled="lockedLines || readOnly || saving || loading" @click="removeMatrixProduct(row)">移除</ElButton>
+        </div>
+        <p v-if="!matrixRows.length" class="order-product-empty">请添加颜色商品并填写至少一个尺码数量</p>
+      </div>
       <section v-if="form.pendingItems.length" class="reorder-issues" data-testid="reorder-issues">
         <strong>待处理商品 · {{ form.pendingItems.length }} 项</strong>
         <p>以下商品未计入本次金额。请移除，或先移除后通过“添加商品”重新选择。</p>
@@ -297,15 +275,18 @@
   </component>
   <ProductPicker
     v-model:visible="picker"
-    :model-value="[]"
+    quantity-mode
+    :items="form.items"
+    :disabled="lockedLines || readOnly || saving || loading || !ready"
+    :currency="form.currency"
+    :exchange-rate="form.exchangeRate"
+    :apply-quantities="applyPickerQuantities"
     :categories="categories"
-    @select="addProduct"
-    @select-many="(rows) => rows.forEach(addProduct)"
   />
   <OrderPricingDialog v-model:open="pricingOpen" :items="form.items" :products="products" :currency="form.currency" :exchange-rate="form.exchangeRate" @apply="applyPrices" />
 </template>
 <script setup>
-import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
+import { useId, computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElDrawer, ElMessage } from "element-plus";
 import { InfoFilled } from "@element-plus/icons-vue";
 import ImageUploader from "./ImageUploader.vue";
@@ -315,6 +296,7 @@ import CustomerTemplates from "./CustomerTemplates.vue";
 import PdfAttachment from "./PdfAttachment.vue";
 import OrderPricingDialog from './OrderPricingDialog.vue';
 import { catalogQuote, quoteTotal, validAmount } from '../utils/orderPricing';
+import { mergeSelectionQuantities, orderProductSizes } from '../utils/orderSelection';
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
 import { useAdminAuthStore } from "../stores/auth";
@@ -327,7 +309,6 @@ import {
   save,
   useDirty,
   confirm,
-  productName,
   money as formatMoney,
   dateTime,
   statusNames,
@@ -414,6 +395,7 @@ const { dirty, markClean, canLeave } = useDirty(() => form),
   units = computed(() =>
     form.items.reduce((sum, row) => sum + Number(row.quantity || 0), 0),
   );
+const editorId = useId();
 const matrixRows = computed(() => {
   const grouped = new Map();
   for (const row of form.items) {
@@ -427,6 +409,7 @@ const matrixRows = computed(() => {
   }
   return [...grouped.values()].sort((left, right) => compareProductCategories(products[left.productId], products[right.productId]));
 });
+watch(() => props.open, open => { if (!open) picker.value = false; });
 const weightItems = computed(() => orderWeightPreviewItems(form.items));
 const emptyWeightPreview = () => ({ knownWeightGrams: "0", totalWeightGrams: "0", missingWeightQuantity: 0, missingItems: [] });
 const weightPreview = ref(emptyWeightPreview()), weightLoading = ref(false), weightError = ref("");
@@ -474,24 +457,7 @@ function refreshWeightPreview(debounce = false) {
 }
 watch(() => [props.open, ready.value, JSON.stringify(weightItems.value)], () => refreshWeightPreview(true));
 onBeforeUnmount(cancelWeightPreview);
-const matrixSizes = computed(() => {
-  const seen = new Set();
-  const sizes = [];
-  for (const row of matrixRows.value) {
-    const product = products[row.productId];
-    const configured = product?.sizePrices?.map((item) => item.sizeCode) || [];
-    const existing = form.items
-      .filter((item) => item.productId === row.productId)
-      .map((item) => item.sizeCode);
-    for (const sizeCode of [...configured, ...existing]) {
-      if (sizeCode && !seen.has(sizeCode)) {
-        seen.add(sizeCode);
-        sizes.push(sizeCode);
-      }
-    }
-  }
-  return sizes;
-});
+const productSizes = row => orderProductSizes(products[row.productId], form.items, row.productId);
 function lineFor(row, sizeCode) {
   return form.items.find(
     (item) => item.productId === row.productId && item.sizeCode === sizeCode,
@@ -509,7 +475,7 @@ function sizeAvailable(row, sizeCode) {
   return !!lineFor(row, sizeCode) || products[row.productId]?.sizePrices?.some(size => size.sizeCode === sizeCode);
 }
 function setMatrixQuantity(row, sizeCode, value) {
-  if (lockedLines.value || !sizeAvailable(row, sizeCode)) return;
+  if (lockedLines.value || readOnly.value || saving.value || loading.value || !sizeAvailable(row, sizeCode)) return;
   const next = Math.max(0, Math.min(2147483647, Math.trunc(Number(value) || 0)));
   let line = lineFor(row, sizeCode);
   if (!line && next > 0) {
@@ -527,7 +493,7 @@ function setMatrixQuantity(row, sizeCode, value) {
   if (line) line.quantity = next;
 }
 function removeMatrixProduct(row) {
-  if (lockedLines.value) return;
+  if (lockedLines.value || readOnly.value || saving.value || loading.value) return;
   form.items = form.items.filter((item) => item.productId !== row.productId);
 }
 const inventoryImpact = computed(() => {
@@ -724,41 +690,12 @@ async function applyTemplate(item) {
   formRef.value?.clearValidate();
   ElMessage.success(`已填入客户模板：${item.name}`);
 }
-function addProduct(product) {
-  if (!product.sizePrices?.length) {
-    ElMessage.warning("该商品尚未配置尺码");
-    return;
-  }
-  products[product.id] = product;
-  const existingSizes = new Set(
-    form.items
-      .filter((row) => row.productId === product.id)
-      .map((row) => row.sizeCode),
-  );
-  const missingSizes = product.sizePrices.filter(
-    (size) => !existingSizes.has(size.sizeCode),
-  );
-  if (!missingSizes.length) {
-    ElMessage.info("该商品所有尺码均已添加，请直接调整数量");
-    return;
-  }
-  if (form.items.length + missingSizes.length > 500) {
-    ElMessage.warning("最多 500 个尺码行");
-    return;
-  }
-  form.items.push(
-    ...missingSizes.map((size) => ({
-      productId: product.id,
-      productName: productName(product),
-      sku: product.sku,
-      sizeCode: size.sizeCode,
-      quantity: 0,
-      ...catalogQuote(size.price||0,form.currency,form.exchangeRate),
-    })),
-  );
-  ElMessage.success(
-    `已添加 ${productName(product)} 的 ${missingSizes.length} 个尺码，请填写订购数量`,
-  );
+function applyPickerQuantities(updates) {
+  if (lockedLines.value || readOnly.value || saving.value || loading.value || !ready.value || !props.open)
+    throw new Error('当前订单不可修改商品数量');
+  const next = mergeSelectionQuantities(form.items, updates, form.currency, form.exchangeRate);
+  for (const { product } of updates) products[product.id] = product;
+  form.items = next;
 }
 function selectSize(row) {
   const size = products[row.productId]?.sizePrices.find(
@@ -895,6 +832,32 @@ async function adoptLatest() {
 }
 </script>
 <style scoped>
+
+.order-product-list { min-width:0; font-size:12px; }
+.order-product-list-header,.order-product-row { display:grid; grid-template-columns:150px minmax(0,1fr) 48px; gap:16px; padding:12px 8px; border-bottom:1px solid var(--line,#e8edf3); }
+.order-product-list-header { padding-block:8px; color:var(--muted,#64748b); }
+.order-product-list-header > :last-child { text-align:right; }
+.order-product-identity { min-width:0; align-self:center; overflow-wrap:anywhere; }
+.order-product-identity .product-name { white-space:normal; overflow:visible; text-overflow:clip; }
+.order-product-identity small { display:block; margin-top:4px; color:var(--muted,#64748b); font-size:11px; }
+.order-product-sizes { display:flex; flex-wrap:wrap; align-items:flex-start; gap:12px 10px; min-width:0; }
+.order-size-unit { display:flex; flex-direction:column; align-items:center; width:72px; max-width:100%; min-width:0; gap:4px; }
+.order-size-label { width:100%; min-height:16px; line-height:16px; font-size:11px; text-align:center; overflow-wrap:anywhere; color:var(--muted,#64748b); }
+.order-size-unit :deep(.el-input-number) { width:72px; max-width:100%; height:32px; line-height:30px; }
+.order-size-unit :deep(.el-input__wrapper) { min-height:32px; padding-inline:6px; box-sizing:border-box; }
+.order-size-unit :deep(.el-input__inner) { height:30px; font-size:12px; }
+.order-size-stock { width:100%; text-align:center; overflow-wrap:anywhere; white-space:normal; font-size:11px; line-height:16px; }
+.order-product-remove { align-self:center; margin:0; }
+.order-product-empty { text-align:center; color:var(--muted); padding:20px 0; }
+@media(max-width:600px) {
+  .order-product-list-header { display:none; }
+  .order-product-row { grid-template-columns:minmax(0,1fr) auto; gap:12px 8px; padding:14px 0; }
+  .order-product-identity { grid-column:1; grid-row:1; display:flex; flex-wrap:wrap; gap:8px; align-items:baseline; }
+  .order-product-identity small { margin:0; }
+  .order-product-remove { grid-column:2; grid-row:1; }
+  .order-product-sizes { grid-column:1 / -1; grid-row:2; }
+}
+
 .order-product-actions{display:flex;gap:8px;align-items:center}.order-product-actions .el-button+.el-button{margin-left:0}
 .order-quote-controls{display:flex;flex-wrap:wrap;align-items:flex-start;gap:12px;min-width:0}
 .order-quote-controls :deep(.el-form-item__label){height:18px;line-height:18px;padding:0;margin-bottom:8px;white-space:nowrap}

@@ -51,7 +51,13 @@ async (page) => {
   check(await draft.getByRole('spinbutton',{name:'运费（USD）',exact:true}).inputValue()==='12.50','Freight not copied');
   check(await draft.getByTestId('inherited-attachments').getByRole('link').count()===2,'Attachments lost');
   check(await balance()===before,'Opening draft changed stock');
-  const matrix=draft.locator('.el-table').first();
+  await draft.getByRole('button',{name:'＋ 添加商品',exact:true}).click();
+  const picker=page.getByRole('dialog',{name:'选择商品',exact:true});
+  await picker.getByRole('spinbutton',{name:'GT-2026-1 M 数量',exact:true}).waitFor();
+  check(await picker.getByRole('spinbutton',{name:'GT-2026-1 M 数量',exact:true}).inputValue()==='2','Reorder selection did not prefill quantities');
+  await picker.getByRole('button',{name:'取消',exact:true}).click();await picker.waitFor({state:'hidden'});
+  const matrix=draft.getByTestId('order-product-list');
+  await page.waitForFunction(()=>{const e=document.querySelector('[data-testid=order-product-list] input');return e&&!e.disabled&&e.getAttribute('aria-disabled')!=='true';});
   check(await matrix.getByRole('columnheader',{name:'小计',exact:true}).count()===0,'Subtotal column returned');
   check((await draft.getByRole('heading',{name:/订单总额/}).innerText()).includes('$162.00'),'Current price not used');
   await draft.getByRole('button',{name:'2 项与来源报价不同',exact:true}).click();
