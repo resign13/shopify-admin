@@ -169,6 +169,13 @@ def verify(output):
         assert fields.get('retry-after') == '5' and fields.get('cache-control') == 'no-store', '429 response lost retry/cache headers'
         assert fields.get('x-content-type-options') == 'nosniff' and fields.get('strict-transport-security') == 'max-age=300'
         evidence['generalRateLimitAnd429Headers'] = True
+        status,fields,body,_ = request('gingtto.store','/api/external/v1/products')
+        assert status==200 and fields.get('cache-control')=='no-store' and fields.get('vary')=='Authorization'
+        external_command = "seq 1 48 | xargs -P 24 -I '{}' curl -s --noproxy '*' --cacert /fixture/tls.crt --resolve gingtto.store:443:127.0.0.1 -D /tmp/external-limit{}.hdr -o /dev/null -w '%{http_code}\\n' https://gingtto.store/api/external/v1/products"
+        external = run(['docker','exec',identity,'sh','-c',external_command])
+        assert external.returncode==0 and '429' in external.stdout.splitlines(), 'External API entrance did not reject a burst'
+        assert '503' not in external.stdout.splitlines(), 'Entrance overload must return 429, not maintenance'
+        evidence['externalApiBurstProtectionAndNoStore']=True
         (output / 'result.json').write_text(json.dumps(evidence, indent=2), encoding='utf-8')
         return evidence
     finally:

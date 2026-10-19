@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import { pinia } from "./stores";
 import { useAdminAuthStore } from "./stores/auth";
 const definitions = [
+  ["api-integrations", "ApiIntegrationsView", "API 对接", ["admin"]],
   ["finance", "FinanceView", "财务管理", ["admin", "finance"]],
   ["contracts", "ContractsView", "合同管理", ["admin", "sales", "finance", "warehouse"]],
   ["dashboard", "DashboardView", "经营工作台", ["admin", "sales"]],

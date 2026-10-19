@@ -58,7 +58,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Order quantity selection unit tests
         working-directory: frontend
-        run: node --test src/utils/orderSelection.test.js
+        run: node --test src/utils/orderSelection.test.js src/utils/apiIntegration.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
         run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
@@ -291,6 +291,33 @@ jobs:
           grep -Eq '"twoColumnLedger":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           grep -Eq '"renderOnlyNoWrites":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=financeci close
+      - name: Isolated machine-key management and read-only API browser acceptance
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_api_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          set -euo pipefail
+          python scripts/api-integrations-browser-fixture.py > "$RUNNER_TEMP/api-browser.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5366/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/api-browser.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5366/api/health >/dev/null
+          npx --yes --package @playwright/cli playwright-cli -s=apici open http://127.0.0.1:5366/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=apici run-code --filename scripts/login-api-integrations-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=apici run-code --filename scripts/verify-api-integrations-browser.js | tee "$RUNNER_TEMP/api-browser-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/api-browser-result.log"; then exit 1; fi
+          grep -q '"noPlaintextPersistence":true' "$RUNNER_TEMP/api-browser-result.log"
+          grep -q '"committedResponseLossNotRetried":true' "$RUNNER_TEMP/api-browser-result.log"
+          grep -q '"apiOnlyRoleIsolation":true' "$RUNNER_TEMP/api-browser-result.log"
+          grep -q '"desktopAndMobile":true' "$RUNNER_TEMP/api-browser-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=apici close
   deploy:
     needs: verify
     if: github.event_name != 'pull_request'

@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace" :class="{ 'is-collapsed': collapsed }">
+  <div class="workspace" :class="{ 'is-collapsed': collapsed, 'is-api-page': routeModule(route.path) === 'api-integrations' }">
     <aside class="workspace-sidebar">
       <RouterLink to="/" class="brand"
         ><span class="brand-symbol">G</span
@@ -90,6 +90,9 @@ const collapsed = ref(
   window.innerWidth < 1280 ||
     localStorage.getItem("gingtto-sidebar") === "collapsed",
 );
+const collapseNarrow = () => { if (window.innerWidth < 1024) collapsed.value = true; };
+window.addEventListener('resize', collapseNarrow);
+onBeforeUnmount(() => window.removeEventListener('resize', collapseNarrow));
 const toggle = () => {
   collapsed.value = !collapsed.value;
   localStorage.setItem(
@@ -130,6 +133,7 @@ const definitions = [
       ["/store-accounts", "商城账号", User, "admin"],
       ["/admin-users", "后台账号", UserFilled, "admin"],
       ["/audit-logs", "操作日志", Notebook, "admin"],
+      ["/api-integrations", "API 对接", Notebook, "admin,sales,warehouse,finance"],
     ],
   },
 ];
@@ -157,3 +161,13 @@ onBeforeUnmount(() =>
   window.removeEventListener("auth-session-expired", expired),
 );
 </script>
+<style scoped>
+@media(max-width:700px) {
+  .is-api-page .workspace-topbar { padding:0 8px; gap:4px; }
+  .is-api-page .topbar-breadcrumb { display:none; }
+  .is-api-page .profile-button { padding:4px; gap:4px; }
+  .is-api-page .profile-button > span:not(.avatar) { display:none; }
+  .is-api-page :deep(.order-voice-reminder) { margin-right:0; gap:4px; }
+  .is-api-page :deep(.voice-status) { display:none; }
+}
+</style>

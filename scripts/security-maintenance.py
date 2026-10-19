@@ -16,4 +16,8 @@ with psycopg.connect(host=host,port=int(os.environ.get('PGPORT','5432')),dbname=
     conn.execute("DELETE FROM security_rate_buckets WHERE updated_at<clock_timestamp()-interval '2 days' AND COALESCE(blocked_until,clock_timestamp())<=clock_timestamp()")
     conn.execute("DELETE FROM store_sessions WHERE expires_at<clock_timestamp()-interval '90 days'")
     conn.execute("DELETE FROM admin_sessions WHERE expires_at<clock_timestamp()-interval '90 days'")
+    for table,column,days in [('api_call_logs','created_at',30),('api_integration_events','created_at',90),('api_rate_buckets','updated_at',2)]:
+        if conn.execute('SELECT to_regclass(%s)',('public.'+table,)).fetchone()[0]:
+            # Identifiers are static above, never request input.
+            conn.execute('DELETE FROM '+table+' WHERE '+column+"<clock_timestamp()-(%s * interval '1 day')",(days,))
 print('Security retention completed; business records and notification publishing progress preserved')
