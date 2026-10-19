@@ -5,7 +5,15 @@ async (page) => {
   page.on('pageerror',e=>errors.push(e.name));
   const idle=()=>page.waitForFunction(()=>![...document.querySelectorAll('.el-loading-mask')].some(n=>n.getClientRects().length));
   const root='/api/admin/api-integrations';
-  const call=async(token,path='/api/external/v1/products')=>page.request.get('http://127.0.0.1:5367'+path,{headers:{Authorization:'Bearer '+token}});
+  const call=async(token,path='/api/external/v1/products')=>{
+    for(let attempt=0;attempt<3;attempt++){
+      const response=await page.request.get('http://127.0.0.1:5367'+path,{headers:{Authorization:'Bearer '+token}});
+      if(response.status()!==429 || attempt===2)return response;
+      const seconds=Number(response.headers()['retry-after']);
+      check(Number.isFinite(seconds)&&seconds>0&&seconds<=2,'Bounded read-only rate retry');
+      await page.waitForTimeout(seconds*1000+50);
+    }
+  };
   await page.goto('http://127.0.0.1:5366/api-integrations');await idle();
   await page.getByRole('heading',{name:'我的 Key',exact:true}).waitFor();
   let state=await (await page.request.get('http://127.0.0.1:5366'+root+'/me')).json();
