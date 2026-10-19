@@ -3381,6 +3381,8 @@ def salespeople():
 
 import finance
 finance.register(app, require_auth)
+import api_integrations
+api_integrations.register(app, require_auth)
 
 
 

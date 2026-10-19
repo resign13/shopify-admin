@@ -209,10 +209,14 @@ class NegativeStockTest(unittest.TestCase):
         # Simulate a pre-size-stock database: only this first introduction may distribute stock.
         with db.get_connection() as conn:
             conn.execute('UPDATE products SET stock=30')
+            # This guarded *_test fixture deliberately predates size stock AND
+            # the API boundary. A real production migration never drops either.
+            conn.execute('DROP VIEW IF EXISTS external_api_sizes_v')
             conn.execute('ALTER TABLE product_size_prices DROP COLUMN stock')
         db.ensure_database_ready()
         self.assertEqual(self.balance(),10)
         self.assertEqual(self.stock()['stock'],30)
+        self.assertIsNotNone(db._fetch_one("SELECT to_regclass('public.external_api_sizes_v') AS name")['name'])
 
     def test_receipt_zero_surplus_parent_overflow_and_report(self):
         self.set_stock(M=-4)

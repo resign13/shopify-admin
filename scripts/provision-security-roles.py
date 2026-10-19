@@ -64,6 +64,9 @@ with db._connect() as conn:
     retention_columns = {'security_audit_events': ['created_at'], 'security_request_metrics': ['hour'],
         'security_rate_buckets': ['updated_at', 'blocked_until'], 'store_sessions': ['expires_at'],
         'admin_sessions': ['expires_at'], 'order_created_events': ['recorded_at']}
+    for table,columns in {'api_call_logs':['created_at'],'api_integration_events':['created_at'],'api_rate_buckets':['updated_at']}.items():
+        if conn.execute('SELECT to_regclass(%s) AS name',('public.'+table,)).fetchone()['name']:
+            retention_columns[table]=columns
     for table, columns in retention_columns.items():
         conn.execute(sql.SQL('GRANT DELETE ON public.{} TO {}').format(sql.Identifier(table), maintenance))
         conn.execute(sql.SQL('GRANT SELECT ({}) ON public.{} TO {}').format(

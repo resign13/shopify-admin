@@ -1,5 +1,6 @@
 """Real auxiliary-role checks on an explicitly isolated local *_test database."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,10 @@ with db._connect() as conn:
     old = conn.execute("INSERT INTO order_created_events(order_id,recorded_at,publish_sequence) VALUES(%s,clock_timestamp()-interval '8 days',%s) RETURNING id", (ids[0], baseline + 1)).fetchone()['id']
     fresh = conn.execute('INSERT INTO order_created_events(order_id,publish_sequence) VALUES(%s,%s) RETURNING id', (ids[1], baseline + 2)).fetchone()['id']
     conn.execute('UPDATE order_notification_state SET last_sequence=%s', (baseline + 2,))
+    # API retention uses the same metadata-only identity, not its runtime role.
+    old_api = conn.execute("INSERT INTO api_call_logs(admin_user_id,key_id,route,status,duration_ms,request_id,created_at) VALUES(1,gen_random_uuid(),'/api/external/v1/products',200,1,gen_random_uuid(),clock_timestamp()-interval '31 days') RETURNING id").fetchone()['id']
+    fresh_api = conn.execute("INSERT INTO api_call_logs(admin_user_id,key_id,route,status,duration_ms,request_id) VALUES(1,gen_random_uuid(),'/api/external/v1/products',200,1,gen_random_uuid()) RETURNING id").fetchone()['id']
+    conn.execute('INSERT INTO api_integrations(admin_user_id,token_hash,key_id) VALUES(1,%s,gen_random_uuid()) ON CONFLICT(admin_user_id) DO UPDATE SET token_hash=EXCLUDED.token_hash,key_id=EXCLUDED.key_id', (hashlib.sha256(secrets.token_bytes(32)).hexdigest(),))
 before = business_fingerprint()
 env = os.environ.copy()
 passwords = {kind: secrets.token_urlsafe(40) for kind in ['migrator', 'admin', 'store', 'maintenance', 'exporter']}
@@ -43,6 +48,10 @@ for script in ['provision-db-roles.py', 'provision-security-roles.py']:
     result = subprocess.run([sys.executable, str(root / 'scripts' / script), '--expected-db', args.expected_db, '--prefix', args.prefix], env=env, capture_output=True, text=True, timeout=60)
     if result.returncode: raise RuntimeError('Auxiliary role setup failed')
 base = dict(host='127.0.0.1', port=int(env['PGPORT']), dbname=args.expected_db, autocommit=True)
+with psycopg.connect(**base,user=args.prefix+'_admin',password=passwords['admin']) as conn:
+    with conn.transaction(force_rollback=True):
+        conn.execute("UPDATE admin_users SET permissions='[\"admin-users\"]' WHERE id=1")
+        assert conn.execute('SELECT token_hash IS NULL FROM api_integrations WHERE admin_user_id=1').fetchone()[0]
 with psycopg.connect(**base, user=args.prefix + '_store', password=passwords['store']) as conn:
     assert not conn.execute("SELECT has_table_privilege(current_user,'orders','UPDATE')").fetchone()[0]
     assert conn.execute("SELECT has_column_privilege(current_user,'orders','cancellation_note','UPDATE')").fetchone()[0]
@@ -74,6 +83,7 @@ for kind in ['maintenance', 'exporter']:
                 except psycopg.errors.InsufficientPrivilege: pass
                 else: raise AssertionError('Maintenance role gained business access')
             for statement in ['SELECT token_hash FROM admin_sessions', 'SELECT token_hash FROM store_sessions',
+                    'SELECT token_hash FROM api_integrations', 'SELECT admin_user_id FROM api_call_logs',
                     'SELECT ip_digest FROM security_audit_events', 'SELECT last_sequence FROM order_notification_state',
                     'UPDATE order_created_events SET publish_sequence=publish_sequence',
                     'INSERT INTO order_created_events(order_id) VALUES(1)']:
@@ -90,6 +100,8 @@ for script in ['security-maintenance.py', 'cleanup-order-notifications.py', 'cle
     result = subprocess.run([sys.executable, str(root / 'scripts' / script), '--expected-db', args.expected_db], env=child, capture_output=True, text=True, timeout=45)
     if result.returncode: raise RuntimeError('Metadata cleanup failed with its actual limited role: ' + script)
 with db._connect() as conn:
+    assert not conn.execute('SELECT 1 FROM api_call_logs WHERE id=%s',(old_api,)).fetchone()
+    assert conn.execute('SELECT 1 FROM api_call_logs WHERE id=%s',(fresh_api,)).fetchone()
     assert not conn.execute('SELECT 1 FROM order_created_events WHERE id=%s', (old,)).fetchone()
     assert conn.execute('SELECT 1 FROM order_created_events WHERE id=%s', (fresh,)).fetchone()
     assert conn.execute('SELECT last_sequence FROM order_notification_state').fetchone()['last_sequence'] == baseline + 2
@@ -103,7 +115,7 @@ for mode in ['enable', 'disable']:
     runtime['ORDER_VOICE_ENABLED'] = '0' if mode == 'enable' else '1'
     result = subprocess.run(command, env=runtime, capture_output=True, text=True, timeout=30)
     assert result.returncode != 0, 'Mismatched notification switch was accepted'
-print(json.dumps({'maintenanceBusinessAccessDenied': True, 'maintenanceJobPassed': True,
+print(json.dumps({'apiPermissionRevocationAsRestrictedAdmin': True, 'apiCallRetention30DaysVerified': True, 'maintenanceBusinessAccessDenied': True, 'maintenanceJobPassed': True,
     'notificationRetentionPassed': True, 'publicationStatePreserved': True, 'businessFingerprintsUnchanged': True,
     'maintenanceCannotReadSessionSecrets': True, 'runtimeVoiceFlagAndMismatchVerified': True,
     'snapshotReadOnlyDefault': True, 'snapshotWritesAndSequenceAdvanceDenied': True,

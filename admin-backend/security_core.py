@@ -370,12 +370,14 @@ class Security:
         return response
 
     def before(self):
+        g.security_database_busy=False
         # g belongs to an application context, not necessarily one HTTP request
         # (nested clients and long-lived app contexts can reuse it). Never carry
         # a previous identity, export cache or audit actor into another request.
         for key in ('_security_request_identity', '_security_session', 'current_user',
                     'current_token', 'current_session', 'security_session_revoked',
-                    'security_event', 'security_exporting', 'export_image_cache'):
+                    'security_event', 'security_exporting', 'export_image_cache',
+                    'external_identity', 'external_request_id'):
             g.pop(key, None)
         g.security_started = time.perf_counter()
         path = request.path
@@ -389,6 +391,9 @@ class Security:
             return self.error(426, 'https_required', 'Use HTTPS.')
         if path == '/api/health':
             return None
+        if path.startswith('/api/external/'):
+            external = self.app.extensions.get('external_api')
+            return external.before() if external else self.error(404, 'not_found', 'Not found.')
         if path == '/api/security/csp-report':
             retry = self.reserve('csp-report', request.remote_addr or '', 20, 60)
             if retry: return self.error(429, 'rate_limited', 'Too many reports.', retry)
@@ -434,7 +439,7 @@ class Security:
             if retry:
                 return self.error(429, 'rate_limited', 'Too many requests. Try again later.', retry)
             if category == 'export' and row:
-                conn = self.db._connect(autocommit=True)
+                conn = self.db._connect(autocommit=True, coordination=True)
                 key = f'export:{self.channel}:{row["id"]}'
                 if not conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (key,)).fetchone()['locked']:
                     conn.close()
@@ -451,7 +456,7 @@ class Security:
             response.headers['Strict-Transport-Security'] = 'max-age=' + os.environ.get('SECURITY_HSTS_MAX_AGE', '300')
         if request.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
-            if response.status_code >= 500:
+            if response.status_code >= 500 and not request.path.startswith('/api/external/') and not getattr(g,'security_database_busy',False):
                 response.set_data(self.app.json.dumps({'code':'service_error','message':'The service is temporarily unavailable. Try again later.'}))
                 response.content_type = 'application/json'
             if getattr(g, 'security_session_revoked', False):
@@ -471,7 +476,10 @@ class Security:
             if media and response.status_code < 400:
                 response.set_data(self.app.json.dumps(media.rewrite(response.get_json())))
         if request.path.startswith('/api/') and request.path != '/api/health':
-            self.record(response)
+            external = self.app.extensions.get('external_api')
+            if request.path.startswith('/api/external/'):
+                if external: external.record(response)
+            else: self.record(response)
         return response
 
     def teardown(self, error=None):
@@ -484,6 +492,8 @@ class Security:
                 conn.close()
 
     def record(self, response):
+        if getattr(g,'security_database_busy',False):
+            return  # Do not spend another pool wait trying to log exhaustion.
         route = request.url_rule.rule if request.url_rule else '/api/<unknown>'
         duration = max(0, (time.perf_counter() - getattr(g, 'security_started', time.perf_counter())) * 1000)
         event = getattr(g, 'security_event', None)
@@ -512,12 +522,16 @@ class Security:
 
     def server_error(self, exc):
         self.app.logger.error('request_failed exception_type=%s route=%s', type(exc).__name__, request.url_rule.rule if request.url_rule else '<unknown>')
+        from psycopg import OperationalError
+        if isinstance(exc,OperationalError):
+            g.security_database_busy=True
+            return self.error(503,'database_busy','The service is busy. Please try again later.',2)
         return self.error(500, 'service_error', 'The service is temporarily unavailable. Try again later.')
 
     @contextmanager
     def export_slot(self):
         row = self.current()
-        with self.db._connect() as conn:
+        with self.db._connect(autocommit=True, coordination=True) as conn:
             key = f'export:{self.channel}:{row["id"]}'
             locked = conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (key,)).fetchone()['locked']
             if not locked:

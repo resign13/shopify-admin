@@ -5,6 +5,7 @@ import subprocess
 import sys
 root=Path(__file__).resolve().parents[1]
 patterns={
+  'integration_api_key':re.compile(r'gapi_[A-Za-z0-9_-]{43}(?![A-Za-z0-9_-])'),
   'private_key':re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----'),
   'github_token':re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{50,})\b'),
   'aws_access_key':re.compile(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'),

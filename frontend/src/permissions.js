@@ -28,6 +28,7 @@ export const moduleGroups = [
       ["store-accounts", "商城账号"],
       ["admin-users", "后台账号"],
       ["audit-logs", "操作日志"],
+      ["api-integrations", "API 对接"],
     ],
   },
 ];
