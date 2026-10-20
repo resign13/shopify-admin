@@ -84,15 +84,53 @@ EXTERNAL_API_KEY_CONCURRENCY=2
 
 仅下列已注册路径接受 `Authorization: Bearer TOKEN`。不接受 URL 凭证、Cookie 认证、跨域授权或写方法；未知 external 路径也不落回浏览器会话。Key 对既有商城/后台接口无效。
 
+### 必填与可选参数总览
+
+完整 URL 为商城连接地址 `https://gingtto.store/api/external/v1` 加上接口路径。所有接口使用 HTTPS、GET，请求体留空；无需 `Content-Type`、商城账号 ID、客户 ID、账号密码、Cookie 或 CSRF Token。
+
+| 公共请求头 | 是否必填 | 类型 | 默认／说明 |
+|---|---|---|---|
+| Authorization | **必填** | 字符串 | 无默认值；`Bearer TOKEN`，Bearer 后保留一个空格，TOKEN 替换为本人启用中的完整 Key |
+| Accept | 可选 | 字符串 | 可省略；接口始终返回 JSON，显式填写时为 `application/json` |
+
+| GET 路径 | 必填参数（公共认证头之外） | 可选参数 |
+|---|---|---|
+| /products | **无查询参数必填** | limit、cursor、keyword、categoryId、styleCodes、skus |
+| /products/{productId} | **路径 productId** | 无 |
+| /inventory | **查询 productIds** | 无 |
+
+`productId` 为商品列表返回的颜色商品 ID，不是款号或 SKU。`productIds` 是这些 ID 的列表；库存查询省略参数或传空列表返回 `400 invalid_query`。
+
 ### GET /api/external/v1/products
 
-| 参数 | 规则 |
-|---|---|
-| limit | 默认 50、1–100，颜色 SKU 分页 |
-| cursor | 上一页 nextCursor，按商品 ID 递增，末页 null |
-| keyword | 最多 200 字符，搜索款号、SKU、商城英文标题 |
-| categoryId | 分类 ID |
-| styleCodes / skus | 逗号分隔或重复参数，最多 100 项，每项最多 200 字符 |
+以下均为 **可选查询参数**，不传参数即可获取默认第一页。筛选组合按“同时满足”处理；同一款号／SKU 列表中的多项为“匹配任意一项”。参数名区分大小写，含中文或特殊字符交由 HTTP 客户端 URL 编码。
+
+| 参数 | 位置 | 必填 | 类型 | 默认值 | 规则／示例 |
+|---|---|---|---|---|---|
+| limit | 查询 | 否 | 整数 | 50 | 1–100 个颜色 SKU；`limit=50` |
+| cursor | 查询 | 否 | 字符串 | 不传，第一页 | 后续原样传入上一页 nextCursor，保持筛选一致；末页 nextCursor 为 null，不再请求；`cursor=123` |
+| keyword | 查询 | 否 | 字符串 | 不筛选 | 最多 200 字符，模糊搜索款号、SKU、商城英文标题；`keyword=CS2209` |
+| categoryId | 查询 | 否 | 正整数 | 全部分类 | 使用商品返回的 category.id，不是分类名；`categoryId=1` |
+| styleCodes | 查询 | 否 | 字符串列表 | 全部款号 | 精确匹配，逗号分隔或重复参数，最多 100 项，每项最多 200 字符；`styleCodes=CS2209,CS2211` |
+| skus | 查询 | 否 | 字符串列表 | 全部 SKU | 精确匹配实际返回的颜色 SKU，逗号分隔或重复参数，最多 100 项，每项最多 200 字符；`skus=CS2209-Black,CS2209-Khaki` |
+
+最简请求，仅需认证头（Bash／Git Bash 示例）：
+
+```bash
+curl --fail-with-body \
+  -H 'Authorization: Bearer TOKEN' \
+  'https://gingtto.store/api/external/v1/products'
+```
+
+使用可选筛选；`--get` 将 `--data-urlencode` 放入 URL 查询串，而不是请求体：
+
+```bash
+curl --get --fail-with-body \
+  -H 'Authorization: Bearer TOKEN' \
+  --data-urlencode 'limit=50' \
+  --data-urlencode 'styleCodes=CS2209,CS2211' \
+  'https://gingtto.store/api/external/v1/products'
+```
 
 ```json
 {
@@ -119,11 +157,38 @@ description 保留现有原始内容；接入系统如需渲染 HTML，先自行
 
 ### GET /api/external/v1/products/{productId}
 
+| 参数 | 位置 | 必填 | 类型 | 默认值 | 规则／示例 |
+|---|---|---|---|---|---|
+| productId | 路径 | **是** | 正整数 | 无 | 将 `{productId}` 替换为列表返回的颜色商品 ID，如 `/products/123` |
+
+没有额外查询参数；示例中的 123 须替换为实际商品 ID：
+
+```bash
+curl --fail-with-body \
+  -H 'Authorization: Bearer TOKEN' \
+  'https://gingtto.store/api/external/v1/products/123'
+```
+
 返回 `item / readAt / requestId`。商品下架、删除或不存在统一 `404 product_not_found`。
 
 ### GET /api/external/v1/inventory?productIds=1,2
 
+| 参数 | 位置 | 必填 | 类型 | 默认值 | 规则／示例 |
+|---|---|---|---|---|---|
+| productIds | 查询 | **是** | 正整数列表 | 无 | 每次 1–100 项，逗号分隔或重复参数；`productIds=123,456` 或 `productIds=123&productIds=456` |
+
+重复 ID 合并；超过 100 项时分批请求，产品 ID 取自 `/products`，不传款号或 SKU。示例 ID 须替换为实际值：
+
+```bash
+curl --get --fail-with-body \
+  -H 'Authorization: Bearer TOKEN' \
+  --data-urlencode 'productIds=123,456' \
+  'https://gingtto.store/api/external/v1/inventory'
+```
+
 最多 100 个 ID。返回 `items / notFoundIds / readAt / requestId`；items 只含 productId、styleCode、sku、sizes。`notFoundIds` 与库存 0 明确区分，不为缺失尺码补造库存。
+
+Python 使用 `headers={"Authorization": "Bearer " + TOKEN}` 及 `params={"productIds": "123,456"}` 传参。接口说明页中的完整示例遍历全部商品分页，再按每批最多 100 个 ID 查询**全部**商品库存，不仅查询前 100 个。
 
 ## 同步、重试与缓存
 
