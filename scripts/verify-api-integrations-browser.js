@@ -72,9 +72,23 @@ async (page) => {
   check(resetCount===1,'Ambiguous generation not retried');
   check(await secretDialog.isHidden(),'No stale plaintext after response loss');
   await page.unroute('**/api/admin/api-integrations/me/reset');
+  await page.getByRole('button',{name:'刷新',exact:true}).click();await idle();
   await page.getByRole('tab',{name:'接口说明'}).click();
   await page.getByRole('heading',{name:'连接地址'}).waitFor();
   check((await page.locator('pre').first().innerText()).includes('Bearer TOKEN'),'Docs use placeholder');
+  const common=page.getByRole('region',{name:'公共请求头',exact:true});
+  check((await common.getByRole('row').filter({hasText:'Authorization'}).innerText()).includes('必填'),'Authorization is a required header');
+  check((await common.getByRole('row').filter({hasText:'Accept'}).innerText()).includes('可选'),'Accept is optional');
+  const overview=page.getByRole('region',{name:'接口一览',exact:true});
+  check((await overview.innerText()).includes('无查询参数必填'),'List requires no query parameters');
+  const productParams=page.getByRole('region',{name:'/products 请求参数',exact:true});
+  check(await productParams.getByRole('row').count()===7,'All six optional list parameters documented');
+  check(await productParams.getByRole('cell',{name:'可选',exact:true}).count()===6,'List filters all marked optional');
+  check((await page.getByRole('region',{name:'/products/{productId} 请求参数',exact:true}).innerText()).includes('路径参数'),'Product ID is a path parameter');
+  const inventoryParams=page.getByRole('region',{name:'/inventory 请求参数',exact:true});
+  check((await inventoryParams.innerText()).includes('必填') && (await inventoryParams.innerText()).includes('productIds'),'Inventory requires productIds');
+  check(await page.locator('.endpoint-docs pre').count()===4,'Minimal, filtered, product and inventory curl examples');
+  check((await page.locator('pre').last().innerText()).includes('range(0, len(ids), 100)'),'Python queries all inventory batches');
   await page.screenshot({path:'output/playwright/api-integrations-docs.png',fullPage:true});
   await page.getByRole('tab',{name:'账号管理',exact:true}).click();await idle();
   await page.getByRole('cell',{name:'api_••••_',exact:false}).first().waitFor();
@@ -97,6 +111,8 @@ async (page) => {
   check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile has no page overflow');
   await page.getByRole('tab',{name:'接口说明',exact:true}).click();
   check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Docs table scrolls internally');
+  await productParams.focus();
+  check(await productParams.evaluate(el=>el.scrollWidth>el.clientWidth && document.activeElement===el),'Mobile parameter table is keyboard-scrollable');
   await page.screenshot({path:'output/playwright/api-integrations-docs-mobile.png',fullPage:true});
   await page.setViewportSize({width:1280,height:900});
   // New browser context proves an API-only department can use its own key,
@@ -114,5 +130,6 @@ async (page) => {
   check(errors.length===0,'No browser runtime errors');
   return {keyGeneratedOnce:true,noPlaintextPersistence:true,pauseResumeReset:true,
     committedResponseLossNotRetried:true,actualStorefrontReadOnlyAPI:true,cursorAndInventory:true,
-    adminBlockAndRestore:true,apiOnlyRoleIsolation:true,desktopAndMobile:true,runtimeErrors:0};
+    adminBlockAndRestore:true,apiOnlyRoleIsolation:true,desktopAndMobile:true,
+    requiredOptionalParameterDocs:true,requestExamplesAndInventoryBatches:true,runtimeErrors:0};
 }

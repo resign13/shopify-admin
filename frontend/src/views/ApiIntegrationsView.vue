@@ -32,12 +32,26 @@
 
     <div v-if="meta && tab === 'docs'" class="api-docs">
       <h3>连接地址</h3><code>{{ baseUrl }}</code>
-      <p>请求头：<code>Authorization: Bearer TOKEN</code>。仅支持 HTTPS 和读取；浏览器登录 Cookie 不作为凭证，Key 不具有订单、售价或后台操作权限。</p>
-      <div class="table-scroll"><table><thead><tr><th>GET 接口</th><th>参数</th><th>返回</th></tr></thead><tbody>
-        <tr><td>/products</td><td>limit（默认 50，最多 100）、cursor、keyword、categoryId、styleCodes、skus</td><td>items、nextCursor、limit、readAt、requestId</td></tr>
-        <tr><td>/products/{productId}</td><td>颜色商品 ID</td><td>item、readAt、requestId；下架或缺失返回 404</td></tr>
-        <tr><td>/inventory</td><td>productIds，逗号分隔，最多 100 个</td><td>items、notFoundIds、readAt、requestId</td></tr>
+      <p>完整地址＝上方连接地址＋下方接口路径。使用 HTTPS、GET 请求，请求体留空，无需设置 Content-Type；查询参数放在 URL 查询串中。</p>
+      <div class="docs-auth"><span class="parameter-required">所有接口必填</span><code>Authorization: Bearer TOKEN</code></div>
+      <p>TOKEN 替换为“我的 Key”中生成的完整密钥。无需商城账号 ID、账号密码、登录 Cookie 或 CSRF Token；Key 仅在请求头提交，不具有订单、售价或后台操作权限。</p>
+      <div class="table-scroll" role="region" aria-label="公共请求头" tabindex="0"><table class="parameters-table"><thead><tr><th>参数</th><th>位置</th><th>是否必填</th><th>类型</th><th>默认值</th><th>说明／示例</th></tr></thead><tbody>
+        <tr v-for="param in apiCommonHeaders" :key="param.name"><td><code>{{ param.name }}</code></td><td>{{ param.location }}</td><td :class="param.required ? 'parameter-required' : 'parameter-optional'">{{ param.required ? '必填' : '可选' }}</td><td>{{ param.type }}</td><td>{{ param.defaultValue }}</td><td>{{ param.description }}<code class="parameter-example">{{ param.example }}</code></td></tr>
       </tbody></table></div>
+      <h3>接口一览</h3>
+      <div class="table-scroll" role="region" aria-label="接口一览" tabindex="0"><table><thead><tr><th>GET 接口</th><th>必填参数</th><th>可选参数</th><th>返回</th></tr></thead><tbody>
+        <tr v-for="endpoint in apiReadEndpoints" :key="endpoint.id"><td><a :href="'#api-docs-' + endpoint.id"><code>{{ endpoint.path }}</code></a></td><td>{{ endpoint.requiredLabel }}</td><td>{{ endpoint.optionalLabel }}</td><td>{{ endpoint.returns }}</td></tr>
+      </tbody></table></div>
+      <section v-for="endpoint in apiReadEndpoints" :key="endpoint.id" class="endpoint-docs" :aria-labelledby="'api-docs-' + endpoint.id">
+        <h3 :id="'api-docs-' + endpoint.id"><code>GET {{ endpoint.path }}</code></h3>
+        <p>{{ endpoint.introduction }}</p>
+        <div class="table-scroll" role="region" :aria-label="endpoint.path + ' 请求参数'" tabindex="0"><table class="parameters-table"><thead><tr><th>参数</th><th>位置</th><th>是否必填</th><th>类型</th><th>默认值</th><th>说明／示例</th></tr></thead><tbody>
+          <tr v-for="param in endpoint.parameters" :key="param.name"><td><code>{{ param.name }}</code></td><td>{{ param.location }}</td><td :class="param.required ? 'parameter-required' : 'parameter-optional'">{{ param.required ? '必填' : '可选' }}</td><td>{{ param.type }}</td><td>{{ param.defaultValue }}</td><td>{{ param.description }}<code class="parameter-example">{{ param.example }}</code></td></tr>
+        </tbody></table></div>
+        <h4>{{ endpoint.id === 'products' ? '最简请求：不传查询参数' : '请求示例（替换为实际商品 ID）' }}</h4><pre>{{ examples[endpoint.exampleKey] }}</pre>
+        <details v-if="endpoint.id === 'products'"><summary>带可选筛选参数的请求示例</summary><pre>{{ examples.curlFiltered }}</pre></details>
+      </section>
+      <p class="docs-note">curl 示例适用于 Bash／Git Bash。实际款号、SKU 和 ID 以商品列表返回值为准；含中文或特殊字符时交由 HTTP 客户端编码，curl 使用 --get 和 --data-urlencode，Python 使用 params。</p>
       <h3>字段与同步口径</h3>
       <ul>
         <li>每条为一个颜色 SKU：productId、styleCode、sku、color、category（id/key/name）、title、summary、description、images、sizes。</li>
@@ -46,10 +60,10 @@
         <li>库存接口仅返回 productId、styleCode、sku、sizes；notFoundIds 表示商品不存在或已下架，与库存为 0 不同。</li>
         <li>每次响应使用同一只读快照；readAt 为 UTC ISO 时间。跨页不是全库一致快照。只有完整拉取成功后再对账删除，失败时保留已有目录。</li>
         <li>款号和 SKU 筛选均可传逗号分隔列表，最多 100 项；关键词最多 200 字符。游标按商品 ID 递增，不是库存更新时间。</li>
-          <li>每把 Key 默认 60 次／分钟，同一 IP 300 次／分钟；全部 Key 共用每秒 10 次额度。全局最多同时处理 4 个请求，单 Key 最多 2 个。429 按 Retry-After 等待并错峰重试；401 检查授权，409 刷新管理状态，503 表示尚未启用或服务暂忙。</li>
+        <li>每把 Key 默认 60 次／分钟，同一 IP 300 次／分钟；全部 Key 共用每秒 10 次额度。全局最多同时处理 4 个请求，单 Key 最多 2 个。429 按 Retry-After 等待并错峰重试；400 检查参数，401 检查 Key 状态及授权，404 表示商品下架或缺失，503 表示尚未启用或服务暂忙。</li>
         <li>图片保持原公开访问规则，撤销 Key 不会撤回已下载的素材。Key 只放在服务端配置，不放入 URL、客户网页或日志。</li>
       </ul>
-      <h3>curl</h3><pre>{{ examples.curl }}</pre><h3>Python</h3><pre>{{ examples.python }}</pre>
+      <h3>Python：完整分页与分批读取库存</h3><pre>{{ examples.python }}</pre>
     </div>
 
     <template v-if="meta && tab === 'accounts' && canManage">
@@ -93,7 +107,7 @@ import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
 import { request } from '../api';
 import { useAdminAuthStore } from '../stores/auth';
-import { apiStates, beijingTime, expiryISO, apiExamples } from '../utils/apiIntegration';
+import { apiStates, beijingTime, expiryISO, apiExamples, apiCommonHeaders, apiReadEndpoints } from '../utils/apiIntegration';
 
 // One shared table for own and explicitly authorized account logs. No request
 // parameters/headers or raw tokens are stored in these objects.
@@ -172,5 +186,6 @@ h3{font-size:13px;color:#1e293b;margin:0}.key-heading,.section-heading{display:f
 .key-facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(195px,1fr));gap:24px}.key-facts div{display:flex;flex-direction:column;gap:10px}.key-facts span{color:#94a3b8;font-size:11px}.key-facts strong{font-weight:500;color:#334155}.monospace{font-family:monospace;font-size:13px}
 .key-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:24px;padding-top:20px;border-top:1px solid #f1f5f9}.key-actions span{color:#94a3b8;font-size:11px}.notice{margin-bottom:20px}
 .pagination{justify-content:flex-end;margin-top:16px}.account-search{display:flex;gap:10px;max-width:440px;margin-bottom:16px}.account-search .el-input{flex:1}.api-docs{line-height:1.9}.api-docs h3{margin:22px 0 10px}.api-docs li{margin:8px 0}.api-docs ul{padding-left:18px}.api-docs code{color:#2563eb;overflow-wrap:anywhere}.api-docs pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.8;background:#f8fafc;border-radius:6px;padding:16px;font-size:12px}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;min-width:650px}td,th{text-align:left;padding:12px;border-bottom:1px solid #edf1f6;font-weight:400}th{color:#94a3b8}.api-integration :deep(.el-table){font-size:12px}.api-integration :deep(.el-table th){background:#fff;font-size:11px}.api-integration :deep(.el-input__wrapper){min-height:32px;box-sizing:border-box}.api-integration :deep(.el-button){height:32px;font-size:12px}
+.docs-auth{display:flex;align-items:center;flex-wrap:wrap;gap:10px;padding:10px 12px;background:#f8fafc;border-radius:6px}.parameter-required{color:#b45309;font-weight:500}.parameter-optional{color:#64748b}.parameter-example{display:block;margin-top:4px}.parameters-table{min-width:820px}.parameters-table td{vertical-align:top}.parameters-table td:first-child{width:130px}.parameters-table td:nth-child(2),.parameters-table td:nth-child(3){white-space:nowrap}.parameters-table td:last-child{min-width:260px}.api-docs h4{font-size:12px;font-weight:500;margin:16px 0 8px}.api-docs summary{cursor:pointer;color:#2563eb}.api-docs .docs-note{color:#64748b;font-size:11px}.endpoint-docs{scroll-margin-top:20px}.table-scroll:focus-visible{outline:2px solid #93c5fd;outline-offset:2px}
 @media(max-width:700px){.api-integration{padding:14px}.scope-label{width:100%;margin:0;padding-bottom:10px}.api-tabs{gap:18px}.key-facts{grid-template-columns:1fr}.section-heading{align-items:flex-start;gap:8px;flex-wrap:wrap}.key-actions{align-items:flex-start}.key-actions span{width:100%}.api-docs pre{padding:10px}}
 </style>
