@@ -167,9 +167,10 @@ def options():
     }
 
 
-def costs(args):
-    page=integer(args.get('page',1)); size=integer(args.get('pageSize',20))
-    if size not in (12,20,24,48): raise ValueError('每页请选择 12、20、24 或 48 款')
+def cost_query(args):
+    """Shared saved-cost filters for the paged editor and full Excel export."""
+    if not isinstance(args,dict) and not hasattr(args,'get'):
+        raise ValueError('成本筛选格式无效')
     codes=terms(args.get('styleCodes',''))
     keyword=str(args.get('keyword','')).strip()
     if len(keyword)>200:raise ValueError('查询关键字最多 200 字符')
@@ -188,6 +189,13 @@ def costs(args):
       SELECT p.style_code,c.cost_cny,COALESCE(c.revision,0) AS revision,c.updated_at
       FROM styles p LEFT JOIN finance_style_costs c ON c.style_code=p.style_code"""
     if where:source+=' WHERE '+' AND '.join(where)
+    return source,params
+
+
+def costs(args):
+    page=integer(args.get('page',1)); size=integer(args.get('pageSize',20))
+    if size not in (12,20,24,48): raise ValueError('每页请选择 12、20、24 或 48 款')
+    source,params=cost_query(args)
     total=db._fetch_one('SELECT count(*) AS n FROM ('+source+') q',params)['n']
     rows=db._fetch_all(source+' ORDER BY p.style_code LIMIT %s OFFSET %s',(*params,size,(page-1)*size))
     return {'items':[{'styleCode':r['style_code'],'costCny':money(r['cost_cny']),
@@ -444,6 +452,7 @@ def export(payload):
 
 
 def register(app, require_auth):
+    import finance_cost_excel
     def guard(write=False):
         def decorate(fn):
             @wraps(fn)
@@ -464,6 +473,8 @@ def register(app, require_auth):
         ('options','GET',lambda:jsonify(options()),False),('costs','GET',lambda:jsonify(costs(request.args)),False),
         ('costs/history','GET',lambda:jsonify(history(request.args)),False),
         ('costs/preview','POST',lambda:jsonify(preview(request.get_json(silent=True))),False),
+        ('costs/export','POST',lambda:finance_cost_excel.export(request.get_json(silent=True)),False),
+        ('costs/import/preview','POST',lambda:jsonify(finance_cost_excel.preview_upload()),False),
         ('costs/save','POST',lambda:jsonify(save_costs(request.get_json(silent=True))),True),
         ('reports/query','POST',lambda:jsonify(report(request.get_json(silent=True))),False),
         ('reports/export','POST',lambda:export(request.get_json(silent=True)),False)]

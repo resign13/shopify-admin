@@ -12,6 +12,7 @@
         <ElButton v-if="!rateLoaded" :loading="rateLoading" @click="loadRate()">重新读取汇率</ElButton>
         <ElButton v-else :loading="rateSaving" :disabled="!rateValid||!rateDirty" :title="rateDirty?'保存公共汇率，所有财务账号共用':'当前公共汇率已保存'" @click="saveRate">保存汇率</ElButton>
         <ElButton v-if="tab==='report'" :disabled="!result||reportLoading||exporting||reportOutdated" :loading="exporting" :title="reportOutdated?'条件或汇率已修改，请重新查询后导出':'导出全部筛选结果，不限当前页'" @click="exportReport">导出 Excel</ElButton>
+        <template v-else><ElButton :disabled="!appliedCostQuery||costOutdated||costLoading||costExporting" :loading="costExporting" :title="costOutdated?'筛选已修改，请先查询':'导出已查询条件下全部款号的已保存成本，不含页面草稿'" @click="exportCosts">导出成本表</ElButton><ElButton :disabled="saving||costLoading||costExporting" title="导入前请先保存或撤销页面成本修改" @click="openCostImport">导入成本表</ElButton></template>
       </div>
     </div>
     <ElAlert v-if="rateError" :title="rateError" type="error" :closable="false" class="finance-gap" />
@@ -24,6 +25,7 @@
           <label>分类<ElSelect v-model="costQuery.category" clearable placeholder="全部分类"><ElOption v-for="c in options.categories" :key="c.key" :label="c.key" :value="c.key" /></ElSelect></label>
           <div class="cost-filter-actions"><ElCheckbox v-model="costQuery.missingOnly">仅未设置</ElCheckbox><ElButton native-type="submit" type="primary" :loading="costLoading">查询</ElButton></div>
         </form>
+        <p v-if="costOutdated" class="finance-rate-notice" role="status">条件已修改，查询后更新；重新查询前不可导出成本表。</p>
         <div class="cost-sheet">
           <div class="cost-sheet-caption">
             <div class="cost-sheet-selection"><ElCheckbox :model-value="allSelected" :indeterminate="selected.length>0&&!allSelected" :disabled="!groups.length||saving||costLoading" @change="selectAll">当前页全选</ElCheckbox><span class="cost-result-count">共 <b>{{ costTotal }}</b> 款</span></div>
@@ -47,7 +49,7 @@
             </div>
             <div v-if="!groups.length" class="style-cost-empty" role="status">{{ costLoading?'正在加载成本…':'暂无匹配款号，请调整筛选条件' }}</div>
           </div>
-          <div class="cost-sheet-bottom"><span>每页 {{ financeCostPageSize }} 款<span class="cost-pagination-hint">，勾选后可批量填写</span></span><ElPagination :current-page="costPage" :page-size="financeCostPageSize" :total="costTotal" layout="prev, pager, next" @current-change="loadCosts" /></div>
+          <div class="cost-sheet-bottom"><span>每页 {{ financeCostPageSize }} 款<span class="cost-pagination-hint">，勾选后可批量填写</span></span><ElPagination :current-page="costPage" :page-size="financeCostPageSize" :total="costTotal" layout="prev, pager, next" @current-change="page=>loadCosts(page,false,true)" /></div>
         </div>
         <div class="cost-actionbar" :class="{'cost-actionbar-selected':selected.length>0}" aria-label="成本操作">
           <div v-if="selected.length" class="cost-batch-controls">
@@ -101,6 +103,7 @@
       </template><div v-else class="report-empty" role="status">{{ rateValid?'选择条件后点击“查询核算”':'填写核算汇率，选择条件后查询' }}</div>
     </template>
   </section>
+  <FinanceCostImportDialog v-model="costImportOpen" @saved="costImportSaved" />
   <ElDialog v-model="previewOpen" title="确认保存整款成本" width="min(760px, 95vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
     <ElAlert v-if="error" :title="error" type="error" :closable="false" />
     <template v-if="preview"><ElAlert :title="preview.changes.some(row=>row.initialCost)?`首次填写的款号将补算此前 ${preview.affectedOrders} 个有效订单；已设置过成本的款号仅从保存时间起变更，不覆盖旧订单。清空后的历史区间不补算，全部记录保留。`:'本次均为后续修改，仅用于保存后的新订单；已有订单继续按对应历史成本核算。清空后仅影响新订单，全部历史记录保留。'" type="info" :closable="false"/>
@@ -129,7 +132,8 @@ import {ElMessage} from 'element-plus';
 import {ArrowDown,QuestionFilled,Search,Clock,EditPen} from '@element-plus/icons-vue';
 import {api,save,confirm,dateTime,statusNames} from '../composables/workbench';
 import {API_BASE} from '../api';
-import {financeCostPageSize,financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
+import FinanceCostImportDialog from '../components/FinanceCostImportDialog.vue';
+import {financeCostPageSize,financeCostFilters,financeCostKey,financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
 const tab=ref('report'),error=ref(''),options=reactive({customers:[],salespeople:[],styles:[],categories:[]});
 const activeStates=financeActiveStates,today=financeToday();
 const filters=reactive({...financeReportDates(today),customerName:'',customerId:null,salespersonIds:[],styleCodes:[],statuses:[...activeStates],exchangeRate:null});
@@ -171,6 +175,8 @@ async function saveRate(){
 const costQuery=reactive({keyword:'',styleCodes:'',category:'',missingOnly:false});
 const costPage=ref(1),costTotal=ref(0),groups=ref([]),selected=ref([]),bulkCost=ref(null),costLoading=ref(false),saving=ref(false);
 const costWorkspace=ref(null);
+const appliedCostQuery=ref(null),costExporting=ref(false),costImportOpen=ref(false);
+const costOutdated=computed(()=>Boolean(appliedCostQuery.value)&&financeCostKey(costQuery)!==financeCostKey(appliedCostQuery.value));
 const changes=computed(()=>costChanges(groups.value)),dirty=computed(()=>changes.value.length>0);
 const costColumns=computed(()=>{const rows=groups.value;if(!rows.length)return [];if(rows.length===1)return [rows];const middle=Math.ceil(rows.length/2);return [rows.slice(0,middle),rows.slice(middle)];});
 function focusCostInput(step){
@@ -189,14 +195,30 @@ function unload(event){if(dirty.value){event.preventDefault();event.returnValue=
 onMounted(async()=>{window.addEventListener('beforeunload',unload);await Promise.all([loadRate(),(async()=>{try{Object.assign(options,await api('finance/options'));}catch(e){error.value=e.message;}})()]);});
 onBeforeUnmount(()=>{window.removeEventListener('beforeunload',unload);closeHistory();});
 async function changeTab(value){if(value===tab.value)return;if(tab.value==='costs'&&!await leaveDraft())return;tab.value=value;if(value==='costs')await loadCosts(1,true);else groups.value=[];}
-async function loadCosts(page=1,discard=false){
+async function loadCosts(page=1,discard=false,existing=false){
   if(costLoading.value||saving.value||(!discard&&!await leaveDraft()))return;
   costLoading.value=true;error.value='';
-  try{const response=await api('finance/costs?'+new URLSearchParams({...costQuery,page,pageSize:financeCostPageSize}));
+  const query=existing&&appliedCostQuery.value?{...appliedCostQuery.value}:financeCostFilters(costQuery);
+  try{const response=await api('finance/costs?'+new URLSearchParams({...query,page,pageSize:financeCostPageSize}));
     groups.value=response.items.map(g=>({...g,draftCost:g.costCny===null?undefined:Number(g.costCny)}));
-    costPage.value=response.page;costTotal.value=response.total;selected.value=[];
+    costPage.value=response.page;costTotal.value=response.total;selected.value=[];appliedCostQuery.value=query;
   }catch(e){error.value=e.message;}finally{costLoading.value=false;}
 }
+async function exportCosts(){
+  if(!appliedCostQuery.value||costOutdated.value||costLoading.value||costExporting.value)return;
+  costExporting.value=true;error.value='';
+  try{
+    const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/costs/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(appliedCostQuery.value)});
+    if(!response.ok)throw new Error((await response.json().catch(()=>({}))).message||'成本表导出失败');
+    const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='商品成本.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(e){error.value=e.message;}finally{costExporting.value=false;}
+}
+function openCostImport(){
+  if(saving.value||costLoading.value)return;
+  if(dirty.value){ElMessage.warning('有未保存的成本修改，请先保存，或手动撤销修改后再导入。当前草稿已保留。');return;}
+  costImportOpen.value=true;
+}
+async function costImportSaved(){reportCostChanged.value=Boolean(result.value);await loadCosts(costPage.value,true,true);}
 async function applyBatch(){
   if(saving.value||costLoading.value)return;
   if(bulkCost.value===null||bulkCost.value===undefined||!Number.isFinite(bulkCost.value)){error.value='请填写批量成本';return;}
@@ -223,7 +245,7 @@ async function previewSave(){
 }
 async function commitCosts(){
   saving.value=true;error.value='';
-  try{await save('finance/costs/save',pendingSave,'POST');previewOpen.value=false;reportCostChanged.value=Boolean(result.value);ElMessage.success('成本已保存');saving.value=false;await loadCosts(costPage.value,true);}
+  try{await save('finance/costs/save',pendingSave,'POST');previewOpen.value=false;reportCostChanged.value=Boolean(result.value);ElMessage.success('成本已保存');saving.value=false;await loadCosts(costPage.value,true,true);}
   catch(e){error.value=e.message;if(e.status)previewOpen.value=false;}finally{saving.value=false;}
 }
 const historyOpen=ref(false),history=ref(null),historyTitle=ref(''),historyStyle=ref(''),historyLoading=ref(false),historyError=ref(''),historyPage=ref(1);

@@ -292,6 +292,32 @@ jobs:
           grep -Eq '"twoColumnLedger":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           grep -Eq '"renderOnlyNoWrites":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=financeci close
+      - name: Isolated cost Excel export and import lifecycle
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_finance_excel_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+          SECURITY_LIMIT_EXPORT: '10000'
+          SECURITY_LIMIT_UPLOAD: '10000'
+        run: |
+          set -euo pipefail
+          python scripts/finance-browser-fixture.py --excel > "$RUNNER_TEMP/finance-excel-browser.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5362/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/finance-excel-browser.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5362/api/health >/dev/null
+          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci open http://127.0.0.1:5362/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci run-code --filename scripts/login-finance-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci run-code --filename scripts/verify-finance-cost-excel-browser.js | tee "$RUNNER_TEMP/finance-excel-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/finance-excel-result.log"; then exit 1; fi
+          grep -Eq '"costExcelBrowser":[[:space:]]*true' "$RUNNER_TEMP/finance-excel-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci close
       - name: Isolated machine-key management and read-only API browser acceptance
         env:
           PGHOST: 127.0.0.1
