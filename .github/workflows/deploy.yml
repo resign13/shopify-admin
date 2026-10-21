@@ -257,7 +257,8 @@ jobs:
           npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-edit-browser.js | tee "$RUNNER_TEMP/order-selection-edit-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/order-selection-edit-result.log"; then exit 1; fi
           grep -q '"manualQuoteRetained":true' "$RUNNER_TEMP/order-selection-edit-result.log"
-          grep -q '"lockedStatuses":true' "$RUNNER_TEMP/order-selection-edit-result.log"
+          grep -q '"fulfilledEdits":true' "$RUNNER_TEMP/order-selection-edit-result.log"
+          grep -q '"cancelledLocked":true' "$RUNNER_TEMP/order-selection-edit-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-size-standards-browser.js | tee "$RUNNER_TEMP/order-size-standards-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/order-size-standards-result.log"; then exit 1; fi
           grep -q '"independentSizeRows":true' "$RUNNER_TEMP/order-size-standards-result.log"

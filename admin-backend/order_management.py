@@ -187,8 +187,8 @@ def save_order(payload, order_id=None):
     before_lines = [(r['product_id'], r['size_code'] or '', r['quantity'], r['unit_price']) for r in previous_rows]
     after_lines = [(p, s, r['quantity'], r['price']) for (p, s), r in desired.items()]
     lines_changed = sorted(before_lines) != sorted(after_lines)
-    if old and old['status'] in {'cancelled', 'shipped', 'completed'} and lines_changed:
-        raise ValueError('已取消、已发货或已完成订单仅可修改收货资料和备注，商品明细保持不变')
+    if old and old['status'] == 'cancelled' and lines_changed:
+        raise ValueError('已取消订单仅可修改收货资料和备注，商品明细保持不变')
     products = {}
     for product_id in sorted({k[0] for k in desired} | {k[0] for k in previous_quantities}):
         product = db._fetch_one('SELECT * FROM products WHERE id=%s FOR UPDATE', (product_id,))
@@ -251,7 +251,7 @@ def save_order(payload, order_id=None):
     metadata_changed = any((r['source'], r['reference']) !=
         (previous_map.get(k, {}).get('price_source'), previous_map.get(k, {}).get('reference_price_usd'))
         for k,r in desired.items())
-    if old and old['status'] in {'cancelled','shipped','completed'} and metadata_changed:
+    if old and old['status'] == 'cancelled' and metadata_changed:
         raise ValueError('已锁定订单的商品报价保持不变')
     if lines_changed or metadata_changed:
         db._fetch_one('DELETE FROM order_items WHERE order_id=%s RETURNING id', (order_id,))

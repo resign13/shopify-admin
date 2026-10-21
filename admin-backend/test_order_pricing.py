@@ -100,10 +100,17 @@ class OrderPricingTest(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.json)
         self.assertEqual(response.json['order']['status'],'paid')
         self.assertEqual(response.json['order']['totalAmount'],190)
-        for state in ['shipped','completed','cancelled']:
+        for state in ['shipped','completed']:
             db._fetch_one('UPDATE orders SET status=%s WHERE id=%s RETURNING id',(state,order['id']))
-            bad=self.call(f"orders/{order['id']}").json['order'];bad['items'][0]['unitPrice']=91
-            self.assertEqual(self.call(f"orders/{order['id']}/details",'PUT',bad).status_code,400)
+            body=self.call(f"orders/{order['id']}").json['order']
+            body['items'][0]['unitPrice'] += 1
+            body['trackingNo']='PRICE-QA-TRACK'
+            response=self.call(f"orders/{order['id']}/details",'PUT',body)
+            self.assertEqual(response.status_code,200,response.json)
+            self.assertEqual(response.json['order']['status'],state)
+        db._fetch_one("UPDATE orders SET status='cancelled' WHERE id=%s RETURNING id",(order['id'],))
+        bad=self.call(f"orders/{order['id']}").json['order'];bad['items'][0]['unitPrice'] += 1
+        self.assertEqual(self.call(f"orders/{order['id']}/details",'PUT',bad).status_code,400)
 
     def test_reorder_is_usd_current_catalog_with_saved_freight_conversion(self):
         order=self.historical_cny()
