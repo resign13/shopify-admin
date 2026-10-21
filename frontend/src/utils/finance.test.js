@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {financeCostPageSize,financeCodes,financeActiveStates,financeReportDates,financeReportKey,batchTargets,clearBatchTargets,costChanges,costValue} from './finance.js';
+import {financeCostPageSize,financeCostFilters,financeCostKey,financeCodes,financeActiveStates,financeReportDates,financeReportKey,batchTargets,clearBatchTargets,costChanges,costValue} from './finance.js';
 import {roleModules,defaultRoleModules,editableRolePermissions,moduleGroups} from '../permissions.js';
 test('finance is an explicit capability, never inferred for sales',()=>{
   assert.deepEqual(defaultRoleModules('finance'),['finance','contracts']);assert.ok(roleModules('admin').includes('finance'));
@@ -32,6 +32,12 @@ test('batch updates selected styles, independent of colors and sizes',()=>{
   assert.equal(rows[2].draftCost,2);assert.equal(costValue(undefined),null);
 });
 test('multi-code search supports both comma forms',()=>assert.deepEqual(financeCodes(' A,B，A, '),['A','B']));
+test('cost export uses only normalized last-queried filters, never pagination or draft data',()=>{
+  const query={styleCodes:' A,B，A, ',keyword:' black ',category:'denim',missingOnly:false,page:2,pageSize:20,selected:['A'],costCny:'123'};
+  assert.deepEqual(financeCostFilters(query),{styleCodes:'A,B',keyword:'black',category:'denim',missingOnly:false});
+  assert.equal(financeCostKey(query),financeCostKey({...query,styleCodes:'b,a'}));
+  for(const change of [{styleCodes:'A'},{keyword:'blue'},{category:''},{missingOnly:true}])assert.notEqual(financeCostKey(query),financeCostKey({...query,...change}));
+});
 test('default reporting period covers thirty Beijing calendar dates across year boundaries',()=>{
   assert.deepEqual(financeReportDates('2026-01-01'),{dateFrom:'2025-12-03',dateTo:'2026-01-01'});
   assert.deepEqual(financeReportDates('2024-03-01'),{dateFrom:'2024-02-01',dateTo:'2024-03-01'});

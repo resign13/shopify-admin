@@ -1,6 +1,14 @@
 export const financeCostPageSize = 20;
 export const financeToday = () => new Intl.DateTimeFormat('en-CA', {timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 export const financeCodes = value => [...new Set(String(value || '').split(/[,，]/).map(v=>v.trim()).filter(Boolean))];
+export function financeCostFilters(query) {
+  return {styleCodes:financeCodes(Array.isArray(query.styleCodes)?query.styleCodes.join(','):query.styleCodes).join(','),
+    keyword:String(query.keyword||'').trim(),category:query.category||'',missingOnly:Boolean(query.missingOnly)};
+}
+export function financeCostKey(query) {
+  const filters=financeCostFilters(query);
+  return JSON.stringify({...filters,styleCodes:financeCodes(filters.styleCodes).map(v=>v.toLowerCase()).sort()});
+}
 export const financeActiveStates = ['pending_payment','allocated','paid','shipped','completed'];
 export function financeReportDates(today=financeToday()) {
   const start=new Date(today+'T00:00:00Z');start.setUTCDate(start.getUTCDate()-29);
