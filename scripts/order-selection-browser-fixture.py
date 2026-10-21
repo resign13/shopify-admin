@@ -6,6 +6,12 @@ from pathlib import Path
 if os.environ.get('PGHOST') != '127.0.0.1' or not os.environ.get('PGDATABASE', '').endswith('_test'):
     raise RuntimeError('Explicit isolated local *_test database required')
 os.environ.update(APP_ENV='test', SECURITY_ADMIN_CAPTCHA_ENABLED='0', ORDER_VOICE_ENABLED='0')
+# Multiple browser lifecycles share one synthetic session in CI. Keep their
+# dense fixture traffic independent from the real-quota security tests, which
+# run in separate processes with production defaults. The loopback + *_test
+# guard above must pass before any override is applied.
+for category in ('READ', 'VOICE', 'WRITE', 'UPLOAD', 'EXPORT', 'INVENTORY'):
+    os.environ['SECURITY_LIMIT_' + category] = '10000'
 import psycopg
 from psycopg.sql import SQL, Identifier
 with psycopg.connect(host='127.0.0.1', port=os.environ['PGPORT'], dbname='postgres',
