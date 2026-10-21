@@ -65,10 +65,52 @@ async (page) => {
       ...(status==='shipped'?{trackingNo:'PICKER-QA-TRACK'}:{}),
       ...(status==='cancelled'?{cancelNote:'Fixture locked selection'}:{})});
     detail=await open();
-    check(await detail.getByRole('button',{name:'＋ 添加商品',exact:true}).isDisabled(),`${status} order unexpectedly allows selection`);
-    await detail.getByRole('button',{name:'取消修改',exact:true}).click();
+    const add=detail.getByRole('button',{name:'＋ 添加商品',exact:true});
+    const quantity=detail.getByRole('spinbutton',{name:'GT-2026-1 M 数量',exact:true});
+    const pricing=detail.getByRole('button',{name:'统一改价',exact:true});
+    if(status==='cancelled'){
+      await detail.getByText('已取消订单保留原商品明细；可修改客户与收货资料。',{exact:true}).waitFor();
+      check(await add.isDisabled() && await quantity.isDisabled() && await pricing.isDisabled(),'Cancelled product details unlocked');
+      await detail.getByRole('button',{name:'取消修改',exact:true}).click();
+    }else{
+      await add.click({trial:true});
+      check(await add.isEnabled() && await quantity.isEnabled() && await pricing.isEnabled(),`${status} product details remain locked`);
+      await add.click();
+      await picker.getByRole('textbox',{name:'选品关键词',exact:true}).fill('GT-2026-1');
+      await picker.getByRole('button',{name:'查询',exact:true}).click();
+      await input('M').waitFor();
+      check(await input('M').inputValue()===String(current.items.find(i=>i.productId===1&&i.sizeCode==='M').quantity),'Fulfilled picker quantity mismatch');
+      await picker.getByRole('button',{name:'完成',exact:true}).click();await picker.waitFor({state:'hidden'});
+      const beforeStock=stocks((await api('inventory/1')).product);
+      const next=Number(await quantity.inputValue())+1;
+      await quantity.fill(String(next));await quantity.press('Tab');
+      check(await detail.getByTestId('size-stock-1-M').textContent()===`库存 ${beforeStock.M-1}`,'Fulfilled preview deducted original quantity again');
+      await pricing.click();
+      const priceDialog=page.getByRole('dialog',{name:'统一改价 · USD',exact:true});
+      const nextPrice=status==='shipped'?12:13;
+      await priceDialog.getByRole('spinbutton',{name:'GT-2026-1 统一单价',exact:true}).fill(String(nextPrice));
+      await priceDialog.getByRole('button',{name:'确认应用',exact:true}).click();
+      await priceDialog.waitFor({state:'hidden'});
+      await page.setViewportSize({width:390,height:844});
+      await quantity.scrollIntoViewIfNeeded();
+      check(await quantity.isEnabled(),'Mobile fulfilled quantity locked');
+      await page.screenshot({path:`output/playwright/order-edit-${status}-mobile.png`});
+      await page.setViewportSize({width:1440,height:1000});
+      const savedWait=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders/'+made.id+'/details')&&r.request().method()==='PUT');
+      await detail.getByRole('button',{name:'保存修改',exact:true}).click();
+      await page.getByRole('dialog',{name:'确认操作',exact:true}).getByRole('button',{name:'确认',exact:true}).click();
+      const savedResponse=await savedWait;check(savedResponse.status()===200,`${status} edit save failed`);
+      const saved=(await savedResponse.json()).order;
+      check(saved.status===status && saved.trackingNo==='PICKER-QA-TRACK','Fulfilled edit changed status or tracking');
+      check(saved.items.find(i=>i.productId===1&&i.sizeCode==='M').quantity===next,'Fulfilled quantity was not saved');
+      check(saved.items.every(i=>i.unitPrice===nextPrice&&i.priceSource==='manual'),'Fulfilled pricing was not saved');
+      check(saved.totalAmount===saved.items.reduce((sum,i)=>sum+i.quantity*nextPrice,2),'Fulfilled total was not recalculated');
+      check(stocks((await api('inventory/1')).product).M===beforeStock.M-1,'Fulfilled edit stock difference incorrect');
+      await detail.getByRole('button',{name:'修改订单资料',exact:true}).waitFor();
+      await page.screenshot({path:`output/playwright/order-edit-${status}-saved.png`});
+    }
     await detail.getByRole('button',{name:'关闭',exact:true}).click();await detail.waitFor({state:'hidden'});
   }
   return {orderSelectionEdit:true,manualQuoteRetained:true,exactStockDelta:true,zeroReturnsStock:true,
-    newSizeCurrentPrice:true,lockedStatuses:true};
+    newSizeCurrentPrice:true,fulfilledEdits:true,fulfilledPrices:true,cancelledLocked:true,mobileFulfilledEdits:true};
 }

@@ -99,7 +99,7 @@
       <ElAlert
         :title="
           lockedLines
-            ? '已取消、已发货、已完成订单保留原商品明细；可修改客户与收货资料。'
+            ? '已取消订单保留原商品明细；可修改客户与收货资料。'
             : '后台允许欠货下单。新增扣减现货余额，修改仅按数量差额调整；实际余额以保存时为准。'
         "
         type="info"
@@ -386,7 +386,7 @@ const ready = ref(false),
   originalTotal = ref(0);
 const { dirty, markClean, canLeave } = useDirty(() => form),
   lockedLines = computed(() =>
-    ["cancelled", "shipped", "completed"].includes(status.value),
+    status.value === "cancelled",
   ),
   subtotal = computed(
     () =>

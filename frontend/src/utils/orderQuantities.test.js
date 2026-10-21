@@ -60,6 +60,15 @@ test('cancel and restore use original inventory rules; unknown stock is not zero
   assert.equal(orderVariantInventory(null,0,2).after,'待刷新');
 });
 
+test('fulfilled edits preview only the quantity delta, including cancellation', () => {
+  for (const status of ['shipped', 'completed']) {
+    assert.equal(orderVariantInventory(18,3,5,status,status).after,16);
+    assert.equal(orderVariantInventory(18,3,1,status,status).after,20);
+    assert.equal(orderVariantInventory(18,3,0,status,status).after,21);
+    assert.equal(orderVariantInventory(18,3,5,status,'cancelled').after,21);
+  }
+});
+
 test('shared stock hints preserve signed balances and distinguish unavailable from zero', () => {
   for (const stock of [12, 0, -5, -2147483648, 2147483647]) {
     const result = variantStockHint(stock);
