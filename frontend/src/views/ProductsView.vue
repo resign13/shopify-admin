@@ -23,9 +23,11 @@
         ><ElOption value="backordered" label="欠货" /><ElOption value="available" label="有可用现货" /><ElOption
           value="empty"
           label="无库存" /></ElSelect
+      ><ElSelect v-model="filters.status" aria-label="商品状态"><ElOption value="active" label="启用商品"/><ElOption value="inactive" label="停用商品"/><ElOption value="all" label="全部商品"/></ElSelect
       ><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton>
     </form>
+    <ElTag v-if="filters.styleCode" closable @close="filters.styleCode = ''; apply()">款号：{{ filters.styleCode }}</ElTag>
     <div v-if="selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个商品</strong
       ><ElButton @click="batchOpen = true">批量调整分类</ElButton
@@ -68,7 +70,7 @@
         </div></template
       >
       <template #sku="{ row }"
-        ><span class="sku" :title="row.sku">{{ row.sku }}</span
+        ><span class="sku" :title="row.sku">{{ row.sku }}</span><ElTag v-if="row.isActive===false" type="info" size="small">已停用</ElTag
         ><ElButton text size="small" @click="copy(row.sku)"
           >复制</ElButton
         ></template
@@ -80,7 +82,7 @@
       >
       <template #actions="{ row }"
         ><ElButton
-          link
+          v-if="row.isActive !== false" link
           type="primary"
           @click="router.push(`/products/${row.id}/edit`)"
           >编辑</ElButton
@@ -92,7 +94,7 @@
           ><template #dropdown
             ><ElDropdownMenu
               ><ElDropdownItem command="preview">查看资料</ElDropdownItem
-              ><ElDropdownItem command="delete" divided
+              ><ElDropdownItem v-if="row.isActive !== false" command="delete" divided
                 >删除商品</ElDropdownItem
               ></ElDropdownMenu
             ></template
@@ -199,10 +201,12 @@ const filters = reactive({
   keyword: list.query.keyword || "",
   category: list.query.category || "",
   stock: list.query.stock || "",
+  status: list.query.status || "active",
+  styleCode: list.query.styleCode || "",
 });
 const columns = [
-  { prop: "name", label: "商品信息", width: 260 },
-  { prop: "sku", label: "颜色 SKU", width: 135, sortable: true },
+  { prop: "name", label: "商品信息", width: 260, minWidth: 200 },
+  { prop: "sku", label: "颜色 SKU", width: 135, minWidth: 120, sortable: true },
   { prop: "categoryLabel", label: "分类", width: 90 },
   { prop: "price", label: "价格", numeric: true, sortable: true, width: 115 },
   { prop: "stock", label: "现货余额", numeric: true, sortable: true, width: 130 },
@@ -230,6 +234,8 @@ function reset() {
     keyword: "",
     category: "",
     stock: "",
+    status: "active",
+    styleCode: "",
   });
   apply();
 }

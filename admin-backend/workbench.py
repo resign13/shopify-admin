@@ -11,6 +11,7 @@ import db
 import inventory_policy
 import inventory_overdelivery
 import catalog_order
+import style_catalog
 import sales_ownership
 
 SHANGHAI = timezone(timedelta(hours=8))
@@ -581,6 +582,13 @@ def paging(args):
 
 def product_where(args, include_inactive=False):
     conditions, params = ['(p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))' if include_inactive else 'p.is_active=TRUE'], []
+    status = args.get('status', 'active')
+    if not include_inactive and status != 'active':
+        if status not in {'inactive', 'all'}:
+            raise ValueError('商品状态无效')
+        conditions[0] = 'p.is_active=FALSE' if status == 'inactive' else 'TRUE'
+    if args.get('styleCode'):
+        conditions.append(style_catalog.style_sql() + '=%s'); params.append(args['styleCode'])
     if args.get('category') and args['category'] != 'all':
         conditions.append('pc.category_key=%s'); params.append(args['category'])
     if args.get('keyword'):
@@ -625,7 +633,7 @@ def products_page(args, pending=False):
                         tuple(['zh', *params, size, (page-1)*size]))
     items = db._build_product_result(rows, include_contract_pending=pending)
     for item, row in zip(items, rows):
-        item.update(version=row['version'], updatedAt=row['version'])
+        item.update(version=row['version'], updatedAt=row['version'], isActive=row['is_active'])
     totals = {'stock': int(summary['stock']), 'availableStock': int(summary['available_stock']), 'shortageUnits': int(sizes['shortage_units']), 'shortageSizeCount': int(sizes['shortage_sizes']), 'zeroSizes': sizes['empty']}
     if pending:
         totals['contractPending'] = int(sizes['pending'])
@@ -637,7 +645,7 @@ def products_page(args, pending=False):
 
 
 def product_detail(product_id, pending=False, *, include_weight=False):
-    item = db.get_product_by_id(product_id, include_contract_pending=pending, include_inactive=pending, include_weight=include_weight)
+    item = db.get_product_by_id(product_id, include_contract_pending=pending, include_inactive=True, include_weight=include_weight)
     if item:
         item['version'] = version('products', product_id)
         item['updatedAt'] = item['version']

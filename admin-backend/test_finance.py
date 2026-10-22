@@ -57,6 +57,20 @@ class FinanceTest(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.json)
         return response.json
 
+    def test_sql_summary_and_page_match_complete_report(self):
+        self.save_cost(cost='0.00')
+        with db.get_connection() as conn:
+            for index in range(32):
+                conn.execute("INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price) SELECT order_id,product_id,product_name,sku,%s,quantity,unit_price,total_price FROM order_items ORDER BY id LIMIT 1",('Size-'+str(index),))
+        payload={'dateFrom':'2026-09-01','dateTo':'2026-09-30','exchangeRate':'7.123456'}
+        complete=finance.report(payload,paginate=False)
+        first=self.query(page=1);second=self.query(page=2)
+        self.assertEqual(first['summary'],complete['summary'])
+        self.assertEqual(second['summary'],complete['summary'])
+        self.assertEqual(first['items']+second['items'],complete['items'])
+        self.assertEqual(len(first['items']),25)
+        self.assertEqual(self.query(page=99)['items'],[])
+
     def query(self,**kwargs):
         body={'dateFrom':'2026-09-01','dateTo':'2026-09-30','exchangeRate':'7.123456',**kwargs}
         response=self.post('reports/query',body)
@@ -224,7 +238,7 @@ class FinanceTest(unittest.TestCase):
         self.assertEqual((history['items'][0]['oldCostCny'],history['items'][0]['costCny']),('15.00','0.00'))
         self.assertEqual((history['items'][1]['oldCostCny'],history['items'][1]['costCny']),('10.00','15.00'))
         row=self.call('finance/costs',role='finance').json['items'][0]
-        self.assertEqual(set(row),{'styleCode','costCny','version','updatedAt'})
+        self.assertEqual(set(row),{'styleCode','costCny','version','updatedAt','active'})
         self.assertEqual(row['costCny'],'0.00')
         self.assertEqual(self.call('finance/costs?keyword=长标题测试',role='finance').json['total'],0)
         self.assertEqual(self.call('finance/costs?keyword=GT-2026-1',role='finance').json['total'],1)

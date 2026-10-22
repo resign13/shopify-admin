@@ -36,6 +36,7 @@ class FixtureFiles(Files):
 
 class FixtureOps:
     def __init__(self): self.calls = []; self.health = []; self.running = False
+    def static_ready(self, app, target): return self.running
     def approved(self): self.calls.append('approval')
     def unit_contract(self, app): self.calls.append('unit_contract')
     def deploy_uid(self): return 9999
@@ -94,6 +95,33 @@ class ReleaseControlTest(unittest.TestCase):
         stage = self.cfg.base / 'incoming' / name; stage.mkdir(parents=True)
         shutil.copyfile(archive, stage / 'release.tar.gz')
         return name
+
+    def test_frontend_only_release_and_recovery_do_not_restart(self):
+        source = Path(self.temp.name) / 'source-static'
+        shutil.copytree(Path(self.temp.name) / 'source-old',source)
+        (source/'frontend/dist/index.html').write_text('static only')
+        archive=Path(self.temp.name)/'static.tar.gz';build(source,archive,'admin')
+        self.ops.running=True
+        result=self.control.deploy('admin',self.incoming(archive))
+        self.assertTrue(result['staticOnly'])
+        self.assertNotIn('stop',self.ops.calls)
+        self.assertNotIn('start',self.ops.calls)
+        self.ops.calls.clear();self.ops.health=[False,True]
+        result=self.control.rollback('admin')
+        self.assertEqual(result['status'],'rolled_back')
+        self.assertNotIn('stop',self.ops.calls)
+        self.assertNotIn('start',self.ops.calls)
+
+    def test_frontend_only_release_requires_matching_loaded_runtime(self):
+        source=Path(self.temp.name)/'source-static'
+        shutil.copytree(Path(self.temp.name)/'source-old',source)
+        (source/'frontend/dist/index.html').write_text('static only')
+        archive=Path(self.temp.name)/'static.tar.gz';build(source,archive,'admin')
+        self.ops.running=False
+        result=self.control.deploy('admin',self.incoming(archive))
+        self.assertFalse(result['staticOnly'])
+        self.assertIn('stop',self.ops.calls)
+        self.assertIn('start',self.ops.calls)
 
     def test_successful_release_retains_previous_code_and_assets_not_database_restore(self):
         archive = self.package('new')

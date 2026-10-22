@@ -183,10 +183,10 @@ def cost_query(args):
         where.append('EXISTS(SELECT 1 FROM catalog k WHERE k.style_code=p.style_code AND k.category_key=%s)');params.append(args['category'])
     if str(args.get('missingOnly','')).lower() in ('1','true'):where.append('c.cost_cny IS NULL')
     # Filter and page whole styles in SQL. No title, image, color/size matrix or N+1.
-    source=f"""WITH catalog AS (SELECT {style_catalog.style_sql()} AS style_code,p.sku,p.color_name,c.category_key
+    source=f"""WITH catalog AS (SELECT {style_catalog.style_sql()} AS style_code,p.sku,p.color_name,p.is_active,c.category_key
         FROM products p JOIN product_categories c ON c.id=p.category_id),
-      styles AS (SELECT DISTINCT style_code FROM catalog)
-      SELECT p.style_code,c.cost_cny,COALESCE(c.revision,0) AS revision,c.updated_at
+      styles AS (SELECT style_code,bool_or(is_active) AS is_active FROM catalog GROUP BY style_code)
+      SELECT p.style_code,p.is_active,c.cost_cny,COALESCE(c.revision,0) AS revision,c.updated_at
       FROM styles p LEFT JOIN finance_style_costs c ON c.style_code=p.style_code"""
     if where:source+=' WHERE '+' AND '.join(where)
     return source,params
@@ -198,7 +198,7 @@ def costs(args):
     source,params=cost_query(args)
     total=db._fetch_one('SELECT count(*) AS n FROM ('+source+') q',params)['n']
     rows=db._fetch_all(source+' ORDER BY p.style_code LIMIT %s OFFSET %s',(*params,size,(page-1)*size))
-    return {'items':[{'styleCode':r['style_code'],'costCny':money(r['cost_cny']),
+    return {'items':[{'styleCode':r['style_code'],'active':r['is_active'],'costCny':money(r['cost_cny']),
         'version':str(r['revision']),'updatedAt':db._iso(r['updated_at']) if r['updated_at'] else None} for r in rows],
         'total':total,'page':page,'pageSize':size,'costBasis':COST_BASIS}
 
@@ -340,7 +340,7 @@ def _report(payload, paginate=True):
         where.append('(o.owner_admin_id=ANY(%s)'+(' OR o.owner_admin_id IS NULL' if 'unassigned' in people else '')+')');params.append(owners)
     style=f"CASE WHEN p.id IS NOT NULL THEN {style_catalog.style_sql()} ELSE COALESCE(ch.style_code,'未归类') END"
     if codes: where.append(f'LOWER({style})=ANY(%s)');params.append([v.lower() for v in codes])
-    rows=db._fetch_all(f'''SELECT o.id AS order_id,o.order_no,o.created_at,o.status,o.contact_name,
+    query=f'''SELECT o.id AS order_id,o.order_no,o.created_at,o.status,o.contact_name,
         o.store_user_id,su.name AS account_name,su.company_name,COALESCE(a.name,'未分配') AS salesperson,
         o.owner_admin_id,o.currency,o.exchange_rate,i.id AS item_id,i.product_id,i.sku,i.size_code,i.quantity,i.unit_price,
         {style} AS style_code,h.cost_cny,h.effective_at AS cost_effective_at,h.is_initial
@@ -351,7 +351,14 @@ def _report(payload, paginate=True):
       LEFT JOIN LATERAL (SELECT c.cost_cny,c.effective_at,c.is_initial FROM finance_style_cost_audit c
         WHERE c.style_code=({style}) AND (c.effective_at<=o.created_at OR c.is_initial)
         ORDER BY c.effective_at DESC,c.id DESC LIMIT 1) h ON true
-      WHERE {' AND '.join(where)} ORDER BY o.created_at DESC,o.id DESC,i.id''',params)
+      WHERE {' AND '.join(where)} ORDER BY o.created_at DESC,o.id DESC,i.id'''
+    page=integer(payload.get('page',1)); page_size=integer(payload.get('pageSize',25))
+    if page_size not in (25,50,100): raise ValueError('分页无效')
+    if paginate:
+        from finance_reporting import page as report_page
+        rows, full_summary, full_total = report_page(db,query,params,rate,page,page_size)
+    else:
+        rows=db._fetch_all(query,params)
     groups={}; lines=[]
     for r in rows:
         original=r['unit_price']*r['quantity']
@@ -388,8 +395,8 @@ def _report(payload, paginate=True):
     if page_size not in (25,50,100): raise ValueError('分页无效')
     filters={'dateFrom':str(start),'dateTo':str(end),'customerName':customer,'customerId':payload.get('customerId'),
         'salespersonIds':people,'styleCodes':codes,'statuses':states,'exchangeRate':str(rate)}
-    return {'items':items[(page-1)*page_size:page*page_size] if paginate else items,
-        'total':len(items),'page':page,'pageSize':page_size,'summary':aggregate(lines),
+    return {'items':items,
+        'total':full_total if paginate else len(items),'page':page,'pageSize':page_size,'summary':full_summary if paginate else aggregate(lines),
         'filters':filters,'costBasis':COST_BASIS,'generatedAt':datetime.now(TZ).isoformat(),**({'lines':lines} if not paginate else {})}
 
 

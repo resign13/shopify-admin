@@ -345,6 +345,13 @@ jobs:
           grep -q '"apiOnlyRoleIsolation":true' "$RUNNER_TEMP/api-browser-result.log"
           grep -q '"desktopAndMobile":true' "$RUNNER_TEMP/api-browser-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=apici close
+      - name: Preserve the frontend build that passed verification
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-frontend
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
   deploy:
     needs: verify
     if: github.event_name != 'pull_request'
@@ -352,14 +359,11 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Restore the verified build from this workflow run
+        uses: actions/download-artifact@v4
         with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Build frontend
-        working-directory: frontend
-        run: npm ci && npm run build
+          name: verified-frontend
+          path: frontend/dist
       - name: Package release without runtime data or secrets
         run: |
           python scripts/security/build_release.py --channel admin --output release.tar.gz

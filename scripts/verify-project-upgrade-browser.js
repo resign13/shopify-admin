@@ -1,0 +1,33 @@
+async (page) => {
+  if (!page.url().startsWith('http://127.0.0.1:5384/orders')) throw new Error('Isolated upgrade fixture required');
+  const rows = page.locator('.account-order-item');
+  if (await rows.count() !== 25) throw new Error('Expected 25 orders on first page');
+  await rows.first().getByRole('button', {name:'View Details',exact:true}).click();
+  if (await rows.first().getByRole('link',{name:/Open Attachment/}).count() !== 12) throw new Error('Historical attachments truncated');
+  await page.getByRole('button',{name:'Next',exact:true}).click();
+  await page.getByText('of 34 orders',{exact:true}).waitFor();
+  await page.waitForFunction(()=>document.querySelectorAll('.account-order-item').length===9);
+  const before = await rows.first().innerText();
+  await page.route('**/api/store/orders?*',route=>route.abort('failed'));
+  await page.getByRole('button',{name:'Prev',exact:true}).click();
+  await page.getByRole('alert').waitFor();
+  if (await rows.count() !== 9 || await rows.first().innerText() !== before) throw new Error('Failed request erased prior results');
+  await page.unroute('**/api/store/orders?*');
+  await page.getByRole('button',{name:'Retry',exact:true}).click();
+  await page.waitForFunction(()=>document.querySelectorAll('.account-order-item').length===25);
+  await page.locator('.account-filter-select').nth(1).selectOption('paid');
+  await page.getByText('of 31 orders',{exact:true}).waitFor();
+  await page.screenshot({path:'output/playwright/project-upgrade-orders-desktop.png'});
+  await page.setViewportSize({width:390,height:844});
+  if (await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)) throw new Error('Mobile horizontal overflow');
+  await page.screenshot({path:'output/playwright/project-upgrade-orders-mobile.png'});
+  await page.getByRole('link',{name:'INVENTORY',exact:true}).first().click();
+  await page.getByRole('button',{name:/Export PDF/}).waitFor();
+  await page.waitForFunction(()=>document.querySelectorAll('.inventory-sku').length===2);
+  await page.screenshot({path:'output/playwright/project-upgrade-inventory-mobile.png'});
+  await page.goto('http://127.0.0.1:5382/products?status=inactive');
+  await page.getByText('已停用',{exact:true}).waitFor();
+  if (await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)) throw new Error('Admin mobile horizontal overflow');
+  await page.screenshot({path:'output/playwright/project-upgrade-products-mobile.png'});
+  console.log(JSON.stringify({pagination:true,all12Attachments:true,failureRetainsOrders:true,retry:true,statusFilter:true,mobile:true,inventory:true,inactiveProducts:true}));
+}
