@@ -125,7 +125,7 @@ function columnWidth(column) {
   const width =
     available.value - (props.selectable ? (props.largeSelection ? 64 : 40) : 0) - (props.expandable ? 38 : 0);
   return Math.max(
-    52,
+    column.minWidth || 52,
     Math.floor((column.width || 100) * Math.min(1, width / base)),
   );
 }

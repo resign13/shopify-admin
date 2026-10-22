@@ -3,6 +3,8 @@ import safe_excel
 import order_pricing
 import order_printing
 import order_cancellation
+import export_resources
+import order_export_service
 
 import module_permissions
 import sales_ownership
@@ -106,6 +108,7 @@ import order_numbering
 from time import perf_counter
 
 app = Flask(__name__)
+app.teardown_request(export_resources.cleanup)
 import security_core
 import db as security_db
 if os.environ.get('APP_ENV') != 'test':
@@ -405,6 +408,9 @@ def build_dashboard_trend(orders: list[dict[str, Any]], *, date_from: str = '', 
 
 def _export_image_source(value: str, attachment: bool):
     """Resolve and authorize in the caller's context, before starting workers."""
+    prepared = getattr(g, 'export_sources', None)
+    if prepared is not None:
+        return prepared[(value, attachment)]
     if media.mode == 'legacy':
         return media.legacy_export_source(value)
     row = media.find(value)
@@ -430,13 +436,12 @@ def fetch_image_bytes(url: str, *, attachment: bool = False):
     from flask import has_request_context
     value = str(url or '').strip()
     if not value: return None
-    cache = g.setdefault('export_image_cache', {}) if has_request_context() else {}
+    cache = export_resources.cache() if has_request_context() else {}
     key = (value, attachment)
     if key in cache: return cache[key]
     try:
         raw = _read_export_image(value, _export_image_source(value, attachment))
-        if sum(len(data or b'') for data in cache.values()) + len(raw) <= 32*1024*1024:
-            cache[key] = raw
+        cache[key] = raw
         return raw
     except Exception:
         cache[key] = None
@@ -456,13 +461,10 @@ def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
                 wanted.add((str(item['image']), False))
         for url in split_order_attachments(order)[0]:
             wanted.add((str(url), True))
-    cache = g.setdefault('export_image_cache', {})
+    cache = export_resources.cache()
     pending = []
     for key in sorted(wanted):
         if key in cache: continue
-        if len(pending) >= 128:
-            cache[key] = None
-            continue
         try:
             pending.append((key, _export_image_source(*key)))
         except Exception:
@@ -475,17 +477,30 @@ def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
         except Exception:
             app.logger.warning('export_image_missing')
             return None
-    budget = sum(len(data) for data in cache.values() if data)
     # Bounded batches prevent completed futures retaining an entire export's
     # original images. Workers receive only already-authorized storage rows;
     # they never manufacture an anonymous Flask request context.
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        for offset in range(0, len(pending), 6):
-            batch = pending[offset:offset + 6]
+    with export_resources.stage('images'), ThreadPoolExecutor(max_workers=2) as pool:
+        for offset in range(0, len(pending), 2):
+            batch = pending[offset:offset + 2]
             for (key, _), data in zip(batch, pool.map(read, batch)):
-                cost = len(data or b'')
-                cache[key] = data if budget + cost <= 32 * 1024 * 1024 else None
-                if cache[key]: budget += cost
+                cache[key] = data
+
+
+def prepare_export_images(orders):
+    """Resolve storage authorization inside the same snapshot as the order data."""
+    sources = {}
+    for order in orders:
+        wanted = [(str(item['image']), False) for item in order.get('items', []) if item.get('image')]
+        wanted += [(url, True) for url in split_order_attachments(order)[0]]
+        for key in wanted:
+            if key not in sources:
+                try:
+                    sources[key] = _export_image_source(*key)
+                except ValueError:
+                    # An inaccessible source remains an explicit missing image.
+                    export_resources.cache()[key] = None
+    g.export_sources = sources
 
 
 def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640) -> OpenpyxlImage | None:
@@ -500,7 +515,13 @@ def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, 
             else:
                 converted.save(output, format="PNG")
             output.seek(0)
-            excel_image = OpenpyxlImage(output)
+            from flask import has_request_context
+            if has_request_context():
+                path = export_resources.cache().new_path()
+                path.write_bytes(output.getvalue())
+                excel_image = OpenpyxlImage(str(path))
+            else:
+                excel_image = OpenpyxlImage(output)
             ratio = min(1, width / converted.width, height / converted.height)
             excel_image.width = converted.width * ratio
             excel_image.height = converted.height * ratio
@@ -568,7 +589,7 @@ def split_order_attachments(order: dict[str, Any]) -> tuple[list[str], list[str]
             image_urls.append(url)
         else:
             file_urls.append(url)
-    return image_urls[:9], file_urls[:5]
+    return image_urls, file_urls
 
 
 def build_orders_export(orders: list[dict[str, Any]], *, include_images: bool = True) -> BytesIO:
@@ -1615,6 +1636,8 @@ def require_roles(*roles: str) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not module_permissions.allows_operation(g.current_user, request.path, request.method, allowed_roles):
                 return jsonify({"message": "Forbidden"}), 403
+            if func.__name__ in {'export_orders', 'export_orders_by_sheet', 'export_order_invoice', 'contract_export_route'}:
+                return func(*args, **kwargs)
             if request.path.startswith('/api/admin/') and request.method in {'POST', 'PUT', 'DELETE', 'PATCH'} and not request.path.endswith(('/uploads', '/preview')):
                 return workbench.atomic_admin_call(func, args, kwargs)
             if request.method == "GET":
@@ -2752,6 +2775,22 @@ def orders() -> Any:
     return jsonify(result)
 
 
+def load_export_orders(time_range, selected_order_ids, include_images):
+    def load():
+        owner = sales_ownership.scope(request.args, g.current_user)
+        result = list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner), include_weight=True)
+        if request.args.get('view') != 'workbench':
+            result = filter_orders(result, time_range=time_range)
+        if selected_order_ids:
+            result = [order for order in result if int(order['id']) in selected_order_ids]
+        if g.current_user.get('role') == 'warehouse':
+            result = [redact_order_amounts_for_warehouse(order) for order in result]
+        if include_images:
+            prepare_export_images(result)
+        return result
+    return order_export_service.snapshot(load)
+
+
 @app.route("/api/admin/orders/export", methods=["GET", "POST"])
 @require_auth
 @require_roles("admin", "sales", "warehouse")
@@ -2766,18 +2805,9 @@ def export_orders() -> Any:
         for item in order_ids_raw.split(",")
         if str(item).strip().isdigit()
     }
-    if request.args.get('view') == 'workbench':
-        owner_id = sales_ownership.scope(request.args, g.current_user)
-        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=owner_id), include_weight=True)
-    else:
-        # Compatibility exports use the same keyword/style/category/owner query
-        # as the order list; only their legacy relative time range is additional.
-        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)), include_weight=True), time_range=time_range)
-    if selected_order_ids:
-        orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
-    if g.current_user.get("role") == "warehouse":
-        orders = [redact_order_amounts_for_warehouse(order) for order in orders]
-    file_stream = build_orders_export(orders, include_images=include_images)
+    orders = load_export_orders(time_range, selected_order_ids, include_images)
+    with export_resources.stage('workbook'):
+        file_stream = build_orders_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     response = send_file(
         file_stream,
@@ -2785,9 +2815,7 @@ def export_orders() -> Any:
         download_name=f"orders_export_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    if request.method == 'POST':
-        order_printing.record(workbench.db, orders, g.current_user, 'export')
-    return response
+    return order_export_service.finish(response, orders, 'export' if request.method == 'POST' else None)
 
 
 @app.route("/api/admin/orders/export-by-sheet", methods=["GET", "POST"])
@@ -2804,15 +2832,9 @@ def export_orders_by_sheet() -> Any:
         for item in order_ids_raw.split(",")
         if str(item).strip().isdigit()
     }
-    if request.args.get('view') == 'workbench':
-        orders = workbench.db.list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)), include_weight=True)
-    else:
-        orders = filter_orders(list_orders(order_ids=workbench.order_ids(request.args, owner_id=sales_ownership.scope(request.args, g.current_user)), include_weight=True), time_range=time_range)
-    if selected_order_ids:
-        orders = [order for order in orders if int(order.get("id") or 0) in selected_order_ids]
-    if g.current_user.get("role") == "warehouse":
-        orders = [redact_order_amounts_for_warehouse(order) for order in orders]
-    file_stream = build_orders_sheet_export(orders, include_images=include_images)
+    orders = load_export_orders(time_range, selected_order_ids, include_images)
+    with export_resources.stage('workbook'):
+        file_stream = build_orders_sheet_export(orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     response = send_file(
         file_stream,
@@ -2820,16 +2842,20 @@ def export_orders_by_sheet() -> Any:
         download_name=f"orders_by_sheet_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    if request.method == 'POST':
-        order_printing.record(workbench.db, orders, g.current_user, 'export-by-sheet')
-    return response
+    return order_export_service.finish(response, orders, 'export-by-sheet' if request.method == 'POST' else None)
 
 
 @app.get("/api/admin/orders/<int:order_id>/invoice")
 @require_auth
 @require_roles("admin", "sales")
 def export_order_invoice(order_id: int) -> Any:
-    order = get_order_by_id(order_id, include_weight=True)
+    def load():
+        sales_ownership.assert_access(order_id)
+        value = get_order_by_id(order_id, include_weight=True)
+        if value:
+            prepare_export_images([value])
+        return value
+    order = order_export_service.snapshot(load)
     if not order:
         return jsonify({"message": "Order not found"}), 404
     try:
@@ -2840,12 +2866,13 @@ def export_order_invoice(order_id: int) -> Any:
         return jsonify({"message": str(error)}), 500
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     order_no = secure_filename(str(order.get("orderNo") or order_id)) or f"order_{order_id}"
-    return send_file(
+    response = send_file(
         file_stream,
         as_attachment=True,
         download_name=f"proforma_{order_no}_{timestamp}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+    return order_export_service.finish(response, [order])
 
 
 def admin_order_snapshot(order_id):
@@ -3323,11 +3350,31 @@ def contract_cancel_route(contract_id):
 @require_roles('admin', 'sales')
 def contract_export_route(contract_id):
     import contracts
-    item = contracts.detail(contract_id)
+    def load():
+        value = contracts.detail(contract_id)
+        if value:
+            urls = [value.get('styleImage'), value.get('sizeChartImage'), *(value.get('attachments') or [])]
+            g.export_sources = {(url, True): _export_image_source(url, True) for url in urls if url}
+        return value
+    item = order_export_service.snapshot(load)
     if not item: return jsonify({'message': '合同不存在'}), 404
-    result = contracts.export(item, lambda url: fetch_image_bytes(url, attachment=True), build_excel_image)
-    return send_file(result, download_name=f"购买合同-{item['contractNo']}.xlsx", as_attachment=True,
-                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    with export_resources.stage('workbook'):
+        result = contracts.export(item, lambda url: fetch_image_bytes(url, attachment=True), build_excel_image)
+    response = send_file(result, download_name=f"购买合同-{item['contractNo']}.xlsx", as_attachment=True,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    def finalize():
+        row = workbench.db._fetch_one('SELECT snapshot FROM purchase_contracts WHERE id=%s FOR SHARE', (contract_id,))
+        if not row or row['snapshot'].get('revision', 1) != item.get('revision', 1):
+            raise workbench.Conflict('导出期间合同已修改，请重新导出。')
+        return response
+    try:
+        final = workbench.atomic_admin_call(finalize, (), {})
+        if final is not response:
+            response.close()
+        return final
+    except BaseException:
+        response.close()
+        raise
 
 
 @app.after_request

@@ -289,6 +289,12 @@ class Files:
         os.replace(temporary, app['current'])
 
 
+def backend_manifest(target):
+    """Reuse the archive's verified file inventory; frontend-only changes are excluded."""
+    files = json.loads((target / 'SECURITY-RELEASE.json').read_text(encoding='utf-8'))['files']
+    return {name: metadata for name, metadata in files.items() if not name.startswith('frontend/dist/')}
+
+
 class Controller:
     def __init__(self, cfg, ops, files=None, archive=None):
         self.cfg, self.ops = cfg, ops
@@ -354,9 +360,9 @@ class Controller:
         previous = pending['rollback']
         path = self.ready(app, previous)
         self.ops.preflight(app, path)
-        self.ops.service(app, 'stop')
+        if not pending.get('staticOnly'): self.ops.service(app, 'stop')
         self.files.promote(app, path)
-        self.ops.service(app, 'start')
+        if not pending.get('staticOnly'): self.ops.service(app, 'start')
         if not self.ops.healthy(app): raise RuntimeError('Compatible rollback health failed')
         value.update(current=previous, pending=None)
         self.save(app['channel'], value)
@@ -371,20 +377,22 @@ class Controller:
             if not app['current'].is_symlink() or app['current'].resolve() != self.ready(app, previous):
                 raise ValueError('Live pointer differs from its trusted receipt')
         self.ops.preflight(app, target)
+        static_only = (backend_manifest(self.ready(app, previous)) == backend_manifest(target)
+                       and self.ops.static_ready(app, target))
         backup = self.cfg.state / 'backups' / (app['channel'] + '-' + uuid.uuid4().hex)
         self.files.directory(backup, 0o700)
         self.ops.backup(backup)
-        value['pending'] = {'candidate': candidate, 'rollback': previous, 'backup': backup.name}
+        value['pending'] = {'candidate': candidate, 'rollback': previous, 'backup': backup.name, 'staticOnly': static_only}
         self.save(app['channel'], value)
         try:
-            self.ops.service(app, 'stop')
+            if not static_only: self.ops.service(app, 'stop')
             self.files.promote(app, target)
-            self.ops.service(app, 'start')
+            if not static_only: self.ops.service(app, 'start')
             if not self.ops.healthy(app): raise RuntimeError('Candidate health failed')
             value.update(current=candidate, previous=previous, pending=None, backup=backup.name)
             self.save(app['channel'], value)
             self.event('release_activated', app['channel'], candidate['sha256'])
-            return {'status': 'healthy', 'channel': app['channel'], 'release': candidate['sha256'][:24]}
+            return {'status': 'healthy', 'channel': app['channel'], 'release': candidate['sha256'][:24], 'staticOnly': static_only}
         except Exception:
             self.event('activation_failed', app['channel'], candidate['sha256'])
             self.recover(app, value)
@@ -574,6 +582,24 @@ class SystemOps:
             expected_path = str(self.cfg.app(channel)['primary'] / 'uploads')
             if values.get(key, expected_path) != expected_path:
                 raise ValueError('Legacy storage must match the prepared persistent directory')
+
+    def static_ready(self, app, target):
+        """No restart only when running backend and loaded configuration are unchanged."""
+        if not self.active(app): return False
+        try:
+            pid = int(self._run(['/usr/bin/systemctl','show','--property=MainPID','--value',app['service']],capture=True))
+            if pid <= 0: return False
+            running = Path(f'/proc/{pid}/cwd').resolve().parent
+            if running.parent != app['releases']: return False
+            self.files.trusted(running, directory=True)
+            if backend_manifest(running) != backend_manifest(target): return False
+            raw = Path(f'/proc/{pid}/environ').read_bytes()
+            loaded = dict(part.split(b'=',1) for part in raw.split(b'\0') if b'=' in part)
+            configured = runtime_values(app['env'].read_text(encoding='utf-8'),
+                app['security_env'].read_text(encoding='utf-8'),self.cfg.database,app['channel'])
+            return all(loaded.get(key.encode()) == value.encode() for key,value in configured.items())
+        except (OSError, ValueError, KeyError):
+            return False
 
     def loaded_voice(self, app, mode):
         """Verify the restarted master received the switch, without a login.

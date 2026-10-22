@@ -41,7 +41,7 @@
                 <thead><tr><th class="style-select" scope="col"><span class="cost-sr-only">选择</span></th><th scope="col">款号</th><th class="cost-amount-heading" scope="col">单件成本</th><th scope="col"><span class="cost-sr-only">历史操作</span></th></tr></thead>
                 <tbody><tr v-for="group in column" :key="group.styleCode" :class="{'cost-changed':isChanged(group),'cost-selected':selected.includes(group.styleCode)}">
                   <td class="style-select"><ElCheckbox :model-value="selected.includes(group.styleCode)" :aria-label="`选择 ${group.styleCode}`" :disabled="saving||costLoading" @change="value=>selectStyle(group.styleCode,value)" /></td>
-                  <td class="style-code"><span :title="group.styleCode">{{ group.styleCode }}</span><span v-if="isChanged(group)" class="cost-edit-dot" :aria-label="`${group.styleCode} 未保存`" title="未保存"/></td>
+                  <td class="style-code"><RouterLink v-if="auth.can('products')" :to="{path:'/products',query:{status:'all',styleCode:group.styleCode}}" :title="`查看 ${group.styleCode} 商品`">{{ group.styleCode }}</RouterLink><span v-else :title="group.styleCode">{{ group.styleCode }}</span><small v-if="group.active===false" class="cost-history-note">已停用</small><span v-if="isChanged(group)" class="cost-edit-dot" :aria-label="`${group.styleCode} 未保存`" title="未保存"/></td>
                   <td class="cost-amount-cell"><div class="cost-input-shell" :class="{'cost-input-empty':costValue(group.draftCost)===null}"><span class="cost-currency" aria-hidden="true">¥</span><ElInputNumber v-model="group.draftCost" :precision="2" :min="0" :max="9999999999.99" :controls="false" :disabled="saving||costLoading" placeholder="未设置" :aria-label="`${group.styleCode} 成本`" title="Enter 下一个款号，Shift + Enter 上一个" @keydown.enter.prevent="focusCostInput($event.shiftKey?-1:1)" /></div></td>
                   <td class="cost-history-cell"><ElButton text class="cost-history-button" :aria-label="`${group.styleCode} 成本历史`" @click="showHistory(group)"><ElIcon><Clock /></ElIcon><span>历史</span></ElButton></td>
                 </tr></tbody>
@@ -127,7 +127,9 @@
 import { authenticatedFetch } from '../authTransport';
 
 import {computed,onMounted,onBeforeUnmount,reactive,ref} from 'vue';
-import {onBeforeRouteLeave} from 'vue-router';
+import {onBeforeRouteLeave,RouterLink} from 'vue-router';
+import {useAdminAuthStore} from '../stores/auth';
+const auth=useAdminAuthStore();
 import {ElMessage} from 'element-plus';
 import {ArrowDown,QuestionFilled,Search,Clock,EditPen} from '@element-plus/icons-vue';
 import {api,save,confirm,dateTime,statusNames} from '../composables/workbench';
