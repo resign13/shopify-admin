@@ -19,6 +19,10 @@ MAX_SOURCE_BYTES = 32 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 SOURCE_TTL = 3600
 CACHE_BUDGET = 1024 * 1024 * 1024
+PDF_IMAGE_ORIGINS = {
+    "https://gingtto.store", "https://www.gingtto.store",
+    "https://smawell.shop", "https://www.smawell.shop",
+}
 
 
 def r2_client():
@@ -148,6 +152,16 @@ def deliver_image(upload_dir, cache, filename, logger):
                                  conditional=True, max_age=3600)
             response.headers["Cache-Control"] = "public, max-age=3600"
             response.headers["X-Content-Type-Options"] = "nosniff"
+            if request.args.get("pdf") == "1":
+                # Export uses anonymous Canvas reads, unlike ordinary <img> tags.
+                # Keep this URL out of shared caches (including old non-CORS hits).
+                response.headers["Cache-Control"] = "private, max-age=3600"
+                response.vary.add("Origin")
+                origin = request.headers.get("Origin")
+                if origin in PDF_IMAGE_ORIGINS and response.mimetype in {
+                    "image/jpeg", "image/png", "image/webp", "image/avif", "image/gif",
+                }:
+                    response.headers["Access-Control-Allow-Origin"] = origin
             if wrote_cache:
                 try:
                     prune_cache(cache, {source, target})
