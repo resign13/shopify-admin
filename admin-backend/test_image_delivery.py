@@ -111,6 +111,31 @@ class ImageDeliveryTest(unittest.TestCase):
             delivery.prune_cache(self.cache, set())
         self.assertFalse(old.exists())
 
+    def test_pdf_canvas_access_is_scoped_to_storefront_images(self):
+        for origin in delivery.PDF_IMAGE_ORIGINS:
+            status, body, headers = self.get('/uploads/example.jpg?w=160&pdf=1', headers={'Origin': origin})
+            self.assertEqual(status, 200)
+            self.assertEqual(headers['Access-Control-Allow-Origin'], origin)
+            self.assertIn('Origin', headers['Vary'])
+            self.assertEqual(headers['Cache-Control'], 'private, max-age=3600')
+            self.assertNotIn('Access-Control-Allow-Credentials', headers)
+            self.assertEqual(Image.open(io.BytesIO(body)).format, 'WEBP')
+            conditional = self.get('/uploads/example.jpg?w=160&pdf=1', headers={
+                'Origin': origin, 'If-None-Match': headers['ETag'],
+            })
+            self.assertEqual(conditional[0], 304)
+            self.assertEqual(conditional[2]['Access-Control-Allow-Origin'], origin)
+        for origin in ['https://untrusted.example', 'null', 'https://gingtto.store.evil.example']:
+            headers = self.get('/uploads/example.jpg?w=160&pdf=1', headers={'Origin': origin})[2]
+            self.assertNotIn('Access-Control-Allow-Origin', headers)
+            self.assertIn('private', headers['Cache-Control'])
+        ordinary = self.get('/uploads/example.jpg?w=160', headers={'Origin': 'https://gingtto.store'})[2]
+        self.assertNotIn('Access-Control-Allow-Origin', ordinary)
+        self.assertIn('public', ordinary['Cache-Control'])
+        (self.uploads / 'document.pdf').write_bytes(b'%PDF-fixture')
+        headers = self.get('/uploads/document.pdf?pdf=1', headers={'Origin': 'https://gingtto.store'})[2]
+        self.assertNotIn('Access-Control-Allow-Origin', headers)
+
 
 if __name__ == '__main__':
     unittest.main()
