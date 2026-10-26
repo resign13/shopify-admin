@@ -5,6 +5,7 @@ export const moduleGroups = [
     label: "商品与库存",
     items: [
       ["products", "商品管理"],
+      ["size-charts", "商品尺码表"],
       ["inventory", "库存管理"],
       ["categories", "商品分类"],
     ],

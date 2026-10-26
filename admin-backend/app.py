@@ -3428,6 +3428,8 @@ def salespeople():
 
 import finance
 finance.register(app, require_auth)
+import size_charts
+size_charts.register(app, require_auth)
 import api_integrations
 api_integrations.register(app, require_auth)
 

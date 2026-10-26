@@ -1,6 +1,6 @@
 """Department defaults are templates; explicit staff module grants are authoritative."""
 MODULES = ['dashboard','products','inventory','orders','categories','presale',
-           'store-accounts','admin-users','audit-logs','contracts','finance','api-integrations']
+           'store-accounts','admin-users','audit-logs','contracts','finance','api-integrations','size-charts']
 STAFF_ROLES = {'admin', 'sales', 'warehouse', 'finance'}
 # Retain existing within-module operation limits (e.g. warehouse orders and
 # salesperson ownership), without making departments a module whitelist.

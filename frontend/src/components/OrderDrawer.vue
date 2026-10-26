@@ -4,12 +4,9 @@
     :title="order ? `订单详情 · ${order.orderNo}` : '订单详情'"
     size="min(800px, 100vw)"
     :before-close="close"
-    ><template #header="{titleId,titleClass}">
-      <div :id="titleId" :class="[titleClass,'order-drawer-heading']">
-        <small>订单详情</small>
-        <OrderNumber v-if="order" :value="order.orderNo" :secondary="order.secondaryOrderNo" :warehouse-printed="order.warehousePrinted" expanded />
-      </div>
-    </template><ElSkeleton v-if="loading && !order" :rows="10" animated />
+    ><div v-if="order" class="order-drawer-heading">
+      <OrderNumber :value="order.orderNo" :secondary="order.secondaryOrderNo" :warehouse-printed="order.warehousePrinted" expanded />
+    </div><ElSkeleton v-if="loading && !order" :rows="10" animated />
     <ElAlert v-if="!order && !loading && error" :title="error" type="error" :closable="false"><ElButton text @click="refreshDetails">重试读取详情</ElButton></ElAlert>
     <template v-if="order">
       <OrderEditor
@@ -442,8 +439,7 @@ async function exportInvoice() {
 }
 </script>
 <style scoped>
-.order-drawer-heading { min-width:0; flex:1; }
-.order-drawer-heading > small { display:block; color:#6b7b90; font-size:12px; margin-bottom:5px; }
+.order-drawer-heading { min-width:0; margin-bottom:16px; }
 .order-drawer-heading :deep(.order-number-primary) { font-size:20px; }
 .order-drawer-heading :deep(.order-number-secondary) { font-size:12px; }
 .order-weight-summary { display: flex; flex-direction: column; gap: 8px; }

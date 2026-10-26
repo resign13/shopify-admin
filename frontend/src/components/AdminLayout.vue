@@ -110,6 +110,7 @@ const definitions = [
     label: "商品与库存",
     items: [
       ["/products", "商品管理", Goods, "admin,sales"],
+      ["/size-charts", "商品尺码表", Collection, "admin"],
       ["/inventory", "库存管理", Box, "admin,sales,warehouse,customer"],
       ["/categories", "商品分类", Collection, "admin,sales"],
     ],

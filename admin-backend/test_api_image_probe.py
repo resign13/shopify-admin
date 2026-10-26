@@ -8,6 +8,7 @@ import socket
 import sys
 from types import SimpleNamespace
 import unittest
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 from PIL import Image
 import requests
@@ -53,6 +54,16 @@ class ApiImageProbeTest(unittest.TestCase):
         self.assertFalse(self.sessions[0].trust_env)
         for _,_,kwargs in self.calls:
             self.assertIs(kwargs['verify'],True);self.assertNotIn('headers',kwargs);self.assertFalse(kwargs['allow_redirects'])
+    def test_local_copy_publishes_only_valid_complete_images(self):
+        with TemporaryDirectory() as folder:
+            path=Path(folder)/'nested'/'photo.jpg'
+            self.steps=[Response(self.jpeg)]
+            result=self.probe.sample('https://images.example.test/photo.jpg',destination=path)
+            self.assertNotIn('error',result);self.assertEqual(path.read_bytes(),self.jpeg)
+            self.steps=[Response(b'not an image')]
+            result=self.probe.sample('https://images.example.test/photo.jpg',destination=path)
+            self.assertIn('error',result);self.assertEqual(path.read_bytes(),self.jpeg)
+            self.assertEqual(list(path.parent.glob('*.tmp')),[])
     def test_transient_tls_eof_get_retries_once_on_fresh_connection_pool(self):
         self.steps=[requests.exceptions.SSLError('UNEXPECTED_EOF_WHILE_READING'),Response(self.jpeg)]
         result=self.probe.sample('https://images.example.test/image.jpg')
