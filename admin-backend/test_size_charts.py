@@ -49,7 +49,8 @@ class SizeChartsTest(unittest.TestCase):
         data=self.call('size-charts').json
         self.assertEqual(data['total'],1)
         self.assertEqual(self.detail()['sizes'],['M','L','Tall XL'])
-        for role in ['sales','warehouse','customer']:
+        self.assertEqual(self.call('size-charts',role='sales').status_code,200)
+        for role in ['warehouse','customer']:
             self.assertEqual(self.call('size-charts',role=role).status_code,403)
         db._fetch_one("UPDATE admin_users SET permissions=%s WHERE role='admin' RETURNING id",(Jsonb(['products']),))
         self.assertEqual(self.call('size-charts').status_code,403)
@@ -61,6 +62,18 @@ class SizeChartsTest(unittest.TestCase):
         response=self.call('size-charts/save','POST',{'requestId':str(uuid.uuid4()),'changes':[doc]},role='sales')
         self.assertEqual(response.status_code,200,response.json)
         self.assertEqual(self.call('products',role='sales').status_code,403)
+
+    def test_admin_and_sales_defaults_and_explicit_revocation(self):
+        import module_permissions
+        for role in ['admin','sales']:
+            self.assertIn('size-charts',module_permissions.effective({'role':role,'permissions':None}))
+            self.assertNotIn('size-charts',module_permissions.effective({'role':role,'permissions':[]}))
+        for role in ['warehouse','finance','customer']:
+            self.assertNotIn('size-charts',module_permissions.effective({'role':role,'permissions':None}))
+        doc=self.detail();doc['values']['hip']['M']='90'
+        self.assertEqual(self.call('size-charts/save','POST',{'requestId':str(uuid.uuid4()),'changes':[doc]},role='sales').status_code,200)
+        db._fetch_one("UPDATE admin_users SET permissions=%s WHERE role='sales' RETURNING id",(Jsonb(['orders']),))
+        self.assertEqual(self.call('size-charts',role='sales').status_code,403)
 
     def test_save_zero_noop_idempotency_and_product_unchanged(self):
         before=db._fetch_all('SELECT id,price,stock,size_chart_image_url FROM products ORDER BY id')
@@ -125,7 +138,10 @@ class SizeChartsTest(unittest.TestCase):
         for value in ['=1+2',-1,'bad',1.123]:
             book=self.workbook();book.active['D9']=value;r=self.preview(book)
             self.assertEqual(r.status_code,200,r.json);self.assertTrue(r.json['errors']);self.assertIsNone(r.json['proposal'])
-        book=self.workbook();book.active.delete_rows(9);self.assertTrue(self.preview(book).json['errors'])
+        book=self.workbook();book.active.delete_rows(9)
+        deleted=self.preview(book).json
+        self.assertEqual(deleted['errors'],[])
+        self.assertEqual(deleted['removedDimensionCount'],1)
         book=self.workbook();book.active['D8']='WRONG';self.assertTrue(self.preview(book).json['errors'])
 
     def test_conflict_on_confirm_and_forged_preview(self):
@@ -263,7 +279,7 @@ class SizeChartsTest(unittest.TestCase):
             self.assertEqual(sheet._images[0].anchor._from.row,0)
             self.assertNotIn('END',[c.value for row in sheet for c in row])
         book=self.workbook();book.active.delete_rows(17)
-        self.assertTrue(self.preview(book).json['errors'])
+        self.assertEqual(self.preview(book).json['removedDimensionCount'],1)
         book=self.workbook();book.active['C5']='in'
         self.assertTrue(self.preview(book).json['errors'])
         # Previously downloaded v1 files keep their old cell coordinates.
@@ -378,6 +394,120 @@ class SizeChartsTest(unittest.TestCase):
         book=self.workbook(unit='in')
         meta=book[excel.META];item=__import__('json').loads(meta['A2'].value);item['exportUnit']='cm';meta['A2']=excel.packed(item)
         self.assertEqual(self.preview(book).status_code,400)
+
+    def test_excel_deleted_dimension_rows_preview_and_commit_preserve_remaining_data(self):
+        doc=self.detail();doc['values']['waist-relaxed']['M']='30';doc['values']['knee']['M']='42'
+        self.assertEqual(self.save(doc).status_code,200)
+        before=self.detail()
+        book=self.workbook();book.active.delete_rows(9,4)
+        preview=self.preview(book).json
+        self.assertEqual(preview['errors'],[],preview)
+        self.assertEqual(preview['removedDimensionCount'],4)
+        self.assertEqual(preview['dimensionChangedCount'],4)
+        self.assertEqual(preview['valueChangedCount'],0)
+        self.assertEqual(preview['dimensionRows'][0]['filledCount'],1)
+        self.assertEqual(self.detail(),before,'Preview must not apply deletion')
+        rid=str(uuid.uuid4())
+        self.assertEqual(self.commit(preview,rid).status_code,200)
+        self.assertTrue(self.commit(preview,rid).json['replayed'])
+        saved=self.detail()
+        self.assertEqual([d['id'] for d in saved['dimensions']],['knee','leg-opening','front-rise','back-rise','inseam'])
+        self.assertEqual(saved['values']['knee']['M'],'42.00')
+        stored=db._fetch_one('SELECT document FROM product_size_charts')['document']
+        self.assertEqual(stored['values']['waist-relaxed']['M'],'30.00','Removed data remains in history')
+        self.assertEqual(self.preview(self.workbook()).json['changedCount'],0)
+        self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM product_size_chart_audit')['n'],2)
+
+    def test_excel_add_rename_reorder_and_retained_english_visibility(self):
+        doc=self.detail();doc['titleEn']='Size chart';doc['values']['hip']['M']='96.25'
+        next(d for d in doc['dimensions'] if d['id']=='hip')['showEn']=False
+        self.assertEqual(self.save(doc).status_code,200)
+        book=self.workbook();sheet=book.active
+        # Move Hip above the waist rows and rename its Chinese label only.
+        data=[c.value for c in sheet[11]];sheet.delete_rows(11);sheet.insert_rows(9)
+        data[0]='臀围成衣'
+        for col,value in enumerate(data,1):sheet.cell(9,col,value)
+        sheet['B10']='Waist at rest'
+        sheet.append(['外长','Outseam',None,100.5,0,None])
+        preview=self.preview(book).json
+        self.assertEqual(preview['errors'],[],preview)
+        self.assertEqual(sorted(r['kind'] for r in preview['dimensionRows']),['add','rename','rename','reorder'])
+        self.assertEqual(self.commit(preview).status_code,200)
+        saved=self.detail()
+        self.assertEqual(saved['dimensions'][0]['id'],'hip')
+        self.assertEqual(saved['dimensions'][0]['name'],'臀围成衣')
+        self.assertFalse(saved['dimensions'][0]['showEn'])
+        self.assertEqual(saved['values']['hip']['M'],'96.25')
+        self.assertEqual(saved['dimensions'][1]['nameEn'],'Waist at rest')
+        new=saved['dimensions'][-1]
+        self.assertEqual(new['nameEn'],'Outseam');self.assertTrue(new['showEn'])
+        self.assertEqual(saved['values'][new['id']],{'M':'100.50','L':'0.00','Tall XL':None})
+        english=self.workbook('english')
+        labels=[c.value for row in english.active for c in row]
+        self.assertNotIn('Hip',labels);self.assertIn('Outseam',labels)
+        self.assertEqual(len(english.active._images),1)
+
+    def test_excel_both_names_replaced_are_explicit_remove_and_add(self):
+        doc=self.detail();doc['values']['hip']['M']='96';self.save(doc)
+        book=self.workbook();sheet=book.active
+        sheet['A11']='胸围';sheet['B11']='Chest';sheet['D11']=102
+        preview=self.preview(book).json
+        self.assertEqual(preview['errors'],[],preview)
+        self.assertEqual([r['kind'] for r in preview['dimensionRows']],['remove','add'])
+        self.assertEqual(self.commit(preview).status_code,200)
+        saved=self.detail();chest=next(d for d in saved['dimensions'] if d['name']=='胸围')
+        self.assertNotEqual(chest['id'],'hip')
+        self.assertEqual(saved['values'][chest['id']]['M'],'102.00')
+        self.assertEqual(db._fetch_one('SELECT document FROM product_size_charts')['document']['values']['hip']['M'],'96.00')
+
+    def test_excel_dimension_validation_and_limits_never_write(self):
+        for kind in ['empty','duplicate','missing-name','mixed-unit','invalid-name','too-many','formula','size-column']:
+            with self.subTest(kind=kind):
+                book=self.workbook();sheet=book.active
+                if kind=='empty':sheet.delete_rows(9,9)
+                elif kind=='duplicate':sheet.append(['臀围','Hip','cm',1,2,3])
+                elif kind=='missing-name':sheet.append([None,'Outseam','cm',100])
+                elif kind=='mixed-unit':sheet.append(['外长','Outseam','in',100])
+                elif kind=='invalid-name':sheet.append(['a'*81,'Outseam','cm',100])
+                elif kind=='too-many':
+                    for i in range(56):sheet.append([f'自定义{i}',f'Custom {i}','cm',1])
+                elif kind=='formula':sheet.append(['外长','Outseam','cm','=1+2'])
+                else:sheet['D8']='OTHER SIZE'
+                preview=self.preview(book).json
+                self.assertTrue(preview['errors'],preview)
+                self.assertIsNone(preview['proposal'])
+                self.assertEqual(self.detail()['version'],'0')
+        self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM product_size_chart_audit')['n'],0)
+
+    def test_converted_template_dimension_edits_preserve_precision_and_saved_unit(self):
+        doc=self.detail();doc['values']['hip']['M']='100.50';self.save(doc)
+        book=self.workbook(unit='in');sheet=book.active
+        sheet.delete_rows(9,2);sheet['A9']='臀围成衣'
+        sheet.append(['外长','Outseam','in',10,0,None])
+        preview=self.preview(book).json
+        self.assertEqual(preview['errors'],[],preview)
+        self.assertEqual(preview['removedDimensionCount'],2)
+        self.assertEqual(self.commit(preview).status_code,200)
+        saved=self.detail()
+        self.assertEqual(saved['unit'],'cm')
+        self.assertEqual(saved['values']['hip']['M'],'100.50')
+        new=saved['dimensions'][-1]
+        self.assertEqual(saved['values'][new['id']]['M'],'25.40')
+        self.assertTrue(all(d['unit']=='cm' for d in saved['dimensions']))
+
+    def test_dimension_import_multi_style_conflict_and_tampering_are_atomic(self):
+        with db.get_connection() as c:c.execute("UPDATE products SET style_code='OTHER' WHERE id=3")
+        book=self.workbook(codes=['GT-2026','OTHER'])
+        book.worksheets[0].delete_rows(9,4);book.worksheets[1].append(['外长','Outseam','cm',100])
+        preview=self.preview(book).json
+        self.assertEqual(preview['errors'],[],preview)
+        modified=deepcopy(preview);modified['proposal']['changes'][0]['dimensions'][0]['name']='篡改'
+        self.assertEqual(self.commit(modified).status_code,400)
+        other=self.call('size-charts/detail?styleCode=OTHER').json;other['material']='cotton';self.save(other)
+        self.assertEqual(self.commit(preview).status_code,409)
+        self.assertEqual(self.detail()['version'],'0')
+        self.assertEqual(len(self.detail()['dimensions']),9)
+        self.assertEqual(len(self.call('size-charts/detail?styleCode=OTHER').json['dimensions']),9)
 
 
 if __name__=='__main__':unittest.main()

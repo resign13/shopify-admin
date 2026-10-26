@@ -86,16 +86,20 @@
     <template #footer><div class="chart-heading"><span class="muted">{{ dirty ? '有未保存修改' : '' }}</span><div><ElButton @click="closeEditor()" :disabled="saving">关闭</ElButton><ElButton :loading="exporting" @click="exportCharts([form.styleCode],mode === 'en' ? 'english' : 'maintenance',readonly ? previewUnit : null)">导出当前版本</ElButton><ElButton v-if="!readonly" type="primary" :loading="saving" :disabled="!dirty || !form?.sizes.length" @click="submit">保存尺码表</ElButton></div></div></template>
   </component>
 
-  <ElDialog v-model="importOpen" title="导入商品尺码表" width="1000px" :close-on-click-modal="false" :close-on-press-escape="!importBusy" :show-close="!importBusy">
-    <ElAlert title="请选择完整维护表。导出的原值会一并带出；文件中的空白将清空对应原值。英文客户表不支持导入。" type="warning" :closable="false" />
+  <ElDialog v-model="importOpen" class="chart-import-window" title="导入商品尺码表" width="min(1000px, 94vw)" align-center :close-on-click-modal="false" :close-on-press-escape="!importBusy" :show-close="!importBusy">
+    <ElAlert title="请选择完整维护表。可新增、删除、改名或调整测量维度行；删除行会删除对应维度，数值空白会清空原值。请保留表头、真实尺码列、款号和整款单位。英文客户表不支持导入。" type="warning" :closable="false" />
     <ElButton class="section-gap" :disabled="importBusy" @click="fileInput.click()">选择 .xlsx 文件</ElButton><span class="small-note">　{{ fileName }}　最多 10 MB／100 款</span>
     <input ref="fileInput" type="file" accept=".xlsx" hidden @change="upload" />
     <ElAlert v-if="importError" :title="importError" type="error" :closable="false" class="section-gap" />
     <template v-if="proposal">
-      <p>完整款号 {{ proposal.styleCount }} 个 · 变更 {{ proposal.changedCount }} 项 · <strong class="negative">清空 {{ proposal.clearCount }} 项</strong> · 错误 {{ proposal.errors.length }} 项</p>
+      <p>完整款号 {{ proposal.styleCount }} 个 · 数值变更 {{ proposal.valueChangedCount }} 项 · 维度变更 {{ proposal.dimensionChangedCount }} 项 · <strong class="negative">删除维度 {{ proposal.removedDimensionCount }} 项／清空数值 {{ proposal.clearCount }} 项</strong> · 错误 {{ proposal.errors.length }} 项</p>
       <ElTable :data="proposal.errors" v-if="proposal.errors.length" max-height="180"><ElTableColumn prop="sheet" label="工作表" /><ElTableColumn prop="message" label="错误" /></ElTable>
-      <ElTable :data="proposal.rows" max-height="430"><ElTableColumn prop="styleCode" label="款号" /><ElTableColumn prop="dimension" label="维度" /><ElTableColumn prop="size" label="尺码" /><ElTableColumn prop="cell" label="位置" /><ElTableColumn prop="unit" label="保存单位" width="90" /><ElTableColumn label="原值"><template #default="{row}">{{ display(row.old) }}</template></ElTableColumn><ElTableColumn label="新值"><template #default="{row}"><span :class="{negative:row.cleared}">{{ row.cleared ? '清空' : display(row.new) }}</span></template></ElTableColumn></ElTable>
-      <p v-if="!proposal.changedCount && !proposal.errors.length">所有数值均未变化，不需要保存。</p>
+      <template v-if="proposal.dimensionRows.length">
+        <h3>维度变更</h3>
+        <ElTable :data="proposal.dimensionRows" max-height="240" aria-label="维度变更预览"><ElTableColumn prop="styleCode" label="款号" width="120" /><ElTableColumn label="操作" width="85"><template #default="{row}"><span :class="{negative:row.kind==='remove'}">{{ row.action }}</span></template></ElTableColumn><ElTableColumn prop="old" label="原维度／顺序"><template #default="{row}">{{ row.old || '—' }}</template></ElTableColumn><ElTableColumn prop="new" label="新维度／顺序"><template #default="{row}">{{ row.new || '删除' }}</template></ElTableColumn><ElTableColumn label="说明" width="170"><template #default="{row}">{{ row.kind==='remove' ? `已填 ${row.filledCount} 项，历史保留` : row.kind==='add' ? '新维度默认在英文版展示' : '原英文展示设置保留' }}</template></ElTableColumn></ElTable>
+      </template>
+      <template v-if="proposal.rows.length"><h3>数值变更</h3><ElTable :data="proposal.rows" max-height="320"><ElTableColumn prop="styleCode" label="款号" /><ElTableColumn prop="dimension" label="维度" /><ElTableColumn prop="size" label="尺码" /><ElTableColumn prop="cell" label="位置" /><ElTableColumn prop="unit" label="保存单位" width="90" /><ElTableColumn label="原值"><template #default="{row}">{{ display(row.old) }}</template></ElTableColumn><ElTableColumn label="新值"><template #default="{row}"><span :class="{negative:row.cleared}">{{ row.cleared ? '清空' : display(row.new) }}</span></template></ElTableColumn></ElTable></template>
+      <p v-if="!proposal.changedCount && !proposal.errors.length">维度与数值均未变化，不需要保存。</p>
     </template>
     <template #footer><ElButton :disabled="importBusy" @click="importOpen=false">取消</ElButton><ElButton type="primary" :loading="importBusy" :disabled="!proposal?.changedCount || !!proposal?.errors.length" @click="importConfirm">确认覆盖</ElButton></template>
   </ElDialog>
@@ -137,7 +141,7 @@ async function exportCharts(codes,version,unit){if(exporting.value)return;if(dir
 const importOpen=ref(false),importBusy=ref(false),fileInput=ref(),fileName=ref(''),proposal=ref(null),importError=ref('');let importId='';
 function openImport(){if(dirty.value){ElMessage.warning('请先保存或撤销页面修改，再导入尺码表');return;}proposal.value=null;fileName.value='';importError.value='';importOpen.value=true;}
 async function upload(event){const f=event.target.files[0];event.target.value='';if(!f||importBusy.value)return;fileName.value=f.name;proposal.value=null;importError.value='';if(f.size>10*1024*1024){importError.value='文件不能超过 10 MB';return;}importBusy.value=true;try{const body=new FormData();body.append('file',f);proposal.value=await api('size-charts/import/preview',{method:'POST',body});importId=crypto.randomUUID();}catch(e){importError.value=e.message;}finally{importBusy.value=false;}}
-async function importConfirm(){if(importBusy.value)return;if(!(await confirm(`将覆盖 ${proposal.value.changedCount} 项，其中 ${proposal.value.clearCount} 项清空原值。确认保存？`,'确认导入覆盖')))return;importBusy.value=true;importError.value='';try{await save('size-charts/import/confirm',{requestId:importId,proposal:proposal.value.proposal,previewToken:proposal.value.previewToken},'POST');ElMessage.success('尺码表已更新');importOpen.value=false;if(editorOpen.value)await open(form.value.styleCode,readonly.value);await load();}catch(e){importError.value=e.message;}finally{importBusy.value=false;}}
+async function importConfirm(){if(importBusy.value)return;if(!(await confirm(`将更新 ${proposal.value.dimensionChangedCount} 项维度和 ${proposal.value.valueChangedCount} 项数值，其中删除 ${proposal.value.removedDimensionCount} 个维度、清空 ${proposal.value.clearCount} 项原值。确认保存？`,'确认导入覆盖')))return;importBusy.value=true;importError.value='';try{await save('size-charts/import/confirm',{requestId:importId,proposal:proposal.value.proposal,previewToken:proposal.value.previewToken},'POST');ElMessage.success('尺码表已更新');importOpen.value=false;if(editorOpen.value)await open(form.value.styleCode,readonly.value);await load();}catch(e){importError.value=e.message;}finally{importBusy.value=false;}}
 onMounted(()=>{markClean();load();});
 </script>
 
@@ -167,5 +171,8 @@ onMounted(()=>{markClean();load();});
 .chart-preview-window .el-dialog__headerbtn{top:4px;right:4px;width:32px;height:32px}
 .chart-preview-window .el-dialog__body{padding:4px 0 0;overflow:auto;min-height:0}
 .chart-preview-window .el-dialog__footer{padding:14px 0 0;margin-top:16px;border-top:1px solid #e4eaf3;flex-shrink:0}
+.chart-import-window.el-dialog{max-height:calc(100dvh - 40px);display:flex;flex-direction:column}
+.chart-import-window .el-dialog__header,.chart-import-window .el-dialog__footer{flex-shrink:0}
+.chart-import-window .el-dialog__body{min-height:0;overflow:auto}
 </style>
 

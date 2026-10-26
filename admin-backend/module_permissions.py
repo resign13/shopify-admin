@@ -12,7 +12,7 @@ BASE_OPERATION_MODULES = {
 CAPABILITIES = {role: list(MODULES) for role in STAFF_ROLES}
 CAPABILITIES['customer'] = ['inventory']
 DEFAULTS = {**BASE_OPERATION_MODULES,
-            'sales': [k for k in BASE_OPERATION_MODULES['sales'] if k != 'presale'],
+            'sales': [k for k in BASE_OPERATION_MODULES['sales'] if k != 'presale'] + ['size-charts'],
             'finance': ['finance', 'contracts']}
 
 

@@ -368,12 +368,13 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5366/api/health >/dev/null
           npx --yes --package @playwright/cli playwright-cli -s=sizechartsci open http://127.0.0.1:5366/login --browser chrome
-          for stage in login-size-charts-browser-fixture verify-size-charts-edit verify-size-charts-import verify-size-charts-boundaries verify-size-charts-preview verify-size-charts-units verify-size-charts-preview-units; do
+          for stage in login-size-charts-browser-fixture verify-size-charts-edit verify-size-charts-import verify-size-charts-boundaries verify-size-charts-preview verify-size-charts-units verify-size-charts-preview-units verify-size-charts-dimensions; do
             npx --yes --package @playwright/cli playwright-cli -s=sizechartsci run-code --filename "scripts/$stage.js" | tee "$RUNNER_TEMP/$stage.log"
             if grep -q '^### Error' "$RUNNER_TEMP/$stage.log"; then exit 1; fi
             grep -Eq '"passed":[[:space:]]*true' "$RUNNER_TEMP/$stage.log"
             if [ "$stage" = verify-size-charts-edit ]; then python scripts/verify-size-charts-workbooks.py; fi
             if [ "$stage" = verify-size-charts-units ]; then python scripts/verify-size-charts-unit-workbooks.py; fi
+            if [ "$stage" = verify-size-charts-preview-units ]; then python scripts/verify-size-charts-dimension-workbooks.py; fi
           done
           npx --yes --package @playwright/cli playwright-cli -s=sizechartsci close
       - name: Preserve the frontend build that passed verification

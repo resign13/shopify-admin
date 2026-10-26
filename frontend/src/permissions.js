@@ -36,7 +36,7 @@ export const moduleGroups = [
 const all = moduleGroups.flatMap((group) => group.items.map(([key]) => key));
 const defaults = {
   admin: all,
-  sales: ["dashboard", "products", "inventory", "orders", "categories", "contracts"],
+  sales: ["dashboard", "products", "inventory", "orders", "categories", "contracts", "size-charts"],
   warehouse: ["inventory", "orders"],
   finance: ["finance", "contracts"],
   customer: ["inventory"],

@@ -5,6 +5,7 @@ from io import BytesIO
 import hmac
 import json
 import re
+import uuid
 from zipfile import ZipFile
 
 from flask import current_app, g, request, send_file
@@ -80,12 +81,13 @@ def export(payload):
                                 (5,'Unit' if english else '整款单位',doc['unit'])]:
             label_cell=write(sheet,row,2,label);label_cell.font=Font(name='Arial',size=10,color='64748B')
             write(sheet,row,3,value);sheet.merge_cells(start_row=row,start_column=3,end_row=row,end_column=last_col)
-        instructions = '仅填写测量值；空白将清空原值，0 表示零。单位在页面统一换算，请勿修改表格结构。'
+        instructions = '可新增、删除、改名或调整测量维度行；测量值空白清空，0 表示零。请保留表头、尺码列、款号和整款单位。'
         if doc['unit'] != saved_doc['unit']:
-            instructions = f"仅填写测量值；空白清空，0 表示零。本表为 {doc['unit']}，导入自动换算为保存单位 {saved_doc['unit']}；未改数值保留原精度。"
+            instructions += f" 本表为 {doc['unit']}，导入换算为保存单位 {saved_doc['unit']}；未改数值保留原精度。"
         write(sheet,6,1,'SIZE CHART · 1 in = 2.54 cm' if english else instructions)
         sheet.merge_cells(start_row=6,start_column=1,end_row=6,end_column=last_col)
-        sheet.row_dimensions[6].height=30;sheet.row_dimensions[7].height=8
+        sheet.row_dimensions[6].height=42 if not english and doc['unit'] != saved_doc['unit'] else 30
+        sheet.row_dimensions[7].height=8
         border=Border(left=Side(style='thin',color='D8E2EF'),right=Side(style='thin',color='D8E2EF'),top=Side(style='thin',color='D8E2EF'),bottom=Side(style='thin',color='D8E2EF'))
         for col, label in enumerate(headers, 1):
             cell = write(sheet, 8, col, label); cell.fill = PatternFill('solid', fgColor='DFE8F5'); cell.font = Font(name='Arial',size=11,bold=True,color='243850')
@@ -137,6 +139,71 @@ def export(payload):
     return send_file(stream, as_attachment=True, download_name='size-charts-english.xlsx' if mode == 'english' else '商品尺码表.xlsx', mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
+def imported_dimensions(matrix, first, sizes, original, export_unit, compact):
+    """Match by labels, not row position, so deleted/reordered rows keep their values."""
+    incoming = []
+    ended = compact
+    for row_index, row in enumerate(matrix[8:], 9):
+        cells = row[first-1:first+2+len(sizes)]
+        values = [cell.value for cell in cells]
+        if not compact and values[0] == 'END':
+            if ended or any(v not in (None, '') for v in values[1:]): raise ValueError('END 结束行无效')
+            ended = True
+            continue
+        if all(v in (None, '') for v in values): continue
+        if not compact and ended: raise ValueError('END 结束行之后存在测量数据')
+        try:
+            name = charts.text(values[0], '中文维度', 80, True)
+            name_en = charts.text(values[1] if values[1] is not None else '', '英文维度', 80)
+        except ValueError as exc: raise ValueError(f'第 {row_index} 行：{exc}')
+        if values[2] not in (None, '', export_unit): raise ValueError(f'第 {row_index} 行：单位须统一为 {export_unit}，请在页面切换整款单位后重新导出')
+        incoming.append({'name': name, 'nameEn': name_en, 'cells': cells[3:], 'row': row_index})
+    if not ended: raise ValueError('缺少 END 结束行')
+    if not 1 <= len(incoming) <= charts.MAX_DIMENSIONS: raise ValueError('每款需保留 1–64 个测量维度')
+    labels = [(d['name'].casefold(), d['nameEn'].casefold()) for d in incoming]
+    if len(set(labels)) != len(labels): raise ValueError('存在重复的测量维度，请核对中文和英文名称')
+    # Reserve all exact matches before considering single-name renames. Never
+    # associate a new row with the old dimension merely because it occupies its row.
+    matched, used = {}, set()
+    for fields in [('name', 'nameEn'), ('name',), ('nameEn',)]:
+        for index, d in enumerate(incoming):
+            if index in matched or any(not d[f] for f in fields): continue
+            key = tuple(d[f].casefold() for f in fields)
+            peers = [i for i, other in enumerate(incoming) if i not in matched and tuple(other[f].casefold() for f in fields) == key]
+            candidates = [old for old in original if old['id'] not in used and tuple(old[f].casefold() for f in fields) == key]
+            if len(peers) == len(candidates) == 1:
+                matched[index] = candidates[0]
+                used.add(candidates[0]['id'])
+    for index, d in enumerate(incoming):
+        old = matched.get(index)
+        d['dimension'] = {**(old or {'id': uuid.uuid4().hex, 'showEn': True}),
+                          'name': d['name'], 'nameEn': d['nameEn'], 'unit': export_unit}
+    return incoming
+
+
+def dimension_differences(code, original, updated, values):
+    old_by_id = {d['id']: d for d in original}
+    new_by_id = {d['id']: d for d in updated}
+    label = lambda d: d['name'] + ((' / ' + d['nameEn']) if d['nameEn'] else '')
+    rows = []
+    def add(kind, action, d, old, new):
+        rows.append({'styleCode': code, 'kind': kind, 'action': action, 'dimension': d['name'],
+                     'old': old, 'new': new, 'filledCount': sum(v is not None for v in values.get(d['id'], {}).values())})
+    for d in original:
+        if d['id'] not in new_by_id: add('remove', '删除', d, label(d), None)
+    for d in updated:
+        old = old_by_id.get(d['id'])
+        if old is None: add('add', '新增', d, None, label(d))
+        elif (old['name'], old['nameEn']) != (d['name'], d['nameEn']): add('rename', '改名', d, label(old), label(d))
+    old_order = [d['id'] for d in original if d['id'] in new_by_id]
+    new_order = [d['id'] for d in updated if d['id'] in old_by_id]
+    if old_order != new_order:
+        rows.append({'styleCode': code, 'kind': 'reorder', 'action': '排序', 'dimension': '维度顺序',
+                     'old': ' → '.join(old_by_id[i]['name'] for i in old_order),
+                     'new': ' → '.join(new_by_id[i]['name'] for i in new_order), 'filledCount': 0})
+    return rows
+
+
 def parse(raw):
     if len(raw) > MAX_BYTES: raise ValueError('文件不能超过 10 MB')
     try:
@@ -160,7 +227,7 @@ def parse(raw):
                 if (compact and item.get('layout')!='compact-v2') or (not compact and 'layout' in item): raise ValueError()
                 mapping[item['sheet']] = item; codes.add(item['styleCode'])
             except (ValueError, TypeError, KeyError): raise ValueError('模板元数据已损坏，请重新导出')
-        rows, changes, errors = [], [], []
+        rows, dimension_rows, changes, errors = [], [], [], []
         cats = charts.catalog(list(codes))
         for sheet in book:
             if sheet.title == META: continue
@@ -173,11 +240,11 @@ def parse(raw):
                 if export_unit not in {'cm', 'in'}: raise ValueError('导出单位元数据无效')
                 dims, sizes = item['dimensions'], item['sizes']
                 first=1 if compact else 4
-                max_row=len(dims)+8 if compact else max(len(dims)+9,22)
+                max_row=charts.MAX_DIMENSIONS+8 if compact else charts.MAX_DIMENSIONS+9
                 max_col=max(3+len(sizes),5) if compact else max(6+len(sizes),8)
                 if sheet.max_row > max_row or sheet.max_column > max_col: raise ValueError('存在额外行列')
                 # Images are not loaded by the read-only parser; cap cell traversal explicitly.
-                matrix = list(sheet.iter_rows(max_row=max_row, max_col=max_col))
+                matrix = list(sheet.iter_rows(max_row=min(max(sheet.max_row, 9), max_row), max_col=max_col))
                 def cell_at(row, col):
                     if row > len(matrix) or col > len(matrix[row-1]): raise ValueError('必要行列已删除，请重新导出完整维护表')
                     return matrix[row-1][col-1]
@@ -188,15 +255,18 @@ def parse(raw):
                 if compact and cell_at(5,3).value != export_unit: raise ValueError('单位已改变，请在页面切换单位后重新导出')
                 expected = ['测量维度', 'English', '单位', *sizes]
                 if [cell_at(8, i).value for i in range(first,first+3+len(sizes))] != expected: raise ValueError('尺码列或表头已改变')
-                if not compact and cell_at(9+len(dims),4).value != 'END': raise ValueError('维度行已删除或移动')
                 candidate = deepcopy(current)
-                for row_index, d in enumerate(dims, 9):
-                    if [cell_at(row_index,i).value or '' for i in range(first,first+3)] != [d['name'],d['nameEn'],export_unit]: raise ValueError(f'第 {row_index} 行：维度或单位已改变')
-                    for col, size in enumerate(sizes, first+3):
-                        cell = cell_at(row_index,col)
+                incoming = imported_dimensions(matrix, first, sizes, dims, export_unit, compact)
+                candidate['dimensions'] = [{**row['dimension'], 'unit': current['unit']} for row in incoming]
+                candidate['values'] = {}
+                style_rows = []
+                for imported in incoming:
+                    d = imported['dimension']
+                    candidate['values'][d['id']] = {}
+                    for cell, size in zip(imported['cells'], sizes):
                         try: new = charts.number(cell.value)
                         except ValueError as exc: raise ValueError(f'{cell.coordinate}：{exc}')
-                        old = current['values'][d['id']].get(size)
+                        old = current['values'].get(d['id'], {}).get(size)
                         # Untouched rounded previews must not alter the stored precision.
                         expected = charts.convert_value(old, current['unit'], export_unit)
                         if new == expected: new = old
@@ -204,12 +274,17 @@ def parse(raw):
                             try: new = charts.convert_value(new, export_unit, current['unit'])
                             except ValueError as exc: raise ValueError(f'{cell.coordinate}：{exc}')
                         candidate['values'][d['id']][size] = new
-                        if old != new: rows.append({'styleCode': code, 'dimension': d['name'], 'size': size, 'cell': cell.coordinate, 'unit': current['unit'], 'old': old, 'new': new, 'cleared': new is None})
+                        if old != new: style_rows.append({'styleCode': code, 'dimension': d['name'], 'size': size, 'cell': cell.coordinate, 'unit': current['unit'], 'old': old, 'new': new, 'cleared': new is None})
+                charts.normalize(candidate, current)
+                dimension_rows.extend(dimension_differences(code, dims, candidate['dimensions'], current['values']))
+                rows.extend(style_rows)
                 changes.append(candidate)
             except (ValueError, workbench.Conflict) as exc: errors.append({'styleCode': code, 'sheet': sheet.title, 'message': str(exc)})
         if not changes and not errors: raise ValueError('文件中没有完整款号工作表')
         payload = {'changes': changes, 'actorId': g.current_user['id']}
-        return {'rows': rows, 'errors': errors, 'styleCount': len(changes), 'changedCount': len(rows), 'clearCount': sum(r['cleared'] for r in rows),
+        return {'rows': rows, 'dimensionRows': dimension_rows, 'errors': errors, 'styleCount': len(changes),
+                'changedCount': len(rows)+len(dimension_rows), 'valueChangedCount': len(rows), 'dimensionChangedCount': len(dimension_rows),
+                'removedDimensionCount': sum(r['kind']=='remove' for r in dimension_rows), 'clearCount': sum(r['cleared'] for r in rows),
                 'proposal': payload if not errors else None, 'previewToken': sign(payload) if not errors else None}
     finally: book.close()
 
