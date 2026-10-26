@@ -10,7 +10,7 @@
     ><ElButton type="primary" @click="edit()">＋ 新建账号</ElButton></PageHeader
   >
   <section class="panel">
-    <form class="filters" @submit.prevent="list.apply(filters)">
+    <ResponsiveFilters :active="list.query" @remove="key => { filters[key] = ''; list.apply(filters); }" @submit.prevent="list.apply(filters)">
       <ElInput
         v-model="filters.keyword"
         clearable
@@ -31,7 +31,7 @@
           :label="label" /></ElSelect
       ><ElButton type="primary" native-type="submit">查询</ElButton
       ><ElButton @click="reset">重置</ElButton>
-    </form>
+    </ResponsiveFilters>
     <DataTable
       :storage-key="resource"
       :rows="list.rows"
@@ -165,6 +165,7 @@
   >
 </template>
 <script setup>
+import ResponsiveFilters from "./ResponsiveFilters.vue";
 import { moduleGroups, roleModules, defaultRoleModules, editableRolePermissions } from "../permissions";
 import { useRouter } from "vue-router";
 import { reactive, ref, onMounted } from "vue";

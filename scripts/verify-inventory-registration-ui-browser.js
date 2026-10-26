@@ -4,7 +4,7 @@ async (page) => {
   await page.setViewportSize({width:1920,height:1080});
   await page.getByRole('button',{name:'登记数量',exact:true}).first().click();
   const dialog = page.getByRole('dialog');
-  const row = dialog.getByRole('row').filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
+  let row = dialog.getByRole('row').filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
   await row.waitFor();
   await dialog.evaluate(node => Promise.all(node.getAnimations({subtree:true}).map(animation => animation.finished.catch(()=>{}))));
   const layout = await row.evaluate(node => {
@@ -23,7 +23,7 @@ async (page) => {
     if (await input.inputValue()!=='0') throw new Error(`Decrease control failed: ${field}`);
   }
 
-  const quota=row.getByRole('button',{name:'验货额度 M',exact:true});
+  let quota=row.getByRole('button',{name:'验货额度 M',exact:true});
   await quota.focus(); await quota.press('Enter');
   await page.locator('.allowance-card:visible').waitFor();
   if (!(await page.locator('.allowance-card:visible').innerText()).includes('100 件')) throw new Error('Original contract is missing');
@@ -62,6 +62,8 @@ async (page) => {
   await page.waitForFunction(() => [...document.querySelectorAll('.allowance-card')].every(el => !el.offsetWidth));
 
   await page.setViewportSize({width:390,height:844});
+  row=dialog.locator('.mobile-record').filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
+  quota=row.getByRole('button',{name:'验货额度 M',exact:true});
   await row.waitFor();
   await page.waitForFunction(() => document.querySelector('.inventory-registration').getBoundingClientRect().width <= window.innerWidth);
   if (await dialog.evaluate(el=>el.getBoundingClientRect().width>window.innerWidth)) throw new Error('Drawer exceeds narrow viewport');

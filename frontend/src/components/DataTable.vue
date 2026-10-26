@@ -2,7 +2,7 @@
   <div ref="container" class="data-toolbar">
     <span>{{ total }} 条记录</span>
     <div>
-      <slot name="toolbar" /><ElPopover trigger="click" width="200"
+      <MobileActionMenu v-if="$slots.toolbar" label="列表操作"><slot name="toolbar" /></MobileActionMenu><ElPopover trigger="click" width="200"
         ><template #reference><ElButton>显示列</ElButton></template
         ><ElCheckboxGroup v-model="visible"
           ><ElCheckbox
@@ -18,7 +18,7 @@
   <ElAlert v-if="error" :title="error" type="error" show-icon :closable="false"
     ><ElButton text @click="$emit('retry')">重试</ElButton></ElAlert
   >
-  <ElTable
+  <AdaptiveTable
     ref="table"
     :class="{ 'selection-large': largeSelection }"
     v-loading="loading"
@@ -31,6 +31,7 @@
     @sort-change="$emit('sort-change', $event)"
     @selection-change="$emit('selection-change', $event)"
   >
+    <template v-if="$slots['mobile-card']" #mobile-card="scope"><slot name="mobile-card" v-bind="scope" /></template>
     <ElTableColumn v-if="expandable" type="expand" width="38"
       ><template #default="{ row }"
         ><slot name="expanded" :row="row" /></template
@@ -57,7 +58,7 @@
         ></template
       >
     </ElTableColumn>
-  </ElTable>
+  </AdaptiveTable>
   <div class="table-footer">
     <span>共 {{ total }} 条</span
     ><ElPagination
@@ -65,6 +66,7 @@
       :page-size="Number(pageSize)"
       :page-sizes="[25, 50, 100]"
       :total="total"
+      :pager-count="5"
       layout="sizes, prev, pager, next"
       @update:current-page="$emit('page', $event)"
       @update:page-size="$emit('page-size', $event)"
@@ -72,6 +74,8 @@
   </div>
 </template>
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
+import MobileActionMenu from "./MobileActionMenu.vue";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useAdminAuthStore } from "../stores/auth";
 const props = defineProps({

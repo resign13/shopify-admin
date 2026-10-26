@@ -97,9 +97,9 @@ async (page) => {
     await page.setViewportSize({width,height:844});
     await page.waitForFunction(()=>{
       const el=document.querySelector('[data-testid=order-product-list]');
-      return el && el.getBoundingClientRect().right<=innerWidth+1 && el.scrollWidth<=el.clientWidth+1 && [...el.querySelectorAll('.order-size-unit')].every(n=>{const a=n.getBoundingClientRect(),b=n.querySelector('.el-input-number').getBoundingClientRect();return a.left>=-1&&a.right<=innerWidth+1&&b.width<=73&&Math.abs(b.height-32)<1;});
+      return el && el.getBoundingClientRect().right<=innerWidth+1 && el.scrollWidth<=el.clientWidth+1 && [...el.querySelectorAll('.order-size-unit')].every(n=>{const a=n.getBoundingClientRect(),b=n.querySelector('.el-input-number').getBoundingClientRect();return a.left>=-1&&a.right<=innerWidth+1&&b.width<=73&&Math.abs(b.height-(innerWidth<768?44:32))<1;});
     });
-    check(await main.evaluate(el=>[...el.querySelectorAll('.order-size-unit')].every(n=>{const a=n.getBoundingClientRect(),b=n.querySelector('.el-input-number').getBoundingClientRect();return a.left>=-1&&a.right<=innerWidth+1&&b.width<=73&&Math.abs(b.height-32)<1;})),'Main quantity fields overflow/wrong height at '+width);
+    check(await main.evaluate(el=>[...el.querySelectorAll('.order-size-unit')].every(n=>{const a=n.getBoundingClientRect(),b=n.querySelector('.el-input-number').getBoundingClientRect();return a.left>=-1&&a.right<=innerWidth+1&&b.width<=73&&Math.abs(b.height-(innerWidth<768?44:32))<1;})),'Main quantity fields overflow/wrong height at '+width);
     await main.scrollIntoViewIfNeeded();
     await editor.screenshot({path:`output/playwright/order-editor-independent-${width}.png`,animations:'disabled'});
   }

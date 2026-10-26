@@ -27,7 +27,7 @@
       :title="error"
       type="error"
       :closable="false"
-    /><ElTable
+    /><AdaptiveTable
       ref="table"
       v-loading="loading"
       :data="rows"
@@ -54,7 +54,7 @@
             >{{ modelValue.includes(row.id) ? "已加入" : "加入" }}</ElButton
           ></template
         ></ElTableColumn
-      ></ElTable
+      ></AdaptiveTable
     ><ElPagination
       v-model:current-page="query.page"
       :page-size="25"
@@ -78,6 +78,7 @@
   >
 </template>
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
 import { computed, reactive, ref, watch } from "vue";
 import { api } from "../composables/workbench";
 import OrderQuantityPicker from './OrderQuantityPicker.vue';

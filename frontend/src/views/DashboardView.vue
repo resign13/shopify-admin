@@ -9,7 +9,7 @@
     ></PageHeader
   >
   <section class="panel">
-    <div class="filters" style="padding: 0; border: 0">
+    <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
       <ElRadioGroup v-model="preset" @change="setPreset"
         ><ElRadioButton value="1">今天</ElRadioButton
         ><ElRadioButton value="7">近 7 天</ElRadioButton
@@ -42,7 +42,7 @@
       </ElSelect><ElButton type="primary" :loading="loading" @click="load(true)"
         >查询</ElButton
       >
-    </div>
+    </ResponsiveFilters>
     <p v-if="!auth.isSuperAdmin" class="small-note">我的经营数据 · {{ auth.user?.name }}</p>
     <p class="small-note filter-scope">
       统计范围：{{ appliedRange }} · {{ appliedGlobal.country || "全部国家" }} ·
@@ -173,7 +173,7 @@
           >
         </div>
       </div>
-      <div class="style-performance-filters">
+      <ResponsiveFilters class="style-performance-filters" @submit="loadStylePerformance(true)">
         <ElInput
           v-model="styleKeyword"
           clearable
@@ -248,7 +248,8 @@
           >查询</ElButton
         >
         <ElButton @click="resetStyleFilters">重置</ElButton>
-      </div>
+      </ResponsiveFilters>
+      <details class="mobile-explanation" :open="!isPhone"><summary>统计口径与计算说明</summary>
       <p v-if="!stylePersonalScope" class="small-note calculation-note">
         销量与金额按上方日期、国家和款号筛选，排除已取消订单，金额不含运费，统一按订单保存汇率折合 USD。现货及各库存阶段为当前数量。预计可售天数
         = 当前现货 ÷ 截至 {{ appliedGlobal.dateTo }} 的近
@@ -258,6 +259,7 @@
       </p>
       <p v-else class="small-note">仅统计当前所选业务员的订单，不含已取消订单及运费；共享库存请在库存管理查看，个人视图不计算公司周转。</p>
       <p class="small-note">当前款号数据范围：{{ styleScopeLabel }}</p>
+      </details>
       <ElAlert
         v-if="stylePerformanceError"
         :title="stylePerformanceError"
@@ -322,7 +324,7 @@
             description="当前筛选暂无款号数据，可调整条件或重置筛选"
             :image-size="70"
           />
-          <ElTable
+          <AdaptiveTable
             v-else
             :data="stylePerformance.items"
             row-key="styleCode"
@@ -393,7 +395,7 @@
                 ></template
               ></ElTableColumn
             >
-          </ElTable>
+          </AdaptiveTable>
           <div
             class="table-footer style-performance-footer"
             v-if="stylePerformance.total"
@@ -467,7 +469,7 @@
               }}</strong>
             </div>
           </div>
-          <ElTable
+          <AdaptiveTable
             :data="styleDetail.items"
             row-key="productId"
             size="small"
@@ -479,7 +481,7 @@
                   <h3>
                     {{ row.colorName || row.productCode || row.sku }} · 尺码明细
                   </h3>
-                  <ElTable
+                  <AdaptiveTable
                     :data="row.sizes"
                     size="small"
                     row-key="sizeCode"
@@ -519,7 +521,7 @@
                           riskName(size.risk)
                         }}</ElTag></template
                       ></ElTableColumn
-                    ></ElTable
+                    ></AdaptiveTable
                   >
                 </div></template
               ></ElTableColumn
@@ -558,7 +560,7 @@
                 }}</ElTag></template
               ></ElTableColumn
             >
-          </ElTable>
+          </AdaptiveTable>
           <div class="inline-actions style-detail-links">
             <RouterLink
               :to="{
@@ -649,7 +651,7 @@
         <h2>最近订单</h2>
         <RouterLink class="small-note" to="/orders">查看全部订单 →</RouterLink>
       </div>
-      <ElTable :data="data.recentOrders"
+      <AdaptiveTable :data="data.recentOrders"
         ><ElTableColumn label="订单号"
           ><template #default="{ row }"
             ><RouterLink
@@ -673,12 +675,16 @@
           ><template #default="{ row }">{{
             dateTime(row.createdAt)
           }}</template></ElTableColumn
-        ></ElTable
+        ></AdaptiveTable
       >
     </section>
   </div>
 </template>
 <script setup>
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import { useResponsive } from '../composables/responsive';
+const { isPhone } = useResponsive();
+import AdaptiveTable from "../components/AdaptiveTable";
 import {
   computed,
   defineAsyncComponent,
@@ -709,6 +715,12 @@ const preset = ref("30"),
   dates = ref([]),
   country = ref(""),
   style = ref("");
+function removeMobileFilter(key) {
+  if (key === 'country') country.value = '';
+  if (key === 'style') style.value = '';
+  if (key === 'salespersonId') salespersonId.value = '';
+  load(true);
+}
 const appliedGlobal = ref({}),
   appliedPreset = ref("30"),
   trendMetric = ref("orders");

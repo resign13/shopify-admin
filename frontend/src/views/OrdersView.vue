@@ -5,7 +5,7 @@
     eyebrow="ORDERS / 订单业务"
     ><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
       >＋ 新增订单</ElButton
-    ><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
+    ><MobileActionMenu v-if="canEditDetails || canExportOrders"><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
     ><ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton
     ><ElDropdown v-if="canExportOrders" @command="exportOrders"
       ><ElButton :loading="exporting">导出订单 ▾</ElButton
@@ -24,7 +24,7 @@
           ></ElDropdownMenu
         ></template
       ></ElDropdown
-    ></PageHeader
+    ></MobileActionMenu></PageHeader
   >
   <section class="panel">
     <ElTabs
@@ -36,7 +36,7 @@
         :name="status"
         :label="`${label} ${list.statusCounts[status] || 0}`"
     /></ElTabs>
-    <form class="filters" @submit.prevent="apply">
+    <ResponsiveFilters :active="list.query" @remove="removeMobileFilter" @submit.prevent="apply">
       <ElInput
         v-model="filters.keyword"
         clearable
@@ -72,7 +72,7 @@
         @close="list.apply({ style: '' })"
         >{{ list.query.style }}</ElTag
       >
-    </form>
+    </ResponsiveFilters>
     <div v-if="selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个订单</strong
       ><ElButton text @click="clear">清空选择</ElButton
@@ -95,7 +95,21 @@
       @sort-change="list.sort"
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
-      ><template #orderNo="{ row }"
+      ><template #mobile-card="{row,field}">
+        <div class="mobile-order-summary">
+          <div class="mobile-order-heading"><component :is="field" name="orderNo" /><component :is="field" name="status" /></div>
+          <div><small>客户</small><component :is="field" name="contactName" /></div>
+          <div><small>业务员</small><component :is="field" name="userName" /></div>
+          <div><small>件数</small><component :is="field" name="itemCount" /> 件</div>
+          <div v-if="!auth.isWarehouse"><small>应付总额</small><strong><component :is="field" name="totalAmount" /></strong></div>
+        </div>
+        <details class="mobile-order-extra"><summary>更多信息</summary><dl class="mobile-record-fields">
+          <div><dt>下单时间</dt><dd><component :is="field" name="createdAt" /></dd></div>
+          <div><dt>国家</dt><dd><component :is="field" name="country" /></dd></div>
+          <div v-if="!auth.isWarehouse"><dt>商品金额</dt><dd><component :is="field" name="goodsAmount" /></dd></div>
+          <div v-if="!auth.isWarehouse"><dt>运费</dt><dd><component :is="field" name="shippingFee" /></dd></div>
+        </dl></details>
+      </template><template #orderNo="{ row }"
         ><OrderNumber :value="row.orderNo" :secondary="row.secondaryOrderNo" :warehouse-printed="row.warehousePrinted" clickable @open="open(row.id)" /></template
       ><template #userName="{ row }"
         >{{ row.ownerAdminName || "未分配"
@@ -156,6 +170,8 @@
   <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
 </template>
 <script setup>
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute } from "vue-router";
@@ -315,6 +331,12 @@ function apply() {
     dateFrom: dates.value?.[0] || "",
     dateTo: dates.value?.[1] || "",
   });
+}
+function removeMobileFilter(key) {
+  if (key === 'dateFrom' || key === 'dateTo') dates.value = null;
+  if (key in filters) filters[key] = '';
+  clear();
+  list.apply({...filters,dateFrom:dates.value?.[0] || '',dateTo:dates.value?.[1] || '',[key]:''});
 }
 function reset() {
   Object.assign(filters, { keyword: "", category: "", salespersonId: "" });

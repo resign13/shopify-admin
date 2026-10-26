@@ -26,12 +26,12 @@
   </section>
   <ElDialog v-model="pickerOpen" title="添加完整款号（全部颜色）" width="min(900px, 94vw)" :close-on-click-modal="false">
     <ElInput v-model="keyword" clearable placeholder="搜索款号、名称、颜色或 SKU" />
-    <ElTable ref="pickerTable" :data="available" row-key="styleCode" height="420" @selection-change="picked = $event">
+    <AdaptiveTable ref="pickerTable" :data="available" row-key="styleCode" height="420" @selection-change="picked = $event">
       <ElTableColumn type="selection" width="48" :selectable="row => !draft.styleCodes.includes(row.styleCode)" reserve-selection />
       <ElTableColumn prop="styleCode" label="款号" width="150" /><ElTableColumn prop="name" label="商品名称" />
       <ElTableColumn label="颜色" width="85"><template #default="{row}">{{ row.variants.length }}</template></ElTableColumn>
       <ElTableColumn label="状态" width="100"><template #default="{row}">{{ row.active ? '已上架' : '已下架' }}</template></ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <template #footer><ElButton @click="pickerOpen = false">取消</ElButton><ElButton type="primary" :disabled="!picked.length || saving" @click="addPicked">添加 {{ picked.length }} 款</ElButton></template>
   </ElDialog>
   <ElDialog :model-value="Boolean(preview)" title="全部颜色" width="min(820px, 94vw)" @close="preview = null">
@@ -42,6 +42,7 @@
   </ElDialog>
 </template>
 <script setup>
+import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage } from 'element-plus'
 import PageHeader from '../components/PageHeader.vue'

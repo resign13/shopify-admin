@@ -19,14 +19,14 @@
         {{ latest.orderNo }} · {{ statusNames[latest.status] }} ·
         {{ latest.itemCount }} 件 · {{ money(latest.totalAmount) }}
       </p>
-      <ElTable :data="latest.items"
+      <AdaptiveTable :data="latest.items"
         ><ElTableColumn prop="sku" label="SKU" /><ElTableColumn
           prop="sizeCode"
           label="尺码" /><ElTableColumn
           prop="quantity"
           label="数量" /><ElTableColumn
           prop="unitPrice"
-          label="单价" /></ElTable
+          label="单价" /></AdaptiveTable
       ><ElButton @click="adoptLatest">放弃草稿，使用最新资料</ElButton>
     </section>
     <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
@@ -262,7 +262,7 @@
     </ElForm>
     <template v-if="!embedded" #footer
       ><ElButton :disabled="saving || uploading" @click="close()">取消</ElButton
-      ><ElButton v-if="!id && !readOnly" :loading="saving" :disabled="!ready || uploading" @click="saveDraft">保存草稿</ElButton
+      ><MobileActionMenu v-if="!id && !readOnly" :disabled="saving || uploading"><ElButton :loading="saving" :disabled="!ready || uploading" @click="saveDraft">保存草稿</ElButton></MobileActionMenu
       ><ElButton
         v-if="!readOnly"
         type="primary"
@@ -286,6 +286,8 @@
   <OrderPricingDialog v-model:open="pricingOpen" :items="form.items" :products="products" :currency="form.currency" :exchange-rate="form.exchangeRate" @apply="applyPrices" />
 </template>
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
+import MobileActionMenu from "./MobileActionMenu.vue";
 import { useId, computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { ElDrawer, ElMessage } from "element-plus";
 import { InfoFilled } from "@element-plus/icons-vue";

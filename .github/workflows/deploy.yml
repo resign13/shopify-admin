@@ -345,6 +345,35 @@ jobs:
           grep -q '"apiOnlyRoleIsolation":true' "$RUNNER_TEMP/api-browser-result.log"
           grep -q '"desktopAndMobile":true' "$RUNNER_TEMP/api-browser-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=apici close
+      - name: Isolated iPhone-sized admin layout and interactions
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_admin_mobile_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          set -euo pipefail
+          python scripts/admin-mobile-browser-fixture.py > "$RUNNER_TEMP/admin-mobile.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5380/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/admin-mobile.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5380/api/health >/dev/null
+          mkdir -p output/playwright
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci open http://127.0.0.1:5380/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/login-admin-mobile-browser-fixture.js
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/verify-admin-mobile-iphone16-browser.js | tee "$RUNNER_TEMP/admin-mobile-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/admin-mobile-result.log"; then exit 1; fi
+          grep -q '"iphone16":true' "$RUNNER_TEMP/admin-mobile-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/verify-admin-mobile-interactions-browser.js | tee "$RUNNER_TEMP/admin-mobile-interactions.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/admin-mobile-interactions.log"; then exit 1; fi
+          grep -q '"fullCalendars":true' "$RUNNER_TEMP/admin-mobile-interactions.log"
+          grep -q '"landscapeOrderFooter":true' "$RUNNER_TEMP/admin-mobile-interactions.log"
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci close
       - name: Preserve the frontend build that passed verification
         uses: actions/upload-artifact@v4
         with:

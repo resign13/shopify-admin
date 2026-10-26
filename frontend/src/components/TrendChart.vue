@@ -20,7 +20,7 @@ function draw() {
   chart?.setOption({
     animation: false,
     grid: { left: 52, right: 22, top: 20, bottom: 30 },
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", triggerOn: "mousemove|click", confine: true },
     xAxis: {
       type: "category",
       boundaryGap: false,

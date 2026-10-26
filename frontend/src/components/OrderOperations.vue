@@ -7,7 +7,7 @@
     <ElAlert v-if="history.error" :title="history.error" type="error" :closable="false">
       <ElButton link type="primary" @click="load">重新加载记录</ElButton>
     </ElAlert>
-    <ElTable v-loading="history.loading" :data="history.items" row-key="id" empty-text="暂无订单操作记录">
+    <AdaptiveTable v-loading="history.loading" :data="history.items" row-key="id" empty-text="暂无订单操作记录">
       <ElTableColumn label="操作时间" width="165">
         <template #default="{ row }">{{ dateTime(row.occurredAt) }}</template>
       </ElTableColumn>
@@ -29,12 +29,13 @@
           <div v-if="!row.changes.length" class="small-note">订单资料已保存</div>
         </template>
       </ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <ElPagination v-model:current-page="history.page" :page-size="10" :total="history.total" layout="total,prev,pager,next" class="section-gap" />
   </section>
 </template>
 
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
 import { onBeforeUnmount, reactive, watch } from 'vue';
 import { api, dateTime, roleNames, statusNames, money } from '../composables/workbench';
 import { operationNames, operationFields, operationValue } from '../utils/orderOperations';

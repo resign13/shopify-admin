@@ -15,7 +15,8 @@
         @change="previewFile" /></template
   ></PageHeader>
   <div
-    class="metric-grid"
+    class="metric-grid inventory-overview"
+    :class="{'is-expanded': summaryExpanded}"
     :style="{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }"
   >
     <div class="metric">
@@ -49,8 +50,9 @@
       <span>临时待入库合计</span><strong>{{ list.summary.temporaryInbound || 0 }}</strong>
     </div>
   </div>
+  <button class="mobile-summary-toggle" :aria-expanded="summaryExpanded" @click="summaryExpanded = !summaryExpanded">{{ summaryExpanded ? '收起库存概览' : '查看全部库存阶段' }} <span aria-hidden="true">{{ summaryExpanded ? '−' : '+' }}</span></button>
   <section class="panel">
-    <form class="filters" @submit.prevent="apply">
+    <ResponsiveFilters :active="list.query" @remove="key => { filters[key] = ''; apply(); }" @submit.prevent="apply">
       <ElInput
         v-model="filters.keyword"
         clearable
@@ -64,7 +66,7 @@
       ><ElSelect v-if="canEdit" v-model="filters.stock" clearable placeholder="全部库存"><ElOption label="欠货" value="backordered"/><ElOption label="有可用现货" value="available"/><ElOption label="无可用现货" value="empty"/></ElSelect><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton
       ><span class="small-note">汇总和导出覆盖全部筛选结果</span>
-    </form>
+    </ResponsiveFilters>
     <DataTable
       ref="inventoryTable"
       expandable
@@ -193,7 +195,7 @@
           </div>
         </ElPopover>
       </div>
-      <ElTable :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
+      <AdaptiveTable :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
         ><ElTableColumn
           prop="sizeCode"
           label="真实尺码"
@@ -252,7 +254,7 @@
             <ElInputNumber v-model="row.temporaryInbound" :min="0" :max="2147483647" :precision="0" controls-position="right" :aria-label="`临时待入库 ${row.sizeCode}`" />
             <InventoryQuantityChange :value="row.temporaryInbound" :original="row.originalTemporary" />
           </div></template></ElTableColumn
-        ></ElTable
+        ></AdaptiveTable
       ><ElAlert v-if="error" :title="error" type="error" :closable="false"
         ><ElButton v-if="conflict" text @click="readLatest"
           >读取最新数据（保留草稿）</ElButton
@@ -276,7 +278,7 @@
         <ElAlert v-if="operationHistory.error" :title="operationHistory.error" type="error" :closable="false">
           <ElButton link type="primary" @click="loadOperations">重新加载记录</ElButton>
         </ElAlert>
-        <ElTable v-loading="operationHistory.loading" :data="operationHistory.items" row-key="id" empty-text="暂无登记操作记录">
+        <AdaptiveTable v-loading="operationHistory.loading" :data="operationHistory.items" row-key="id" empty-text="暂无登记操作记录">
           <ElTableColumn label="操作时间" width="165"><template #default="{ row }">{{ dateTime(row.occurredAt) }}</template></ElTableColumn>
           <ElTableColumn label="操作人" width="110"><template #default="{ row }">
             {{ row.actor.name || '未知操作人' }}<small class="history-role">{{ roleNames[row.actor.role] || row.actor.role }}</small>
@@ -292,7 +294,7 @@
             </div>
             <span v-if="!row.changes.length" class="small-note">本次保存数量未变化</span>
           </template></ElTableColumn>
-        </ElTable>
+        </AdaptiveTable>
         <ElPagination v-model:current-page="operationHistory.page" :page-size="10" :total="operationHistory.total" layout="total,prev,pager,next" class="section-gap" />
       </section></template
     ><template #footer
@@ -350,7 +352,7 @@
         ><ElRadioButton value="inbound">合格变化</ElRadioButton
         ><ElRadioButton value="temporary">临时待入库变化</ElRadioButton
         ><ElRadioButton value="errors">错误</ElRadioButton></ElRadioGroup
-      ><ElTable
+      ><AdaptiveTable
         :data="previewRows.slice((previewPage - 1) * 25, previewPage * 25)"
         class="section-gap"
         ><ElTableColumn
@@ -400,7 +402,7 @@
             ></ElTableColumn
           ><ElTableColumn label="临时待入库"><template #default="{ row }"><span :class="{ positive: row.temporaryInboundChanged }">{{ row.originalTemporaryInbound ?? "保持" }} → {{ row.temporaryInbound ?? "保持" }}</span></template></ElTableColumn
           ></template
-        ></ElTable
+        ></AdaptiveTable
       ><ElPagination
         v-model:current-page="previewPage"
         :page-size="25"
@@ -440,7 +442,7 @@
       <ElAlert
         :title="receiptExplanation"
         type="info"
-        :closable="false" /><ElAlert v-if="receiptBatch" title="全部所选商品在同一事务中提交；版本冲突或任一商品处理失败，整批不生效。" type="info" :closable="false"/><ElTable
+        :closable="false" /><ElAlert v-if="receiptBatch" title="全部所选商品在同一事务中提交；版本冲突或任一商品处理失败，整批不生效。" type="info" :closable="false"/><AdaptiveTable
         :data="receipt.sizePrices.filter((s) => s[receiptField] > 0)"
         ><ElTableColumn v-if="receiptBatch" prop="sku" label="颜色 SKU" min-width="140"/><ElTableColumn
           prop="sizeCode"
@@ -460,7 +462,7 @@
           ></ElTableColumn
         ><ElTableColumn v-if="receiptSource === 'defective'" label="待验货"><template #default="{ row }">{{ row.pendingInspection }} → {{ defectiveReturnPreview(row).inspectionAfter }}</template></ElTableColumn
         ><ElTableColumn v-if="receiptSource === 'defective'" label="次品"><template #default="{ row }">{{ row.defectivePending }} → 0</template></ElTableColumn
-        ></ElTable
+        ></AdaptiveTable
       ><ElAlert
         v-if="receiptError"
         :title="receiptError"
@@ -480,6 +482,8 @@
   >
 </template>
 <script setup>
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { inventorySizeLabel } from "../utils/inventorySizes";
 import { registrationError, moveProcurementStage, defectiveReturnPreview } from "../utils/inventoryStages";
@@ -507,6 +511,7 @@ import {
   roleNames,
 } from "../composables/workbench";
 const auth = useAdminAuthStore(),
+  summaryExpanded = ref(false),
   canEdit = computed(() => auth.userRole !== "customer"),
   list = useList("inventory", { sort: "category" }),
   categories = ref([]),

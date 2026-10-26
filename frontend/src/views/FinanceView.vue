@@ -1,7 +1,9 @@
 <template>
+  <h1 class="mobile-finance-title">财务管理</h1>
   <section class="finance-panel" :class="{'finance-cost-mode':tab==='costs'}">
     <div class="finance-tabs">
       <div class="finance-tab-nav"><ElButton :class="{'finance-tab-active':tab==='report'}" :aria-pressed="tab==='report'" @click="changeTab('report')">成本统计</ElButton><ElButton :class="{'finance-tab-active':tab==='costs'}" :aria-pressed="tab==='costs'" @click="changeTab('costs')">商品成本</ElButton></div>
+      <details class="finance-tools" :open="!isPhone"><summary>汇率与导入导出 <span>工具与设置</span></summary>
       <div class="finance-header-actions">
         <div class="finance-rate-control">
           <span class="finance-rate-label">汇率 <span>1 USD =</span></span>
@@ -13,7 +15,7 @@
         <ElButton v-else :loading="rateSaving" :disabled="!rateValid||!rateDirty" :title="rateDirty?'保存公共汇率，所有财务账号共用':'当前公共汇率已保存'" @click="saveRate">保存汇率</ElButton>
         <ElButton v-if="tab==='report'" :disabled="!result||reportLoading||exporting||reportOutdated" :loading="exporting" :title="reportOutdated?'条件或汇率已修改，请重新查询后导出':'导出全部筛选结果，不限当前页'" @click="exportReport">导出 Excel</ElButton>
         <template v-else><ElButton :disabled="!appliedCostQuery||costOutdated||costLoading||costExporting" :loading="costExporting" :title="costOutdated?'筛选已修改，请先查询':'导出已查询条件下全部款号的已保存成本，不含页面草稿'" @click="exportCosts">导出成本表</ElButton><ElButton :disabled="saving||costLoading||costExporting" title="导入前请先保存或撤销页面成本修改" @click="openCostImport">导入成本表</ElButton></template>
-      </div>
+      </div></details>
     </div>
     <ElAlert v-if="rateError" :title="rateError" type="error" :closable="false" class="finance-gap" />
     <ElAlert v-if="error" :title="error" type="error" :closable="false" class="finance-gap" />
@@ -86,19 +88,19 @@
         </div>
         <div class="report-quantity-summary"><span>{{ result.summary.orderCount }} 个订单</span><span>{{ result.summary.quantity }} 件商品</span><span v-if="result.summary.missingQuantity" class="report-missing" role="status">{{ result.summary.missingQuantity }} 件成本未设置 · 完整成本与毛利待补全</span></div>
         <p class="report-result-meta">{{ result.filters.dateFrom }} — {{ result.filters.dateTo }}（北京时间） · 汇率 {{ result.filters.exchangeRate }} · 生成 {{ dateTime(result.generatedAt) }}</p>
-        <div class="report-table-scroll"><ElTable class="finance-report-table" :data="result.items" v-loading="reportLoading" row-key="rowKey" size="small" empty-text="暂无符合条件的订单商品">
-          <ElTableColumn type="expand" width="36"><template #default="{row}"><div class="line-detail"><div class="report-row-context"><span>折合销售额 <b>¥{{ row.salesCny }} CNY</b></span><span>单件成本区间 <b>{{ costRange(row) }} CNY</b></span></div><ElTable :data="row.lines" max-height="420" size="small">
+        <div class="report-table-scroll"><AdaptiveTable class="finance-report-table" :data="result.items" v-loading="reportLoading" row-key="rowKey" size="small" empty-text="暂无符合条件的订单商品">
+          <ElTableColumn type="expand" width="36"><template #default="{row}"><div class="line-detail"><div class="report-row-context"><span>折合销售额 <b>¥{{ row.salesCny }} CNY</b></span><span>单件成本区间 <b>{{ costRange(row) }} CNY</b></span></div><AdaptiveTable :data="row.lines" max-height="420" size="small">
             <ElTableColumn prop="orderNo" label="订单号" min-width="230"/><ElTableColumn prop="customerName" label="客户" min-width="130"/><ElTableColumn prop="accountName" label="商城账号" min-width="130"/><ElTableColumn prop="salesperson" label="业务员" width="100"/>
             <ElTableColumn label="下单时间" width="175"><template #default="{row:line}">{{ dateTime(line.createdAt) }}</template></ElTableColumn>
             <ElTableColumn prop="quantity" label="数量" width="70"/><ElTableColumn label="原币销售额" width="145" align="right"><template #default="{row:line}">{{ line.currency }} {{ line.originalAmount }}</template></ElTableColumn>
             <ElTableColumn label="单件成本 CNY" width="120" align="right"><template #default="{row:line}">{{ line.unitCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="成本生效时间" width="175"><template #default="{row:line}">{{ line.costEffectiveAt?dateTime(line.costEffectiveAt):'—' }}<small v-if="line.costMatch==='首次成本补算'" class="cost-history-note">首次成本补算</small></template></ElTableColumn>
             <ElTableColumn label="成本 CNY" width="110" align="right"><template #default="{row:line}">{{ line.costCny??'待补全' }}</template></ElTableColumn><ElTableColumn label="商品毛利 CNY" width="120" align="right"><template #default="{row:line}">{{ line.profitCny??'待补全' }}</template></ElTableColumn>
-          </ElTable></div></template></ElTableColumn>
+          </AdaptiveTable></div></template></ElTableColumn>
           <ElTableColumn prop="styleCode" label="款号" min-width="125"/><ElTableColumn prop="sku" label="颜色 SKU" min-width="160"/><ElTableColumn prop="sizeCode" label="尺码" width="90"/><ElTableColumn prop="quantity" label="销量" width="80"/>
           <ElTableColumn label="原币销售额" min-width="155" align="right"><template #default="{row}"><span>USD {{ row.salesUsd }}</span><small class="cost-history-note">CNY {{ row.nativeSalesCny }}</small></template></ElTableColumn>
           <ElTableColumn label="成本 CNY" min-width="135" align="right"><template #default="{row}">{{ row.totalCostCny??('已知 '+row.knownCostCny) }}<small v-if="row.missingQuantity" class="missing">{{ row.missingQuantity }} 件待补全</small></template></ElTableColumn>
           <ElTableColumn label="毛利 CNY" min-width="135" align="right"><template #default="{row}">{{ row.profitCny??'待补全' }}</template></ElTableColumn>
-        </ElTable></div>
+        </AdaptiveTable></div>
         <ElPagination class="finance-gap" :current-page="result.page" :page-size="25" :total="result.total" layout="total, prev, pager, next" @current-change="page=>queryReport(page,true)" />
       </template><div v-else class="report-empty" role="status">{{ rateValid?'选择条件后点击“查询核算”':'填写核算汇率，选择条件后查询' }}</div>
     </template>
@@ -107,23 +109,26 @@
   <ElDialog v-model="previewOpen" title="确认保存整款成本" width="min(760px, 95vw)" :close-on-click-modal="false" :close-on-press-escape="!saving" :show-close="!saving">
     <ElAlert v-if="error" :title="error" type="error" :closable="false" />
     <template v-if="preview"><ElAlert :title="preview.changes.some(row=>row.initialCost)?`首次填写的款号将补算此前 ${preview.affectedOrders} 个有效订单；已设置过成本的款号仅从保存时间起变更，不覆盖旧订单。清空后的历史区间不补算，全部记录保留。`:'本次均为后续修改，仅用于保存后的新订单；已有订单继续按对应历史成本核算。清空后仅影响新订单，全部历史记录保留。'" type="info" :closable="false"/>
-      <ElTable :data="preview.changes" max-height="430"><ElTableColumn prop="styleCode" label="款号" min-width="140"/><ElTableColumn label="原成本 CNY"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="新成本 CNY"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="生效范围" min-width="160"><template #default="{row}">{{ row.initialCost?'含历史订单':'保存后的新订单' }}</template></ElTableColumn></ElTable>
+      <AdaptiveTable :data="preview.changes" max-height="430"><ElTableColumn prop="styleCode" label="款号" min-width="140"/><ElTableColumn label="原成本 CNY"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="新成本 CNY"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="生效范围" min-width="160"><template #default="{row}">{{ row.initialCost?'含历史订单':'保存后的新订单' }}</template></ElTableColumn></AdaptiveTable>
     </template><template #footer><ElButton :disabled="saving" @click="previewOpen=false">返回修改</ElButton><ElButton type="primary" :loading="saving" @click="commitCosts">确认保存</ElButton></template>
   </ElDialog>
   <ElDialog v-model="historyOpen" :title="historyTitle" width="min(680px,95vw)" class="cost-history-dialog" @close="closeHistory">
     <div v-if="historyError" class="cost-history-error"><ElAlert :title="historyError" type="error" :closable="false"/><ElButton :loading="historyLoading" @click="loadHistory(historyPage)">重试</ElButton></div>
-    <ElTable v-if="historyLoading||history?.items.length" :data="history?.items||[]" v-loading="historyLoading" size="small" max-height="55vh" row-key="id">
+    <AdaptiveTable v-if="historyLoading||history?.items.length" :data="history?.items||[]" v-loading="historyLoading" size="small" max-height="55vh" row-key="id">
       <ElTableColumn label="生效时间" min-width="175"><template #default="{row}">{{ dateTime(row.effectiveAt) }}<small v-if="row.initialCost" class="cost-history-note">首次设置 · 含历史订单</small></template></ElTableColumn>
       <ElTableColumn label="原成本 CNY" min-width="110"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn>
       <ElTableColumn label="新成本 CNY" min-width="110"><template #default="{row}">{{ row.costCny??'未设置' }}</template></ElTableColumn>
       <ElTableColumn label="操作者" min-width="110"><template #default="{row}">{{ row.actor?.name||'—' }}</template></ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <ElEmpty v-else-if="!historyError" description="暂无成本变动" :image-size="80"/>
     <ElPagination v-if="history&&!historyError&&history.total>0" class="finance-gap" :current-page="history.page" :page-size="20" :total="history.total" layout="total, prev, pager, next" @current-change="loadHistory"/>
   </ElDialog>
 </template>
 
 <script setup>
+import AdaptiveTable from "../components/AdaptiveTable";
+import { useResponsive } from '../composables/responsive';
+const { isPhone } = useResponsive();
 import { authenticatedFetch } from '../authTransport';
 
 import {computed,onMounted,onBeforeUnmount,reactive,ref} from 'vue';

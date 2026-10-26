@@ -54,19 +54,20 @@
   <ElDialog v-model="confirmationOpen" title="确认商品调整" width="min(700px, 94vw)" append-to-body
     :close-on-click-modal="false" @close="resolveConfirmation(false)">
     <p class="small-note">数量覆盖原值，不累加；已有成交价保持不变。目录参考价变动仅影响新加入的尺码。</p>
-    <ElTable :data="notices" max-height="360">
+    <AdaptiveTable :data="notices" max-height="360">
       <ElTableColumn prop="sku" label="颜色 SKU" min-width="160" />
       <ElTableColumn prop="sizeCode" label="尺码" width="90" />
       <ElTableColumn label="变更" min-width="200"><template #default="{ row }">
         <span v-if="row.before !== undefined">{{ row.before }} → {{ row.after }}<strong v-if="row.clear" class="clear-note">（清零）</strong></span>
         <span v-else>目录参考价 USD {{ row.oldPrice }} → {{ row.newPrice }}</span>
       </template></ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <template #footer><ElButton @click="resolveConfirmation(false)">返回修改</ElButton><ElButton type="primary" @click="resolveConfirmation(true)">确认应用</ElButton></template>
   </ElDialog>
 </template>
 
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
 import { computed, nextTick, onBeforeUnmount, reactive, ref, useId, watch } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';

@@ -14,12 +14,12 @@
     <p v-if="preview?.summary.error" class="cost-import-danger cost-import-help">存在错误，本批不会保存。请按行号核对文件；版本冲突需重新导出。</p>
     <p v-else-if="canSave" class="cost-import-help">首次成本将补算此前 {{ preview.affectedOrders }} 个有效订单；后续修改仅用于保存后的新订单。保存时间由服务器统一确定，历史记录保留。</p>
     <div v-loading="loading" class="cost-import-table-scroll">
-      <ElTable v-if="preview" :data="preview.rows" size="small" max-height="48vh" class="cost-import-table" :row-class-name="({row})=>row.status==='error'?'cost-import-error-row':''">
+      <AdaptiveTable v-if="preview" :data="preview.rows" size="small" max-height="48vh" class="cost-import-table" :row-class-name="({row})=>row.status==='error'?'cost-import-error-row':''">
         <ElTableColumn label="款号" min-width="150"><template #default="{row}"><span>{{ row.styleCode||'未填写款号' }}</span><small class="cost-import-row-number">第 {{ row.rowNumber }} 行</small></template></ElTableColumn>
         <ElTableColumn label="原成本 CNY" width="120" align="right"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn>
         <ElTableColumn label="新成本 CNY" width="120" align="right"><template #default="{row}">{{ row.costCny??'—' }}</template></ElTableColumn>
         <ElTableColumn label="处理结果" min-width="200"><template #default="{row}"><span :class="{'cost-import-danger':row.status==='error'}">{{ row.message }}</span></template></ElTableColumn>
-      </ElTable>
+      </AdaptiveTable>
       <p v-else class="cost-import-empty">{{ loading?'正在校验成本表…':'选择文件后预览成本变化，不会立即写入。' }}</p>
     </div>
     <template #footer><ElButton :disabled="busy" @click="close(false)">取消</ElButton><ElButton type="primary" :disabled="!canSave||loading||stale" :loading="saving" @click="commit">确认保存</ElButton></template>
@@ -27,6 +27,7 @@
 </template>
 
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
 import {computed,ref,watch} from 'vue';
 import {ElMessage} from 'element-plus';
 import {api,save} from '../composables/workbench';

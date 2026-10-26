@@ -67,7 +67,7 @@
             <ElButton :disabled="editing || busy" :loading="loading" @click="refreshDetails">刷新详情</ElButton>
           </div>
           <ElAlert v-if="stockRefreshError" :title="stockRefreshError" type="warning" :closable="false" data-testid="order-stock-stale" />
-          <ElTable :data="order.items"
+          <AdaptiveTable :data="order.items"
             ><ElTableColumn label="商品" min-width="230"
               ><template #default="{ row }"
                 ><div class="product-cell">
@@ -95,7 +95,7 @@
                 money(row.totalPrice)
               }}</template></ElTableColumn
             ><ElTableColumn label="单件净重（g）" width="105" align="right"><template #default="{ row }">{{ row.unitWeightGrams == null ? "未设置" : row.unitWeightGrams }}</template></ElTableColumn>
-            </ElTable>
+            </AdaptiveTable>
           <div v-if="!warehouseStatusOnly" class="detail-grid section-gap">
             <div>
               <span>商品金额</span
@@ -203,29 +203,33 @@
       ><OrderOperations :order-id="order.id" :open="open" :revision="order.version" />
       </template
     ><template #footer>
+      <MobileActionMenu :disabled="busy">
       <ElButton v-if="!editing && auth.canEditOrders"
         :disabled="loading || !order || busy" type="primary" plain @click="emit('reorder', order.id)">再来一单</ElButton>
       <ElButton
+        v-if="!warehouseStatusOnly"
+        :loading="invoiceLoading"
+        :disabled="busy || !order || (fullEditing ? editor?.dirty : dirty)"
+        :title="order?.currency === 'CNY' ? '人民币订单按本单汇率换算为 USD 导出 PI' : '导出 USD PI'"
+        @click="exportInvoice"
+        >导出订单详情</ElButton>
+      </MobileActionMenu>
+      <ElButton
         v-if="!editing && !warehouseStatusOnly"
+        type="primary"
         :disabled="loading || !order"
         @click="editDetails"
         >修改订单资料</ElButton
       >
       <ElButton
         v-if="!editing && warehouseStatusOnly"
+        type="primary"
         :disabled="loading || !order"
         @click="editDetails"
         >修改订单状态</ElButton
       >
       <ElButton v-if="editing" :disabled="busy" @click="cancelEdit"
         >取消修改</ElButton
-      >
-      <ElButton
-        v-if="!warehouseStatusOnly"
-        :disabled="busy || !order || (fullEditing ? editor?.dirty : dirty)"
-        :title="order?.currency === 'CNY' ? '人民币订单按本单汇率换算为 USD 导出 PI' : '导出 USD PI'"
-        @click="exportInvoice"
-        >导出订单详情</ElButton
       >
       <ElButton :disabled="busy" @click="close()">关闭</ElButton>
       <ElButton
@@ -241,6 +245,8 @@
   <OrderCancellationDialog v-model:open="cancelNoteOpen" :order="order" note-only @saved="cancelNoteSaved" />
 </template>
 <script setup>
+import MobileActionMenu from './MobileActionMenu.vue';
+import AdaptiveTable from "./AdaptiveTable";
 import { computed, reactive, ref, watch } from "vue";
 import { orderWeightText } from "../utils/productWeights";
 import { ElMessage } from "element-plus";
@@ -266,6 +272,7 @@ import {
 const props = defineProps({ open: Boolean, id: [Number, String] }),
   emit = defineEmits(["update:open", "saved", "reorder"]),
   auth = useAdminAuthStore();
+const invoiceLoading = ref(false);
 const editing = ref(false),
   editor = ref();
 const cancelNoteOpen = ref(false);
@@ -431,6 +438,8 @@ function detailsSaved(_id, snapshot) {
   cancelNoteSaved(snapshot);
 }
 async function exportInvoice() {
+  if (invoiceLoading.value) return;
+  invoiceLoading.value = true;
   try {
     await download(
       `orders/${props.id}/invoice`,
@@ -438,7 +447,7 @@ async function exportInvoice() {
     );
   } catch (e) {
     notifyError(e);
-  }
+  } finally { invoiceLoading.value = false; }
 }
 </script>
 <style scoped>

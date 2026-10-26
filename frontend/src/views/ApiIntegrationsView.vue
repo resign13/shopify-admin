@@ -68,7 +68,7 @@
 
     <template v-if="meta && tab === 'accounts' && canManage">
       <div class="account-search"><el-input v-model="accountKeyword" placeholder="搜索后台账号或姓名" clearable maxlength="200" @keyup.enter="searchAccounts" /><el-button :disabled="busy" @click="searchAccounts">查询</el-button></div>
-      <el-table :data="accounts.items" v-loading="accountsLoading" empty-text="暂无账号" class="accounts-table">
+      <AdaptiveTable :data="accounts.items" v-loading="accountsLoading" empty-text="暂无账号" class="accounts-table">
         <el-table-column label="后台账号" min-width="170"><template #default="{row}"><div>{{ row.name }}</div><small>{{ row.email }}</small></template></el-table-column>
         <el-table-column label="部门" width="90"><template #default="{row}">{{ roles[row.role] }}</template></el-table-column>
         <el-table-column label="API 授权" min-width="140"><template #default="{row}">{{ !row.moduleAllowed ? '账号停用／未授予模块' : row.adminBlocked ? '管理员禁用' : '允许' }}</template></el-table-column>
@@ -77,7 +77,7 @@
         <el-table-column label="到期时间" min-width="165"><template #default="{row}">{{ row.expiresAt ? beijingTime(row.expiresAt) : '长期有效' }}</template></el-table-column>
         <el-table-column label="最近调用" min-width="165"><template #default="{row}">{{ beijingTime(row.lastUsedAt) }}</template></el-table-column>
         <el-table-column label="操作" width="210" fixed="right"><template #default="{row}"><el-button text size="small" :disabled="busy" @click="manage(row, 'authorization')">{{ row.adminBlocked ? '恢复授权' : '禁用授权' }}</el-button><el-button text size="small" :disabled="busy || !row.keyId" @click="manage(row,'revoke')">作废 Key</el-button><el-button text size="small" @click="showAccountLogs(row)">调用</el-button></template></el-table-column>
-      </el-table>
+      </AdaptiveTable>
       <el-pagination class="pagination" layout="prev, pager, next, total" :total="accounts.total" :page-size="20" :current-page="accountPage" @current-change="value => { accountPage=value; loadAccounts(); }" />
     </template>
 
@@ -99,8 +99,9 @@
 </template>
 
 <script setup>
+import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
-import { ElMessage, ElMessageBox, ElTable, ElTableColumn, ElPagination } from 'element-plus';
+import { ElMessage, ElMessageBox, ElTableColumn, ElPagination } from 'element-plus';
 import 'element-plus/es/components/table/style/css';
 import 'element-plus/es/components/pagination/style/css';
 import 'element-plus/es/components/message/style/css';
@@ -112,7 +113,7 @@ import { apiStates, beijingTime, expiryISO, apiExamples, apiCommonHeaders, apiRe
 // One shared table for own and explicitly authorized account logs. No request
 // parameters/headers or raw tokens are stored in these objects.
 const CallRecords = defineComponent({ props: ['items','total','page','loading'], emits: ['page'], setup(props,{emit}) {
-  return () => h('div', [h(ElTable, { data:props.items, emptyText:props.loading?'加载中…':'暂无调用记录', 'aria-busy':props.loading }, () => [
+  return () => h('div', [h(AdaptiveTable, { data:props.items, emptyText:props.loading?'加载中…':'暂无调用记录', 'aria-busy':props.loading }, () => [
     h(ElTableColumn, {label:'时间',minWidth:170}, {default:({row})=>beijingTime(row.time)}),
     h(ElTableColumn, {label:'接口',prop:'route',minWidth:260}),
     h(ElTableColumn, {label:'结果',prop:'status',width:80}),

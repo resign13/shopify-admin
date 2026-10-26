@@ -4,6 +4,7 @@ import App from './App.vue'
 import router from './router'
 import { pinia } from './stores'
 import './styles.css'
+import './mobile.css'
 
 const app = createApp(App)
 

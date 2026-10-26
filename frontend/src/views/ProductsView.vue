@@ -8,7 +8,7 @@
     ></PageHeader
   >
   <section class="panel">
-    <form class="filters" @submit.prevent="apply">
+    <ResponsiveFilters :active="list.query" @remove="key => { filters[key] = key === 'status' ? 'all' : ''; apply(); }" @submit.prevent="apply">
       <ElInput
         v-model="filters.keyword"
         clearable
@@ -26,7 +26,7 @@
       ><ElSelect v-model="filters.status" aria-label="商品状态"><ElOption value="active" label="启用商品"/><ElOption value="inactive" label="停用商品"/><ElOption value="all" label="全部商品"/></ElSelect
       ><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton>
-    </form>
+    </ResponsiveFilters>
     <ElTag v-if="filters.styleCode" closable @close="filters.styleCode = ''; apply()">款号：{{ filters.styleCode }}</ElTag>
     <div v-if="selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个商品</strong
@@ -125,7 +125,7 @@
         ><ElDescriptionsItem label="当前库存">{{
           item.stock
         }}</ElDescriptionsItem></ElDescriptions
-      ><ElTable :data="item.sizePrices" class="section-gap"
+      ><AdaptiveTable :data="item.sizePrices" class="section-gap"
         ><ElTableColumn prop="sizeCode" label="真实尺码" /><ElTableColumn
           label="价格"
           align="right"
@@ -135,7 +135,7 @@
         ><ElTableColumn
           prop="stock"
           label="库存"
-          align="right" /><ElTableColumn label="单件净重（g）" align="right"><template #default="{ row }">{{ row.weightGrams == null ? "未设置" : row.weightGrams }}</template></ElTableColumn></ElTable></template
+          align="right" /><ElTableColumn label="单件净重（g）" align="right"><template #default="{ row }">{{ row.weightGrams == null ? "未设置" : row.weightGrams }}</template></ElTableColumn></AdaptiveTable></template
   ></ElDrawer>
   <ElDialog
     v-model="batchOpen"
@@ -166,6 +166,8 @@
   >
 </template>
 <script setup>
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -309,3 +311,4 @@ onMounted(async () => {
   }
 });
 </script>
+

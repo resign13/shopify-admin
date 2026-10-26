@@ -114,7 +114,7 @@ async (page) => {
   // Mobile layout and another draft must not inherit the last draft's changes.
   await page.setViewportSize({width:430,height:920});
   await page.goto(base+'/orders');
-  await page.locator('.el-table__row').filter({has:page.getByText(source.orderNo,{exact:true})})
+  await page.locator('.mobile-record').filter({has:page.getByText(source.orderNo,{exact:true})})
     .getByRole('button',{name:'再来一单',exact:true}).click();
   await draft.getByRole('textbox',{name:/收货人/}).waitFor();
   check(await draft.getByTestId('inherited-attachments').getByRole('link').count()===2,'Drafts shared attachment state');

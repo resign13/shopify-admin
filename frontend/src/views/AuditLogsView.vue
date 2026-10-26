@@ -6,8 +6,7 @@
     ><ElButton @click="list.load">刷新</ElButton></PageHeader
   >
   <section class="panel">
-    <form
-      class="filters"
+    <ResponsiveFilters :active="list.query" @remove="removeMobileFilter"
       @submit.prevent="
         list.apply({
           ...filters,
@@ -44,7 +43,7 @@
         @close="list.apply({ objectId: '' })"
         >对象 {{ list.query.objectId }}</ElTag
       >
-    </form>
+    </ResponsiveFilters>
     <DataTable
       storage-key="audit"
       :rows="list.rows"
@@ -105,7 +104,7 @@
         </div>
         <div><span>数据记录</span>{{ item.entityTable }}</div>
       </div>
-      <ElTable :data="changes" class="section-gap"
+      <AdaptiveTable :data="changes" class="section-gap"
         ><ElTableColumn prop="field" label="字段" width="160" /><ElTableColumn
           label="修改前"
           ><template #default="{ row }">
@@ -115,7 +114,7 @@
           ><template #default="{ row }">
             <pre class="json-diff">{{ format(row.after) }}</pre>
           </template></ElTableColumn
-        ></ElTable
+        ></AdaptiveTable
       >
       <p class="small-note section-gap">
         敏感凭据不记录；关联明细可通过“同批次”查看。
@@ -124,6 +123,8 @@
   >
 </template>
 <script setup>
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, reactive, ref } from "vue";
 import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
@@ -193,6 +194,11 @@ const format = (value) =>
     : typeof value === "object"
       ? JSON.stringify(value, null, 2)
       : String(value);
+function removeMobileFilter(key) {
+  if (key === 'dateFrom' || key === 'dateTo') dates.value = null;
+  else if (key in filters) filters[key] = '';
+  list.apply({...filters,dateFrom:dates.value?.[0] || '',dateTo:dates.value?.[1] || '',[key]:''});
+}
 function reset() {
   Object.assign(filters, { keyword: "", module: "", action: "" });
   dates.value = null;
