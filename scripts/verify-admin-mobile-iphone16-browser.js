@@ -72,7 +72,7 @@ async (page) => {
   await page.getByRole('button',{name:'导入成本表',exact:true}).click();
   const importer = page.getByRole('dialog');
   await importer.getByRole('button',{name:'关闭此对话框',exact:true}).click();
-  const routes=['/dashboard','/orders','/inventory','/finance','/products','/contracts','/presale','/categories','/admin-users','/store-accounts','/audit-logs','/api-integrations','/products/1/edit'];
+  const routes=['/dashboard','/orders','/inventory','/finance','/products','/contracts','/presale','/categories','/admin-users','/store-accounts','/audit-logs','/api-integrations','/size-charts','/products/1/edit'];
   let layoutChecks = 0;
   for(const width of [360,393,430,768,1024,1440]) {
     await page.setViewportSize({width,height:852});

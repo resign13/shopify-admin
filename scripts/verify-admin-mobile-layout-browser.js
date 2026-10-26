@@ -7,7 +7,7 @@ async (page) => {
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
   page.on('console',message=>{if(message.type()==='error' && /TypeError|ReferenceError|\[ElTable\]|Unhandled/.test(message.text()))errors.push(message.text());});
   page.on('dialog',dialog=>dialog.accept());
-  const routes=['/dashboard','/orders','/products','/inventory','/finance','/contracts','/presale','/categories','/store-accounts','/admin-users','/audit-logs','/api-integrations','/products/1/edit'];
+  const routes=['/dashboard','/orders','/products','/inventory','/finance','/contracts','/presale','/categories','/store-accounts','/admin-users','/audit-logs','/api-integrations','/size-charts','/products/1/edit'];
   const results=[];
   for(const width of [360,390,430,768,1024,1440,1920]) {
     await page.setViewportSize({width,height:900});

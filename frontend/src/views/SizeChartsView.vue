@@ -1,18 +1,18 @@
 <template>
   <PageHeader title="商品尺码表" eyebrow="PRODUCT / 尺码资料" description="每款一份尺寸资料，全部颜色共用；独立维护，不改变商品库存、价格或商城尺码表图片。">
-    <ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">导出维护表（{{ selected.length }}）</ElButton>
-    <ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">导出英文客户表</ElButton>
+    <MobileActionMenu><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">导出维护表（{{ selected.length }}）</ElButton>
+    <ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">导出英文客户表</ElButton></MobileActionMenu>
     <ElButton type="primary" @click="openImport">导入覆盖</ElButton>
   </PageHeader>
   <section class="panel">
-    <form class="filters" @submit.prevent="query">
+    <ResponsiveFilters :active="{category:categories.find(c => c.key === applied.category)?.label || applied.category,status:statuses[applied.status] || ''}" @remove="key => { filters[key] = ''; query(); }" @submit.prevent="query">
       <ElInput v-model="filters.keyword" placeholder="款号或商品标题" clearable />
       <ElSelect v-model="filters.category" placeholder="全部分类" clearable><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.label" /></ElSelect>
       <ElSelect v-model="filters.status" placeholder="全部填写状态" clearable><ElOption v-for="(v,k) in statuses" :key="k" :value="k" :label="v" /></ElSelect>
       <ElButton type="primary" native-type="submit">查询</ElButton><ElButton @click="reset">重置</ElButton>
-    </form>
+    </ResponsiveFilters>
     <ElAlert v-if="listError" :title="listError" type="error" :closable="false"><ElButton @click="load">重试</ElButton></ElAlert>
-    <ElTable ref="table" :data="rows" v-loading="loading" row-key="styleCode" @selection-change="selected = $event.map(r => r.styleCode)">
+    <AdaptiveTable ref="table" :data="rows" v-loading="loading" row-key="styleCode" @selection-change="selected = $event.map(r => r.styleCode)">
       <ElTableColumn type="selection" width="45" />
       <ElTableColumn label="代表图" width="88"><template #default="{row}"><ElImage v-if="row.image" :src="imageUrl(row.image,160)" fit="contain" style="width:54px;height:64px" /><span v-else class="muted">未设置</span></template></ElTableColumn>
       <ElTableColumn prop="styleCode" label="款号" width="180" />
@@ -20,7 +20,7 @@
       <ElTableColumn label="填写状态" width="120"><template #default="{row}"><ElTag :type="row.status === 'complete' ? 'success' : 'info'">{{ statuses[row.status] }}</ElTag></template></ElTableColumn>
       <ElTableColumn prop="updatedDate" label="尺码更新时间" width="150"><template #default="{row}">{{ row.updatedDate || '未保存' }}</template></ElTableColumn>
       <ElTableColumn label="操作" width="130"><template #default="{row}"><ElButton link type="primary" @click="open(row.styleCode)">编辑</ElButton><ElButton link @click="open(row.styleCode, true)">预览</ElButton></template></ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <ElPagination v-model:current-page="page" :page-size="25" :total="total" layout="total, prev, pager, next" @current-change="load" class="section-gap" />
   </section>
 
@@ -93,12 +93,12 @@
     <ElAlert v-if="importError" :title="importError" type="error" :closable="false" class="section-gap" />
     <template v-if="proposal">
       <p>完整款号 {{ proposal.styleCount }} 个 · 数值变更 {{ proposal.valueChangedCount }} 项 · 维度变更 {{ proposal.dimensionChangedCount }} 项 · <strong class="negative">删除维度 {{ proposal.removedDimensionCount }} 项／清空数值 {{ proposal.clearCount }} 项</strong> · 错误 {{ proposal.errors.length }} 项</p>
-      <ElTable :data="proposal.errors" v-if="proposal.errors.length" max-height="180"><ElTableColumn prop="sheet" label="工作表" /><ElTableColumn prop="message" label="错误" /></ElTable>
+      <AdaptiveTable :data="proposal.errors" v-if="proposal.errors.length" max-height="180"><ElTableColumn prop="sheet" label="工作表" /><ElTableColumn prop="message" label="错误" /></AdaptiveTable>
       <template v-if="proposal.dimensionRows.length">
         <h3>维度变更</h3>
-        <ElTable :data="proposal.dimensionRows" max-height="240" aria-label="维度变更预览"><ElTableColumn prop="styleCode" label="款号" width="120" /><ElTableColumn label="操作" width="85"><template #default="{row}"><span :class="{negative:row.kind==='remove'}">{{ row.action }}</span></template></ElTableColumn><ElTableColumn prop="old" label="原维度／顺序"><template #default="{row}">{{ row.old || '—' }}</template></ElTableColumn><ElTableColumn prop="new" label="新维度／顺序"><template #default="{row}">{{ row.new || '删除' }}</template></ElTableColumn><ElTableColumn label="说明" width="170"><template #default="{row}">{{ row.kind==='remove' ? `已填 ${row.filledCount} 项，历史保留` : row.kind==='add' ? '新维度默认在英文版展示' : '原英文展示设置保留' }}</template></ElTableColumn></ElTable>
+        <AdaptiveTable :data="proposal.dimensionRows" max-height="240" aria-label="维度变更预览"><ElTableColumn prop="styleCode" label="款号" width="120" /><ElTableColumn label="操作" width="85"><template #default="{row}"><span :class="{negative:row.kind==='remove'}">{{ row.action }}</span></template></ElTableColumn><ElTableColumn prop="old" label="原维度／顺序"><template #default="{row}">{{ row.old || '—' }}</template></ElTableColumn><ElTableColumn prop="new" label="新维度／顺序"><template #default="{row}">{{ row.new || '删除' }}</template></ElTableColumn><ElTableColumn label="说明" width="170"><template #default="{row}">{{ row.kind==='remove' ? `已填 ${row.filledCount} 项，历史保留` : row.kind==='add' ? '新维度默认在英文版展示' : '原英文展示设置保留' }}</template></ElTableColumn></AdaptiveTable>
       </template>
-      <template v-if="proposal.rows.length"><h3>数值变更</h3><ElTable :data="proposal.rows" max-height="320"><ElTableColumn prop="styleCode" label="款号" /><ElTableColumn prop="dimension" label="维度" /><ElTableColumn prop="size" label="尺码" /><ElTableColumn prop="cell" label="位置" /><ElTableColumn prop="unit" label="保存单位" width="90" /><ElTableColumn label="原值"><template #default="{row}">{{ display(row.old) }}</template></ElTableColumn><ElTableColumn label="新值"><template #default="{row}"><span :class="{negative:row.cleared}">{{ row.cleared ? '清空' : display(row.new) }}</span></template></ElTableColumn></ElTable></template>
+      <template v-if="proposal.rows.length"><h3>数值变更</h3><AdaptiveTable :data="proposal.rows" max-height="320"><ElTableColumn prop="styleCode" label="款号" /><ElTableColumn prop="dimension" label="维度" /><ElTableColumn prop="size" label="尺码" /><ElTableColumn prop="cell" label="位置" /><ElTableColumn prop="unit" label="保存单位" width="90" /><ElTableColumn label="原值"><template #default="{row}">{{ display(row.old) }}</template></ElTableColumn><ElTableColumn label="新值"><template #default="{row}"><span :class="{negative:row.cleared}">{{ row.cleared ? '清空' : display(row.new) }}</span></template></ElTableColumn></AdaptiveTable></template>
       <p v-if="!proposal.changedCount && !proposal.errors.length">维度与数值均未变化，不需要保存。</p>
     </template>
     <template #footer><ElButton :disabled="importBusy" @click="importOpen=false">取消</ElButton><ElButton type="primary" :loading="importBusy" :disabled="!proposal?.changedCount || !!proposal?.errors.length" @click="importConfirm">确认覆盖</ElButton></template>
@@ -106,6 +106,9 @@
 </template>
 
 <script setup>
+import AdaptiveTable from "../components/AdaptiveTable";
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElDialog, ElDrawer } from 'element-plus';
 import 'element-plus/es/components/dialog/style/css';
@@ -176,3 +179,21 @@ onMounted(()=>{markClean();load();});
 .chart-import-window .el-dialog__body{min-height:0;overflow:auto}
 </style>
 
+<style scoped>
+@media (max-width:767px) {
+  .chart-form-grid { grid-template-columns:minmax(0,1fr); }
+  .chart-heading { flex-direction:column; align-items:stretch; gap:12px; }
+  .chart-unit-actions { flex-wrap:wrap; gap:8px; }
+  .chart-preview-actions { justify-content:flex-start; }
+  .chart-heading > div { min-width:0; }
+}
+</style>
+<style>
+@media (max-width:767px) {
+  .chart-preview-window.el-dialog, .chart-import-window.el-dialog { max-height:var(--mobile-viewport-height,100dvh); padding:0; border-radius:0; }
+  .chart-preview-window .el-dialog__header { height:auto; min-height:56px; padding:14px 54px 12px 16px; }
+  .chart-preview-window .el-dialog__headerbtn { width:44px; height:44px; }
+  .chart-preview-window .el-dialog__body { padding:16px; }
+  .chart-preview-window .el-dialog__footer { padding:12px 16px calc(12px + env(safe-area-inset-bottom)); margin-top:0; }
+}
+</style>

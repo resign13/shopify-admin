@@ -64,6 +64,22 @@ async (page) => {
   const save = editor.getByRole('button', { name: '创建待付款订单', exact: true });
   check(await save.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight + 1; }), 'Landscape hides order save action');
   await editor.getByRole('button', { name: '取消', exact: true }).click();
+  await page.setViewportSize({ width: 393, height: 852 });
+  await visit('/size-charts');
+  const chartRow = page.locator('.mobile-record').first();
+  await chartRow.getByRole('button', { name: '编辑', exact: true }).click();
+  const chartEditor = page.getByRole('dialog', { name: /^编辑尺码表/ });
+  await chartEditor.getByRole('textbox', { name: '英文标题', exact: true }).fill('Mobile size chart fixture');
+  const matrix = chartEditor.locator('.chart-matrix-scroll');
+  check(await matrix.evaluate(el => el.scrollWidth > el.clientWidth), 'Size matrix must scroll inside its region');
+  check(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), 'Size chart editor overflows page');
+  await chartEditor.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('dialog', { name: '未保存修改', exact: true }).getByRole('button', { name: '确认', exact: true }).click();
+  await chartRow.getByRole('button', { name: '预览', exact: true }).click();
+  const chartPreview = page.getByRole('dialog', { name: /^预览尺码表/ });
+  await chartPreview.getByText('in', { exact: true }).click();
+  check(await chartPreview.evaluate(el => { const r = el.getBoundingClientRect(); return r.width <= innerWidth + 1 && r.height <= innerHeight + 1; }), 'Size chart preview exceeds phone viewport');
+  await chartPreview.getByRole('button', { name: '关闭', exact: true }).click();
   return { mobileDateRanges: calendarWidths, fullCalendars: true, crossMonthSelection: true, touchTargets: true,
-    financeResizeRetainsInput: true, landscapeOrderFooter: true, businessWrites: 0 };
+    financeResizeRetainsInput: true, landscapeOrderFooter: true, sizeChartMobile: true, businessWrites: 0 };
 }

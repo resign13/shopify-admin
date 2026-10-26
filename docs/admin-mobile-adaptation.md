@@ -1,6 +1,6 @@
 # 后台移动端适配与本地验收
 
-本地分支：`feature/admin-mobile-adaptation`。本次只修改后台前端及浏览器验收脚本，未提交 PR、未部署。
+本地分支：`feature/admin-mobile-adaptation`。本次只修改后台前端及浏览器验收脚本。PR 按用户授权准备，维护时间另行确认；未部署。
 
 ## 展示与状态
 
@@ -70,3 +70,18 @@ npx --no-install --package @playwright/cli playwright-cli -s=admin-mobile run-co
 境内直连入口沿用 `https://office.gingtto.store` 的 HTTPS 443，无需新增手机专用端口。现有配置记录显示它与原后台共用应用；本次仅只读确认登录页 200，未修改线上入口、服务或发布代码。发布范围和维护时间待用户确认。
 
 手动本地入口：`http://127.0.0.1:5010`。该服务从当前工作目录读取已构建前端，继续使用同步库真实账号；本次未重启线上或改动商城。
+
+## 继续构建与主分支兼容（2026-10-26）
+
+- 已合入最新主分支的商品尺码表和 PDF 图片读取修复，移动版不回退已上线功能。未修改这些功能的后台业务逻辑、数据库结构或依赖版本。
+- 日期范围控件修复桌面最小宽度及 table-cell 布局残留；手机双月历上下排列、内部滚动，日期单元触控区域至少 44px，支持跨月选择。
+- 紧凑屏幕及横屏抽屉使用实际可视高度，底部创建操作保持可达。
+- 新增商品尺码表手机卡片、筛选及更多操作；维护表单单列，尺寸对照表只在内部横向滚动，预览单位切换及未保存退出继续共用原逻辑。
+- 增加可移植 `scripts/admin-mobile-browser-fixture.py` 和登录脚本，拒绝非 `*_test` 数据库；已将手机布局及交互检查接入 PR CI。发布作业仍排除 pull_request 事件。
+- 开发前既有只读同步成功，56 张表核对通过并保留原本地备份；自动化仅写 `gingtto_admin_mobile_continue_test`。手动服务保持本机同步库，并已加载当前分支代码与构建。
+
+本轮结果：生产构建通过、117 项前端单元测试通过；14 页面 × 6 宽度（360/393/430/768/1024/1440）共 84 次布局检查通过。订单导出、选品、零数量加入、数量保留、库存六阶段、成本导出等关键交互通过。Chromium 与 WebKit iPhone 16 模拟均验证完整月历、跨月选择、横屏订单操作、汇率输入保留、尺码表编辑/预览和未保存确认。未使用实体手机。
+
+本轮结果汇总：`D:/dulizhan/output/admin-mobile-continue-acceptance-20261026.json`；实际截图：`D:/dulizhan/output/playwright/mobile-20261026-{dashboard,orders,inventory,finance}.png`。
+
+重复执行：先以显式本机 PostgreSQL 和独立 `*_test` 环境启动 `python scripts/admin-mobile-browser-fixture.py`，再用 Playwright CLI 在 5380 登录并运行 `verify-admin-mobile-iphone16-browser.js` 和 `verify-admin-mobile-interactions-browser.js`。手动同步库入口仍为 `http://127.0.0.1:5010`，使用真实账号，首次进入需重新登录。
