@@ -1,0 +1,55 @@
+async page=>{
+  if(!page.url().startsWith('http://127.0.0.1:5366/'))throw Error('Isolated fixture only');
+  const detail=()=>page.evaluate(async()=>{const r=await fetch('/api/admin/size-charts/detail?styleCode=CS2211');if(!r.ok)throw Error('detail failed');return r.json();});
+  const before=await detail();
+  const importer=page.getByRole('dialog',{name:'导入商品尺码表',exact:true});
+  async function upload(file){
+    const response=page.waitForResponse(r=>r.url().endsWith('/size-charts/import/preview'));
+    await importer.locator('input[type=file]').setInputFiles(`output/playwright/${file}`);
+    const result=await response;if(!result.ok())throw Error(await result.text());return result.json();
+  }
+  await page.getByRole('button',{name:'导入覆盖',exact:true}).click();
+  const invalid=await upload('size-charts-dimensions-invalid.xlsx');
+  if(!invalid.errors.length || !invalid.errors[0].message.includes('重复'))throw Error('Duplicate rows accepted');
+  if(!await importer.getByRole('button',{name:'确认覆盖',exact:true}).isDisabled())throw Error('Invalid import enabled');
+  const proposal=await upload('size-charts-dimensions-import.xlsx');
+  if(proposal.errors.length || proposal.removedDimensionCount!==4 || proposal.dimensionChangedCount!==8)throw Error(JSON.stringify(proposal));
+  for(const action of ['新增','删除','改名','排序'])if(!proposal.dimensionRows.some(r=>r.action===action))throw Error('Missing '+action);
+  const footer=await importer.getByRole('button',{name:'确认覆盖',exact:true}).boundingBox();
+  if(!footer || footer.y<0 || footer.y+footer.height>page.viewportSize().height)throw Error('Import footer outside viewport');
+  await page.screenshot({path:'output/playwright/size-charts-dimensions-preview.png',animations:'disabled'});
+  await importer.getByRole('button',{name:'取消',exact:true}).click();
+  if(JSON.stringify(await detail())!==JSON.stringify(before))throw Error('Cancel changed saved chart');
+  await page.getByRole('button',{name:'导入覆盖',exact:true}).click();await upload('size-charts-dimensions-import.xlsx');
+  await importer.getByRole('button',{name:'确认覆盖',exact:true}).click();
+  const confirmation=page.getByRole('dialog',{name:'确认导入覆盖',exact:true});
+  if(!(await confirmation.innerText()).includes('删除 4 个维度'))throw Error('Deletion is not explicit');
+  const response=page.waitForResponse(r=>r.url().endsWith('/size-charts/import/confirm'));
+  await confirmation.getByRole('button',{name:'确认',exact:true}).click();
+  if(!(await response).ok())throw Error('Dimension import failed');await importer.waitFor({state:'hidden'});
+  const saved=await detail();
+  if(saved.dimensions.length!==7 || saved.dimensions[0].name!=='外长')throw Error('Rows not applied');
+  if(saved.dimensions.some(d=>['腰围松量','腰围拉量','臀围','腿围'].includes(d.name)))throw Error('Deleted dimensions still present');
+  const knee=saved.dimensions.find(d=>d.name==='膝围成衣');
+  if(!knee || knee.id!==before.dimensions.find(d=>d.name==='膝围').id || knee.showEn)throw Error('Renamed identity/visibility lost');
+  if(saved.dimensions.find(d=>d.name==='脚口').nameEn!=='Hem Opening')throw Error('English rename lost');
+  const chest=saved.dimensions.find(d=>d.name==='胸围');
+  if(!chest?.showEn || JSON.stringify(saved.values[chest.id])!==JSON.stringify({'28':'94.00','30':'96.00','32':'0.00','S/28':null}))throw Error('New values mismatch');
+  await page.getByRole('row').filter({hasText:'CS2211'}).getByRole('button',{name:'编辑',exact:true}).click();
+  const editor=page.getByRole('dialog',{name:'编辑尺码表 · CS2211',exact:true});
+  if(await editor.getByRole('textbox',{name:'胸围 32',exact:true}).inputValue()!=='0.00')throw Error('Editor mismatch');
+  await page.screenshot({path:'output/playwright/size-charts-dimensions-saved.png',animations:'disabled'});
+  const maintenance=page.waitForEvent('download');await editor.getByRole('button',{name:'导出当前版本',exact:true}).click();
+  await(await maintenance).saveAs('output/playwright/size-charts-dimensions-saved.xlsx');
+  await editor.getByRole('radio',{name:'英文客户表',exact:true}).locator('..').click();
+  const text=await editor.locator('.chart-preview').innerText();
+  if(!text.includes('Chest') || text.includes('Knee') || text.includes('Waist (Relaxed)'))throw Error('English visibility mismatch');
+  const english=page.waitForEvent('download');await editor.getByRole('button',{name:'导出当前版本',exact:true}).click();
+  await(await english).saveAs('output/playwright/size-charts-dimensions-english.xlsx');
+  await editor.getByRole('button',{name:'关闭',exact:true}).click();
+  await page.getByRole('button',{name:'导入覆盖',exact:true}).click();
+  const unchanged=await upload('size-charts-dimensions-saved.xlsx');
+  if(unchanged.errors.length || unchanged.changedCount!==0)throw Error('Re-export roundtrip changed data');
+  await importer.getByRole('button',{name:'取消',exact:true}).click();
+  return {passed:true,checks:['delete four rows','Chinese and English renames','new measurement','row reorder','duplicate rejected','cancel preserves data','explicit deletion confirmation','saved editor matches','English visibility preserved','re-export with images','unchanged re-import']};
+}

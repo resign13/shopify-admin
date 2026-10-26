@@ -513,8 +513,12 @@ small,
   overflow-wrap: anywhere;
 }
 .el-drawer__header {
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 18px;
+  border-bottom: 0;
+  padding: 8px 20px;
+  min-height: 40px;
+  box-sizing: border-box;
+  justify-content: flex-end;
+  align-items: center;
   margin-bottom: 0;
   color: var(--text);
 }
@@ -865,8 +869,18 @@ small,
   white-space: nowrap;
 }
 
-/* Full order numbers remain readable in detail/reorder drawer headings. */
-.el-drawer__header { align-items: flex-start; }
-.el-drawer__title { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+/* Drawer titles remain accessible names, without a visible title bar. */
+.el-drawer__header > .el-drawer__title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
 .el-drawer__close-btn { flex-shrink: 0; }
 .el-message-box__message { overflow-wrap: anywhere; }

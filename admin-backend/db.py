@@ -206,6 +206,8 @@ def _apply_schema_migrations(cur: Any) -> None:
     from workbench import migrate
     import finance
     finance.migrate(cur)
+    import size_charts
+    size_charts.migrate(cur)
     order_numbering.migrate(cur)
     for column in ('product_code', 'color_group', 'color_name', 'color_hex'):
         cur.execute(f"ALTER TABLE products ADD COLUMN IF NOT EXISTS {column} VARCHAR(160) NOT NULL DEFAULT ''")

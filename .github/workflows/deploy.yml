@@ -58,7 +58,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Order quantity selection unit tests
         working-directory: frontend
-        run: node --test src/utils/orderSelection.test.js src/utils/apiIntegration.test.js
+        run: node --test src/utils/orderSelection.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
         run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
@@ -374,6 +374,38 @@ jobs:
           grep -q '"fullCalendars":true' "$RUNNER_TEMP/admin-mobile-interactions.log"
           grep -q '"landscapeOrderFooter":true' "$RUNNER_TEMP/admin-mobile-interactions.log"
           npx --yes --package @playwright/cli playwright-cli -s=mobileci close
+      - name: Isolated size chart edit, Excel import and preview lifecycle
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_size_charts_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+          SECURITY_ATTACHMENT_MODE: legacy
+          SECURITY_LOGIN_PROTECTION_ENABLED: '0'
+          SECURITY_LIMIT_EXPORT: '10000'
+          SECURITY_LIMIT_UPLOAD: '10000'
+        run: |
+          set -euo pipefail
+          python scripts/size-charts-browser-fixture.py > "$RUNNER_TEMP/size-charts-browser.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5366/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/size-charts-browser.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5366/api/health >/dev/null
+          npx --yes --package @playwright/cli playwright-cli -s=sizechartsci open http://127.0.0.1:5366/login --browser chrome
+          for stage in login-size-charts-browser-fixture verify-size-charts-edit verify-size-charts-import verify-size-charts-boundaries verify-size-charts-preview verify-size-charts-units verify-size-charts-preview-units verify-size-charts-dimensions; do
+            npx --yes --package @playwright/cli playwright-cli -s=sizechartsci run-code --filename "scripts/$stage.js" | tee "$RUNNER_TEMP/$stage.log"
+            if grep -q '^### Error' "$RUNNER_TEMP/$stage.log"; then exit 1; fi
+            grep -Eq '"passed":[[:space:]]*true' "$RUNNER_TEMP/$stage.log"
+            if [ "$stage" = verify-size-charts-edit ]; then python scripts/verify-size-charts-workbooks.py; fi
+            if [ "$stage" = verify-size-charts-units ]; then python scripts/verify-size-charts-unit-workbooks.py; fi
+            if [ "$stage" = verify-size-charts-preview-units ]; then python scripts/verify-size-charts-dimension-workbooks.py; fi
+          done
+          npx --yes --package @playwright/cli playwright-cli -s=sizechartsci close
       - name: Preserve the frontend build that passed verification
         uses: actions/upload-artifact@v4
         with:

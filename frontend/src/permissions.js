@@ -5,6 +5,7 @@ export const moduleGroups = [
     label: "商品与库存",
     items: [
       ["products", "商品管理"],
+      ["size-charts", "商品尺码表"],
       ["inventory", "库存管理"],
       ["categories", "商品分类"],
     ],
@@ -35,7 +36,7 @@ export const moduleGroups = [
 const all = moduleGroups.flatMap((group) => group.items.map(([key]) => key));
 const defaults = {
   admin: all,
-  sales: ["dashboard", "products", "inventory", "orders", "categories", "contracts"],
+  sales: ["dashboard", "products", "inventory", "orders", "categories", "contracts", "size-charts"],
   warehouse: ["inventory", "orders"],
   finance: ["finance", "contracts"],
   customer: ["inventory"],
