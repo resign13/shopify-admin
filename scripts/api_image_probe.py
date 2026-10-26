@@ -7,6 +7,9 @@ safe_images SSRF/DNS pinning is deliberately not modified by this local tool.
 import ipaddress
 import socket
 import time
+import os
+import tempfile
+from pathlib import Path
 from urllib.parse import urlsplit, urljoin
 
 import requests
@@ -58,7 +61,7 @@ class ImageProbe:
         self.sessions[origin].cookies.clear()
         return self.sessions[origin]
 
-    def sample(self,url,kind='image'):
+    def sample(self,url,kind='image', *, destination=None):
         started=time.perf_counter();deadline=time.monotonic()+self.budget_seconds
         result={'kind':kind,'certificateVerification':True,'credentialsForwarded':False,
             'transport':'explicit_operator_proxy' if self.proxy else 'validated_direct',
@@ -103,7 +106,16 @@ class ImageProbe:
                     chunks.append(chunk)
                 # Reuse the unchanged production image-content validation.
                 from safe_images import check_image
-                check_image(b''.join(chunks))
+                data=b''.join(chunks)
+                check_image(data)
+                if destination is not None:
+                    destination=Path(destination)
+                    destination.parent.mkdir(parents=True,exist_ok=True)
+                    fd,temporary=tempfile.mkstemp(dir=destination.parent,suffix='.tmp')
+                    try:
+                        with os.fdopen(fd,'wb') as stream:stream.write(data)
+                        os.replace(temporary,destination)
+                    finally:Path(temporary).unlink(missing_ok=True)
                 elapsed=time.perf_counter()-started
                 entry['success']=True
                 result.update(bytes=size,totalMs=round(elapsed*1000,2),MiBPerSecond=round(size/1024/1024/elapsed,6),KiBPerSecond=round(size/1024/elapsed,2))

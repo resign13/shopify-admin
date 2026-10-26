@@ -429,7 +429,7 @@ class Security:
                 category = 'voice'
             elif 'export' in path or path.endswith('/invoice'):
                 category = 'export'
-            elif path.endswith(('/uploads', '/order-attachments', '/attachments')) or '/inventory/import/' in path or '/finance/costs/import/' in path:
+            elif path.endswith(('/uploads', '/order-attachments', '/attachments')) or '/inventory/import/' in path or '/finance/costs/import/' in path or '/size-charts/import/' in path:
                 category = 'upload'
             elif request.method not in SAFE and not path.endswith(('/preview', '/query', '/validate')):
                 category = 'write'
