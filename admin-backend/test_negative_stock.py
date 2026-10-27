@@ -115,7 +115,7 @@ class NegativeStockTest(unittest.TestCase):
             order=self.create(2)
             order=self.update(order,status=status,trackingNo='FIXTURE')
             before=self.balance()
-            for target in ['paid','pending_payment','allocated','cancelled','cancelled','paid','shipped']:
+            for target in ['paid','pending_payment','partially_allocated','allocated','cancelled','cancelled','partially_allocated','paid','shipped']:
                 response = self.call(f"orders/{order['id']}",'PUT',{'status':target,'trackingNo':'FIXTURE'})
                 self.assertEqual(response.status_code,200,response.json)
                 self.assertEqual(self.balance(), before + (2 if target == 'cancelled' else 0))

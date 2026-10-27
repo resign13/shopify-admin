@@ -2,6 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {financeCostPageSize,financeCostFilters,financeCostKey,financeCodes,financeActiveStates,financeReportDates,financeReportKey,batchTargets,clearBatchTargets,costChanges,costValue} from './finance.js';
 import {roleModules,defaultRoleModules,editableRolePermissions,moduleGroups} from '../permissions.js';
+
+test('partially allocated orders remain in default finance reports',()=>{
+  assert.ok(financeActiveStates.includes('partially_allocated'));
+  const query=JSON.parse(financeReportKey({statuses:[],exchangeRate:7}));
+  assert.ok(query.statuses.includes('partially_allocated'));
+});
 test('finance is an explicit capability, never inferred for sales',()=>{
   assert.deepEqual(defaultRoleModules('finance'),['finance','contracts']);assert.ok(roleModules('admin').includes('finance'));
   for(const r of ['sales','warehouse','customer'])assert.ok(!defaultRoleModules(r).includes('finance'));

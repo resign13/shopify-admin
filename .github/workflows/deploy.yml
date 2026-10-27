@@ -199,6 +199,9 @@ jobs:
           grep -q '"drafts":true' "$RUNNER_TEMP/drafts-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-order-number-browser.js | tee "$RUNNER_TEMP/order-number-result.log"
           grep -q '"orderNumberUI":true' "$RUNNER_TEMP/order-number-result.log"
+          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-partial-allocation-browser.js | tee "$RUNNER_TEMP/partial-allocation-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/partial-allocation-result.log"; then exit 1; fi
+          grep -q '"partialAllocation": *true' "$RUNNER_TEMP/partial-allocation-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=weightsci close
       - name: Isolated cancellation notes and current-stock browser lifecycle
         env:

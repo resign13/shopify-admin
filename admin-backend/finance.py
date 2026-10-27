@@ -16,7 +16,7 @@ import style_catalog
 import workbench
 
 TZ = timezone(timedelta(hours=8))
-STATES = ['pending_payment', 'allocated', 'paid', 'shipped', 'completed']
+STATES = ['pending_payment', 'partially_allocated', 'allocated', 'paid', 'shipped', 'completed']
 CENT = Decimal('.01')
 COST_BASIS = 'style_at_order_time'
 
@@ -421,7 +421,7 @@ def export(payload):
         'knownCostCny':'已知成本 CNY','totalCostCny':'完整成本 CNY','profitCny':'商品毛利 CNY',
         'knownProfitCny':'已设置成本部分商品毛利 CNY','missingQuantity':'缺失成本件数'}
     lookup=options(); customers={c['id']:c['name'] for c in lookup['customers']}; people={c['id']:c['name'] for c in lookup['salespeople']}
-    states={'pending_payment':'待付款','allocated':'已配货','paid':'已付款','shipped':'已发货','completed':'已完成'}
+    states={'pending_payment':'待付款','partially_allocated':'部分配货','allocated':'已配货','paid':'已付款','shipped':'已发货','completed':'已完成'}
     for k,v in data['filters'].items():
         if k=='customerId': v=customers.get(v,str(v)) if v else '全部'
         if k=='salespersonIds': v=[('未分配' if i=='unassigned' else people.get(i,people.get(int(i),str(i)))) for i in v]

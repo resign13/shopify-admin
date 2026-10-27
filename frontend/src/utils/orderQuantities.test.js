@@ -54,6 +54,10 @@ test('editing applies differences, reductions and clearing restore only original
 });
 test('cancel and restore use original inventory rules; unknown stock is not zero', () => {
   assert.equal(orderVariantInventory(18,3,3,'allocated','cancelled').after,21);
+  assert.equal(orderVariantInventory(18,3,3,'paid','partially_allocated').after,18);
+  assert.equal(orderVariantInventory(18,3,5,'partially_allocated','partially_allocated').after,16);
+  assert.equal(orderVariantInventory(18,3,3,'partially_allocated','cancelled').after,21);
+  assert.equal(orderVariantInventory(18,3,3,'cancelled','partially_allocated').after,15);
   assert.equal(orderVariantInventory(18,3,3,'cancelled','allocated').after,15);
   assert.equal(orderVariantInventory(18,3,3,'cancelled','cancelled').after,18);
   assert.equal(orderVariantInventory(undefined,0,2).after,'待刷新');

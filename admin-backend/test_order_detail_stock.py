@@ -56,7 +56,7 @@ class OrderDetailStockTest(unittest.TestCase):
 
     def test_all_states_display_actual_balance_without_another_subtraction_or_return(self):
         order = self.create()
-        for status in ['allocated','paid','shipped','completed','cancelled','pending_payment']:
+        for status in ['partially_allocated','allocated','paid','shipped','completed','cancelled','pending_payment']:
             response = self.call(f"orders/{order['id']}",'PUT',{'version':order['version'],'status':status,'trackingNo':'TRACK'})
             self.assertEqual(response.status_code,200,response.json)
             order = response.json['order']; self.assert_balances(order)

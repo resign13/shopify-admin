@@ -166,6 +166,81 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(self.call(f"orders/{order['id']}").json['order']['status'],'paid')
         self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'allocated','shippingFee':-1}).status_code,400)
 
+    def test_partial_allocation_filter_exports_audit_and_migration(self):
+        from io import BytesIO
+        from openpyxl import load_workbook
+        order = self.create()
+        before = self.stock()
+        response = self.call(f"orders/{order['id']}", 'PUT', {
+            'status': 'partially_allocated', 'version': order['version'],
+            'shippingFee': 999, 'paymentLink': 'https://ignored.invalid',
+        }, 'warehouse')
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertTrue({'totalAmount', 'shippingFee', 'paymentLink'}.isdisjoint(response.json['order']))
+        current = self.call(f"orders/{order['id']}").json['order']
+        self.assertEqual(current['status'], 'partially_allocated')
+        self.assertEqual((current['shippingFee'], current['totalAmount']), (12.5, 127.5))
+        self.assertEqual(self.stock(), before)
+        listing = self.call('orders?page=1&status=partially_allocated').json
+        self.assertEqual((listing['total'], listing['statusCounts']['partially_allocated']), (1, 1))
+        self.assertEqual(listing['items'][0]['id'], order['id'])
+        for export in ['export', 'export-by-sheet']:
+            result = self.call(f'orders/{export}?view=workbench&status=partially_allocated&includeImages=0', 'POST')
+            self.assertEqual(result.status_code, 200, result.json)
+            workbook = load_workbook(BytesIO(result.data))
+            values = [cell.value for sheet in workbook for row in sheet for cell in row]
+            self.assertTrue(any(order['orderNo'] in str(value) for value in values))
+            self.assertFalse(any('GT20260918' in str(value) for value in values))
+        history = self.call(f"orders/{order['id']}/operations").json['items']
+        self.assertTrue(any(c['field'] == 'status' and c['after'] == 'partially_allocated'
+                            for h in history for c in h['changes']))
+        with db.get_connection() as conn:
+            db._migrate_order_status_values(conn.cursor())
+            db._migrate_order_status_values(conn.cursor())
+        self.assertEqual(self.call(f"orders/{order['id']}").json['order']['status'], 'partially_allocated')
+        self.assertEqual(self.stock(), before)
+        # The old version must not overwrite a later status change.
+        self.assertEqual(self.call(f"orders/{order['id']}", 'PUT', {
+            'status': 'allocated', 'version': order['version'],
+        }).status_code, 409)
+
+    def test_partial_allocation_details_delta_cancel_restore_and_scope(self):
+        order = self.create()
+        self.assertEqual(self.call(f"orders/{order['id']}", 'PUT', {'status': 'partially_allocated'}, 'sales').status_code, 404)
+        self.assertEqual(self.call(f"orders/{order['id']}", 'PUT', {'status': 'partially_allocated'}, 'customer').status_code, 403)
+        order['status'] = 'partially_allocated'
+        order['items'][0]['quantity'] = 4
+        result = self.call(f"orders/{order['id']}/details", 'PUT', order)
+        self.assertEqual(result.status_code, 200, result.json)
+        current = result.json['order']
+        self.assertEqual(current['status'], 'partially_allocated')
+        self.assertEqual(self.stock()['stock'], 23)
+        self.assertEqual([r['currentStock'] for r in current['items']], [6, 7])
+        for target in ['allocated', 'paid', 'partially_allocated']:
+            current = self.change_status(current, target)
+            self.assertEqual(self.stock()['stock'], 23)
+        current = self.change_status(current, 'cancelled')
+        self.assertEqual(self.stock()['stock'], 30)
+        current = self.change_status(current, 'partially_allocated')
+        self.assertEqual(self.stock()['stock'], 23)
+        current = self.change_status(current, 'shipped', trackingNo='PARTIAL-FIXTURE')
+        self.assertEqual(self.stock()['stock'], 23)
+        self.assertEqual(current['status'], 'shipped')
+
+    def test_partial_allocation_protects_unfulfilled_true_sizes(self):
+        current = self.change_status(self.create(), 'partially_allocated')
+        with db.get_connection() as conn:
+            conn.execute('UPDATE product_size_prices SET contract_pending=0,pending_inbound=0,pending_inspection=0 WHERE product_id=1')
+            # Remove unrelated historical references, isolating this new state.
+            conn.execute('DELETE FROM order_items WHERE order_id<>%s', (current['id'],))
+        product = self.call('products/1').json['product']
+        product.update(title=product['name']['zh'], familyCode=product['colorGroup'])
+        product['sizePrices'] = [s for s in product['sizePrices'] if s['sizeCode'] != 'M']
+        product['sizes'] = [s['sizeCode'] for s in product['sizePrices']]
+        with self.assertRaisesRegex(ValueError, '未履约订单'):
+            db.update_product(1, product)
+        self.assertEqual(self.stock()['stock'], 25)
+
     def test_warehouse_order_responses_hide_financial_fields(self):
         order = self.create()
         financial_fields = {'totalAmount', 'goodsAmount', 'shippingFee', 'paymentLink'}
@@ -265,7 +340,7 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(self.call(f"orders/{other['id']}/details", 'PUT', other, 'sales').status_code, 404)
 
     def test_completed_can_reopen_to_every_status_with_one_operation_and_no_new_event(self):
-        for target in ['pending_payment', 'allocated', 'paid', 'shipped', 'cancelled']:
+        for target in ['pending_payment', 'partially_allocated', 'allocated', 'paid', 'shipped', 'cancelled']:
             with self.subTest(target=target):
                 stock_before_creation = self.stock()['stock']
                 order = self.create()
