@@ -135,6 +135,9 @@ async (page) => {
   await draft.getByTestId('order-goods-summary').scrollIntoViewIfNeeded();
   await page.screenshot({path:'output/playwright/order-reorder-mobile.png'});
   await page.setViewportSize({width:1440,height:1000});
+  // matchMedia updates Vue's v-if after resize; the mobile summary is replaced.
+  await mobileEditor.waitFor({state:'hidden'});
+  await draft.getByTestId('order-goods-summary').waitFor({state:'visible'});
   await draft.getByTestId('order-goods-summary').scrollIntoViewIfNeeded();
   await page.screenshot({path:'output/playwright/order-reorder-desktop.png'});
   const savingDraft=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders/drafts')&&r.request().method()==='POST');
