@@ -35,7 +35,7 @@ async (page) => {
       }
     }
   }
-  await page.setViewportSize({width:393,height:852});await page.goto(base+'/orders');await page.waitForLoadState('networkidle');
+  await page.setViewportSize({width:393,height:852});await page.goto(base+'/orders?page=1&pageSize=25');await page.waitForLoadState('networkidle');
   const beforeCount=await page.locator('.m-order-card').count();
   check(beforeCount>0,'Orders fixture did not load before search');
   const keyword=page.getByRole('textbox',{name:'订单查询关键词'});
@@ -50,7 +50,7 @@ async (page) => {
   await page.locator('.responsive-filters.is-expanded .el-select').first().waitFor();
   check(await keyword.inputValue()==='','Expanding filters changed keyword');
   await page.getByRole('button',{name:'收起筛选',exact:true}).click();
-  await page.goto(base+'/inventory');await page.waitForLoadState('networkidle');
+  await page.goto(base+'/inventory?page=1&pageSize=25');await page.waitForLoadState('networkidle');
   const stock=page.waitForResponse(r=>r.url().includes('/api/admin/inventory?')&&r.url().includes('keyword=GT-2026-1'));
   await page.locator('.responsive-filters input').first().fill('GT-2026-1');
   await page.getByRole('button',{name:'查询',exact:true}).click();check((await stock).ok(),'Inventory query failed');
