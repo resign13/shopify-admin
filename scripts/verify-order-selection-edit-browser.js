@@ -92,6 +92,7 @@ async (page) => {
       await priceDialog.getByRole('button',{name:'确认应用',exact:true}).click();
       await priceDialog.waitFor({state:'hidden'});
       await page.setViewportSize({width:390,height:844});
+      await detail.getByRole('navigation',{name:'订单填写进度'}).getByRole('button',{name:/商品$/}).click();
       await quantity.scrollIntoViewIfNeeded();
       check(await quantity.isEnabled(),'Mobile fulfilled quantity locked');
       await page.screenshot({path:`output/playwright/order-edit-${status}-mobile.png`});

@@ -59,11 +59,15 @@ async (page) => {
   await page.setViewportSize({width:390,height:844});
   await page.getByRole('spinbutton',{name:'CS2209-LONG-STYLE-CODE-EXAMPLE 成本',exact:true}).scrollIntoViewIfNeeded();
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile page does not overflow with long style codes');
-  const footer=page.locator('.cost-actionbar');await footer.scrollIntoViewIfNeeded();
-  assert(await footer.getByRole('button',{name:'保存成本（20）',exact:true}).isEnabled(),'Mobile save remains reachable');
+  const footer=page.locator('[data-testid="mobile-cost-savebar"]');await footer.scrollIntoViewIfNeeded();
+  assert(await footer.getByText('20 款未保存',{exact:true}).isVisible(),'Mobile retains every ledger draft');
+  assert(await footer.getByRole('button',{name:'保存成本',exact:true}).isEnabled(),'Mobile save remains reachable');
   await page.evaluate(()=>window.scrollTo(0,0));
   await page.screenshot({path:'output/playwright/finance-cost-ui-mobile.png',fullPage:true});
-  await page.getByRole('button',{name:'清空',exact:true}).click();await page.getByRole('button',{name:'取消',exact:true}).click();
+  await page.locator('.mf-heading').getByRole('button',{name:'更多',exact:true}).click();
+  await page.getByRole('dialog',{name:'更多操作',exact:true}).getByRole('button',{name:'批量设置成本',exact:true}).click();
+  await page.getByText('本页全选',{exact:true}).click();
+  await page.locator('.mf-batch').getByRole('button',{name:'清空',exact:true}).click();await page.getByRole('button',{name:'取消',exact:true}).click();
   assert(await input.inputValue()==='35.00','Mobile clear cancellation retains drafts');
   assert(writes===0,'Rendering test never posts synthetic costs');
   // Discard only the browser draft before removing the visual response fixture.

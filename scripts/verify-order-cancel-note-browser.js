@@ -56,9 +56,13 @@ async (page) => {
     await dialog.getByRole('textbox',{name:'取消备注（选填）',exact:true}).waitFor();
     return dialog;
   };
-  const drawer=()=>page.getByRole('dialog',{name:'订单详情 · '+no,exact:true});
+  const drawer=()=>page.getByRole('dialog',{name:/^订单详情(?: · .+)?$/});
   const openDetail=async()=>{
-    await page.getByRole('button',{name:'订单详情',exact:true}).click();
+    if(page.viewportSize().width<768){
+      await page.getByRole('button',{name:`查看订单 ${no}`,exact:true}).click();
+      await drawer().locator('.m-detail-hero').getByText(no,{exact:true}).waitFor();
+      await drawer().locator('summary').filter({hasText:'备注与附件'}).click();
+    }else await page.getByRole('button',{name:'订单详情',exact:true}).click();
     await drawer().getByText('Original packing note',{exact:true}).waitFor();
     return drawer();
   };
@@ -149,8 +153,9 @@ async (page) => {
   await page.setViewportSize({width:390,height:844});
   await page.getByTestId('cancel-note-mark').click();
   await page.getByRole('tooltip').filter({hasText:'Warehouse amended'}).waitFor();
+  check(!await drawer().isVisible(),'Mobile note tap unexpectedly opened order detail');
   await openDetail();
-  await drawer().getByRole('button',{name:'修改取消备注',exact:true}).click();
+  await drawer().locator('.m-detail-card').filter({has:page.getByRole('heading',{name:'取消备注',exact:true})}).getByRole('button',{name:'修改',exact:true}).click();
   check(await noteDialog().getByRole('textbox',{name:'取消备注（选填）',exact:true}).inputValue()==='Warehouse amended','Sales note missing');
   const bounds=await noteDialog().boundingBox();
   check(bounds.width<=390 && bounds.x>=0,'Mobile dialog overflow');

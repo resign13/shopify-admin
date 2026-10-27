@@ -35,9 +35,14 @@ async (page) => {
   await answer.click();await page.screenshot({path:'output/playwright/admin-login-captcha-mobile.png'});
   await answer.fill('ab7cd');await submit.click();
   await page.waitForURL(url=>url.pathname==='/finance');
-  assert(await page.getByRole('link',{name:'合同管理',exact:true}).count()===1,'Finance contracts navigation');
-  assert(await page.getByRole('link',{name:'订单管理',exact:true}).count()===0,'No implicit order grant');
-  await page.getByRole('button',{name:'财 财务测试员 财务部',exact:true}).click();
+  await page.getByRole('navigation',{name:'快捷导航'}).getByRole('button',{name:'全部',exact:true}).click();
+  const modules=page.getByRole('dialog',{name:'全部模块',exact:true});
+  await modules.waitFor();
+  assert(await modules.getByRole('link',{name:'合同管理',exact:true}).count()===1,'Finance contracts navigation');
+  assert(await modules.getByRole('link',{name:'订单管理',exact:true}).count()===0,'No implicit order grant');
+  await modules.getByRole('button',{name:/关闭|close/i}).click();
+  await modules.waitFor({state:'hidden'});
+  await page.locator('.profile-button').click();
   const [logout]=await Promise.all([
     page.waitForResponse(r=>r.url().endsWith('/api/auth/logout')&&r.request().method()==='POST'),
     page.getByRole('menuitem',{name:'退出登录',exact:true}).click(),

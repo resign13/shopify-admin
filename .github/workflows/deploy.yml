@@ -367,15 +367,32 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5380/api/health >/dev/null
           mkdir -p output/playwright
+          # One admin login for this isolated fixture. The checks reuse its cookie
+          # session; role checks log in only distinct accounts in new contexts.
           npx --yes --package @playwright/cli playwright-cli -s=mobileci open http://127.0.0.1:5380/login --browser chrome
           npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/login-admin-mobile-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/verify-admin-mobile-iphone16-browser.js | tee "$RUNNER_TEMP/admin-mobile-result.log"
-          if grep -q '^### Error' "$RUNNER_TEMP/admin-mobile-result.log"; then exit 1; fi
-          grep -q '"iphone16":true' "$RUNNER_TEMP/admin-mobile-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/verify-admin-mobile-interactions-browser.js | tee "$RUNNER_TEMP/admin-mobile-interactions.log"
-          if grep -q '^### Error' "$RUNNER_TEMP/admin-mobile-interactions.log"; then exit 1; fi
-          grep -q '"fullCalendars":true' "$RUNNER_TEMP/admin-mobile-interactions.log"
-          grep -q '"landscapeOrderFooter":true' "$RUNNER_TEMP/admin-mobile-interactions.log"
+          run_mobile_check() {
+            local stage="$1"
+            local result="$RUNNER_TEMP/$stage.log"
+            npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename "scripts/$stage.js" | tee "$result"
+            if grep -q '^### Error' "$result"; then return 1; fi
+            # Match the top-level result, never nested successful assertions in
+            # a {"passed":false,"checks":[{"passed":true}]} failure report.
+            grep -Eq '^[[:space:]]*\{[[:space:]]*"passed"[[:space:]]*:[[:space:]]*true[[:space:]]*[,}]' "$result"
+          }
+          # Finance creates the dedicated finance account consumed by permissions.
+          # Goods creates the wide chart used by the presentation-only matrix check.
+          for stage in \
+            verify-admin-mobile-refined-finance-system-browser \
+            verify-admin-mobile-refined-layout-browser \
+            verify-admin-mobile-refined-orders-stock-browser \
+            verify-admin-mobile-refined-goods-browser \
+            verify-admin-mobile-refined-interactions-browser \
+            verify-admin-mobile-refined-resilience-browser \
+            verify-admin-mobile-refined-permissions-browser \
+            verify-admin-mobile-search-browser; do
+            run_mobile_check "$stage"
+          done
           npx --yes --package @playwright/cli playwright-cli -s=mobileci close
       - name: Isolated size chart edit, Excel import and preview lifecycle
         env:

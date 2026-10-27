@@ -167,6 +167,11 @@ async (page) => {
   }), 'Unset weight is oversized or bold');
   check((await missingHint().innerText()).includes('3 件未设置'), 'All-missing count incorrect');
   await page.setViewportSize({width:390,height:844});
+  const mobileEditor=editor.getByTestId('mobile-order-editor');
+  await mobileEditor.waitFor();
+  check(await mobileEditor.getByRole('navigation',{name:'订单填写进度',exact:true}).getByRole('button').count()===3,'Mobile editor is not the three-step flow');
+  await mobileEditor.locator('.m-editor-steps button').nth(2).click();
+  await mobileEditor.getByTestId('order-goods-summary').waitFor();
   await weightSummary.scrollIntoViewIfNeeded(); await settleDrawer();
   // Drawer width transitions can still be running after a viewport resize.
   // Wait for the exact layout assertion rather than sampling one animation frame.
@@ -174,12 +179,12 @@ async (page) => {
     const el=document.querySelector('[data-testid="order-goods-summary"] .order-quote-controls');
     return el && [...el.querySelectorAll('.el-select__wrapper,.el-input-number')].every(input=>{
       const box=input.getBoundingClientRect();
-      return box.left>=-1 && box.right<=innerWidth+1 && Math.abs(box.height-32)<1;
+      return box.left>=-1 && box.right<=innerWidth+1 && Math.abs(box.height-44)<1;
     });
   });
   check(await quoteControls.evaluate(el=>[...el.querySelectorAll('.el-select__wrapper,.el-input-number')].every(input=>{
-    const box=input.getBoundingClientRect();return box.left>=-1&&box.right<=innerWidth+1&&Math.abs(box.height-32)<1;
-  })),'Quote controls overflow or change height on mobile');
+    const box=input.getBoundingClientRect();return box.left>=-1&&box.right<=innerWidth+1&&Math.abs(box.height-44)<1;
+  })),'Quote controls overflow or lack 44px mobile touch height');
   await page.waitForFunction(() => { const el=document.querySelector('[data-testid=order-draft-weight]'); if(!el)return false; const box=el.getBoundingClientRect(); return box.left>=-1 && box.right<=innerWidth+1 && el.scrollWidth<=el.clientWidth+1; });
   check(await weightSummary.evaluate(el=>el.getBoundingClientRect().left>=-1 &&
     el.getBoundingClientRect().right<=window.innerWidth+1 && el.scrollWidth<=el.clientWidth+1), 'Weight area overflows narrow drawer');

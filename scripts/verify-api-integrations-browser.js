@@ -110,10 +110,39 @@ async (page) => {
   await page.screenshot({path:'output/playwright/api-integrations-mobile.png',fullPage:true});
   check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile has no page overflow');
   await page.getByRole('tab',{name:'接口说明',exact:true}).click();
-  check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Docs table scrolls internally');
-  await productParams.focus();
-  check(await productParams.evaluate(el=>el.scrollWidth>el.clientWidth && document.activeElement===el),'Mobile parameter table is keyboard-scrollable');
+  await page.getByRole('button',{name:/连接与认证/}).click();
+  const mobileAuth=page.getByRole('dialog',{name:'连接与认证',exact:true});
+  await mobileAuth.getByRole('heading',{name:'连接地址',exact:true}).waitFor();
+  check((await mobileAuth.locator('pre').innerText()).includes('Bearer TOKEN'),'Mobile authentication docs use a placeholder');
+  check((await mobileAuth.locator('article').filter({hasText:'Authorization'}).innerText()).includes('必填'),'Mobile Authorization header is required');
+  await mobileAuth.getByRole('button',{name:'关闭此对话框',exact:true}).click();
+  await mobileAuth.waitFor({state:'hidden'});
+  for(const [title,path] of [['商品详情','/products/{productId}'],['批量库存','/inventory']]) {
+    await page.getByRole('button',{name:new RegExp(title)}).click();
+    const endpoint=page.getByRole('dialog',{name:title,exact:true});
+    await endpoint.getByRole('heading',{name:'GET '+path,exact:true}).waitFor();
+    check((await endpoint.locator('article').innerText()).includes(title==='商品详情'?'路径参数':'productIds'),'Mobile endpoint parameters are reachable: '+title);
+    check((await endpoint.locator('article').innerText()).includes('必填'),'Mobile required parameter documented: '+title);
+    await endpoint.getByRole('button',{name:'关闭此对话框',exact:true}).click();
+    await endpoint.waitFor({state:'hidden'});
+  }
+  await page.getByRole('button',{name:/商品列表/}).click();
+  const mobileProducts=page.getByRole('dialog',{name:'商品列表',exact:true});
+  await mobileProducts.getByRole('heading',{name:'GET /products',exact:true}).waitFor();
+  check(await mobileProducts.locator('article').count()===6,'Mobile documents all six list parameters');
+  check(await mobileProducts.locator('article h4 small').filter({hasText:'可选'}).count()===6,'Mobile list filters are optional');
+  const mobileDocBody=mobileProducts.locator('.el-drawer__body');
+  const filteredExample=mobileProducts.locator('summary').filter({hasText:'含可选筛选示例'});
+  await filteredExample.focus();
+  check(await filteredExample.evaluate(el=>document.activeElement===el),'Mobile docs example is keyboard-focusable');
+  const docScrollTop=await mobileDocBody.evaluate(el=>el.scrollTop);
+  check(await mobileDocBody.evaluate(el=>el.scrollHeight>el.clientHeight && el.scrollWidth<=el.clientWidth+1) && docScrollTop>0,'Mobile parameters scroll inside the drawer without horizontal overflow');
+  await filteredExample.press('PageUp');
+  await page.waitForFunction(before=>[...document.querySelectorAll('.el-drawer__body')].some(el=>el.offsetWidth && el.querySelector('.mapi-doc-detail') && el.scrollTop<before),docScrollTop);
+  check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile endpoint docs have no page overflow');
   await page.screenshot({path:'output/playwright/api-integrations-docs-mobile.png',fullPage:true});
+  await mobileProducts.getByRole('button',{name:'关闭此对话框',exact:true}).click();
+  await mobileProducts.waitFor({state:'hidden'});
   await page.setViewportSize({width:1280,height:900});
   // New browser context proves an API-only department can use its own key,
   // without receiving account management or unrelated modules.

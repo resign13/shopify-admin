@@ -62,12 +62,15 @@ async (page) => {
   await page.waitForFunction(() => [...document.querySelectorAll('.allowance-card')].every(el => !el.offsetWidth));
 
   await page.setViewportSize({width:390,height:844});
-  row=dialog.locator('.mobile-record').filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
+  const mobileRegistration=dialog.getByTestId('mobile-inventory-registration');
+  await mobileRegistration.getByRole('navigation',{name:'登记真实尺码',exact:true}).getByRole('button',{name:'M',exact:true}).click();
+  row=mobileRegistration.locator('.m-registration-card').filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
   quota=row.getByRole('button',{name:'验货额度 M',exact:true});
   await row.waitFor();
+  if (await mobileRegistration.locator('.m-registration-card').count()!==1 || await row.getByRole('spinbutton').count()!==6) throw new Error('Mobile single-size registration does not expose all six stages');
   await page.waitForFunction(() => document.querySelector('.inventory-registration').getBoundingClientRect().width <= window.innerWidth);
   if (await dialog.evaluate(el=>el.getBoundingClientRect().width>window.innerWidth)) throw new Error('Drawer exceeds narrow viewport');
-  await quota.click();
+  await quota.focus(); await quota.press('Enter');
   const popover=page.locator('.el-popper:visible').filter({has:page.locator('.allowance-card')});
   await popover.waitFor();
   if (await popover.evaluate(el=>{const r=el.getBoundingClientRect();return r.left < 0 || r.right>window.innerWidth+1;})) throw new Error('Narrow popover clipped');

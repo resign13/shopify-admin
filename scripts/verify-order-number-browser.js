@@ -22,14 +22,19 @@ async (page) => {
   await page.locator('main .el-scrollbar__wrap').evaluateAll(elements=>elements.forEach(el=>el.scrollLeft=0));
   await page.screenshot({path:'output/playwright/order-secondary-list.png',fullPage:true});
   await button.click();
-  const detail=page.getByRole('dialog',{name:'订单详情 · '+order.orderNo,exact:true});await detail.waitFor();
+  const detail=page.getByRole('dialog',{name:/^订单详情(?: · .+)?$/});await detail.waitFor();
   await detail.getByRole('button',{name:'修改副单号',exact:true}).waitFor();
   check((await detail.locator('.order-drawer-heading').innerText()).includes(secondary),'Full secondary in detail');
   await page.waitForFunction(()=>{const el=document.querySelector('.order-drawer-heading')?.closest('.el-drawer');const box=el?.getBoundingClientRect();return box&&Math.abs(box.right-innerWidth)<1;});
   await page.screenshot({path:'output/playwright/order-secondary-desktop.png',fullPage:true});
   await page.setViewportSize({width:390,height:844});
-  await page.waitForFunction(()=>{const el=document.querySelector('.order-drawer-heading')?.closest('.el-drawer');const box=el?.getBoundingClientRect();return box&&box.x>=-1&&box.right<=innerWidth+1&&box.width<=innerWidth+1;});
-  check(await detail.locator('.order-drawer-heading').evaluate(el=>el.scrollWidth<=el.clientWidth+2),'Heading on mobile');
+  await detail.locator('.m-detail-hero').getByText(order.orderNo,{exact:true}).waitFor();
+  await detail.locator('summary').filter({hasText:'收货与订单资料'}).click();
+  const mobileProfile=detail.locator('.m-detail-folds details[open]').filter({has:page.locator('summary').filter({hasText:'收货与订单资料'})});
+  await mobileProfile.getByText(secondary,{exact:true}).waitFor();
+  await page.waitForFunction(()=>{const el=document.querySelector('.m-detail-hero')?.closest('.el-drawer');const box=el?.getBoundingClientRect();return box&&box.x>=-1&&box.right<=innerWidth+1&&box.width<=innerWidth+1;});
+  check(await detail.locator('.m-detail-hero').evaluate(el=>el.scrollWidth<=el.clientWidth+2),'Heading on mobile');
+  check(await mobileProfile.evaluate(el=>el.scrollWidth<=el.clientWidth+2),'Full secondary profile overflows on mobile');
   await page.screenshot({path:'output/playwright/order-secondary-mobile.png',fullPage:true});
   await page.setViewportSize({width:1920,height:1000});
   async function edit(value){
