@@ -132,7 +132,7 @@ async (page) => {
   check(await mobileProducts.locator('article').count()===6,'Mobile documents all six list parameters');
   check(await mobileProducts.locator('article h4 small').filter({hasText:'可选'}).count()===6,'Mobile list filters are optional');
   const mobileDocBody=mobileProducts.locator('.el-drawer__body');
-  const filteredExample=mobileProducts.locator('summary').filter({hasText:'含可选筛选示例'});
+  const filteredExample=mobileProducts.locator('summary').filter({hasText:'带可选筛选参数'});
   await filteredExample.focus();
   check(await filteredExample.evaluate(el=>document.activeElement===el),'Mobile docs example is keyboard-focusable');
   const docScrollTop=await mobileDocBody.evaluate(el=>el.scrollTop);

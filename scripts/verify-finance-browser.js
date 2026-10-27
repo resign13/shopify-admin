@@ -184,7 +184,7 @@ async (page) => {
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile cost page has no document overflow');
   await page.locator('.mf-heading').getByRole('button',{name:'更多',exact:true}).click();
   await page.getByRole('dialog',{name:'更多操作',exact:true}).getByRole('button',{name:'批量设置成本',exact:true}).click();
-  await page.getByRole('checkbox',{name:'选择 GT-OTHER',exact:true}).check();
+  await page.locator('.mf-ledger-row').filter({has:otherInput}).locator('.el-checkbox').click();
   await page.locator('.mf-batch').getByRole('button',{name:'清空',exact:true}).click();await page.getByRole('button',{name:'取消',exact:true}).click();
   assert(await otherInput.inputValue()==='0.00','Explicit zero can be selected for clearing on mobile');
   await page.getByRole('button',{name:'成本统计',exact:true}).click();

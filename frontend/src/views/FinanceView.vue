@@ -36,7 +36,6 @@
   <section class="finance-panel" :class="{'finance-cost-mode':tab==='costs'}">
     <div class="finance-tabs">
       <div class="finance-tab-nav"><ElButton :class="{'finance-tab-active':tab==='report'}" :aria-pressed="tab==='report'" @click="changeTab('report')">成本统计</ElButton><ElButton :class="{'finance-tab-active':tab==='costs'}" :aria-pressed="tab==='costs'" @click="changeTab('costs')">商品成本</ElButton></div>
-      <details class="finance-tools" :open="!isPhone"><summary>汇率与导入导出 <span>工具与设置</span></summary>
       <div class="finance-header-actions">
         <div class="finance-rate-control">
           <span class="finance-rate-label">汇率 <span>1 USD =</span></span>
@@ -48,7 +47,7 @@
         <ElButton v-else :loading="rateSaving" :disabled="!rateValid||!rateDirty" :title="rateDirty?'保存公共汇率，所有财务账号共用':'当前公共汇率已保存'" @click="saveRate">保存汇率</ElButton>
         <ElButton v-if="tab==='report'" :disabled="!result||reportLoading||exporting||reportOutdated" :loading="exporting" :title="reportOutdated?'条件或汇率已修改，请重新查询后导出':'导出全部筛选结果，不限当前页'" @click="exportReport">导出 Excel</ElButton>
         <template v-else><ElButton :disabled="!appliedCostQuery||costOutdated||costLoading||costExporting" :loading="costExporting" :title="costOutdated?'筛选已修改，请先查询':'导出已查询条件下全部款号的已保存成本，不含页面草稿'" @click="exportCosts">导出成本表</ElButton><ElButton :disabled="saving||costLoading||costExporting" title="导入前请先保存或撤销页面成本修改" @click="openCostImport">导入成本表</ElButton></template>
-      </div></details>
+      </div>
     </div>
     <ElAlert v-if="rateError" :title="rateError" type="error" :closable="false" class="finance-gap" />
     <ElAlert v-if="error" :title="error" type="error" :closable="false" class="finance-gap" />

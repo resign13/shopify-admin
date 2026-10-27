@@ -63,7 +63,7 @@ async (page) => {
 
   await page.setViewportSize({width:390,height:844});
   const mobileRegistration=dialog.getByTestId('mobile-inventory-registration');
-  await mobileRegistration.getByRole('navigation',{name:'登记真实尺码',exact:true}).getByRole('button',{name:'M',exact:true}).click();
+  await mobileRegistration.getByRole('navigation',{name:'登记真实尺码',exact:true}).getByRole('button',{name:/(^|\/)M$/}).click();
   row=mobileRegistration.locator('.m-registration-card').filter({has:page.getByRole('spinbutton',{name:'次品 M',exact:true})});
   quota=row.getByRole('button',{name:'验货额度 M',exact:true});
   await row.waitFor();

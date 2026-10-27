@@ -8,11 +8,26 @@ async (page) => {
     await page.getByRole('textbox',{name:'图形验证码',exact:true}).fill('AB7CD');
     await page.getByRole('button',{name:'登录工作台',exact:true}).click();
     await page.waitForURL(url=>url.pathname==='/dashboard');
-    await page.getByRole('link',{name:'后台账号',exact:true}).click();
-    await page.getByRole('row').filter({hasText:'finance@gingtto.test'}).getByRole('button',{name:'编辑',exact:true}).click();
+  }
+  const phone=page.viewportSize().width<768;
+  if(new URL(page.url()).pathname!=='/admin-users'){
+    if(phone){
+      await page.getByRole('navigation',{name:'快捷导航'}).getByRole('button',{name:'全部',exact:true}).click();
+      await page.getByRole('dialog',{name:'全部模块',exact:true}).getByRole('link',{name:'后台账号',exact:true}).click();
+    }else await page.getByRole('link',{name:'后台账号',exact:true}).click();
+    await page.waitForURL(url=>url.pathname==='/admin-users');
   }
   const dialog=page.getByRole('dialog',{name:'编辑账号',exact:true});
-  if(await dialog.count()===0)await page.getByRole('row').filter({hasText:'finance@gingtto.test'}).getByRole('button',{name:'编辑',exact:true}).click();
+  const openFinance=async()=>{
+    if(phone)await page.locator('.mobile-account-card').filter({hasText:'finance@gingtto.test'}).locator('.mobile-account-main').click();
+    else await page.getByRole('row').filter({hasText:'finance@gingtto.test'}).getByRole('button',{name:'编辑',exact:true}).click();
+    await dialog.waitFor();
+  };
+  const expandPermissions=async()=>{
+    if(phone){const details=dialog.locator('.mobile-account-permissions');if(await details.getAttribute('open')===null)await details.locator('summary').click();}
+  };
+  if(!await dialog.isVisible())await openFinance();
+  await expandPermissions();
   const labels=['财务管理','经营工作台','商品管理','库存管理','商品分类','订单管理','合同管理','预售管理','商城账号','后台账号','操作日志'];
   for(const label of labels)assert(await dialog.getByRole('checkbox',{name:label,exact:true}).isEnabled(),'Disabled staff module: '+label);
   for(const label of labels)assert(await dialog.getByRole('checkbox',{name:label,exact:true}).isChecked()===['财务管理','合同管理'].includes(label),'Finance default: '+label);
@@ -28,12 +43,11 @@ async (page) => {
   const data=await saved.json();
   assert(data.user.role==='finance'&&data.user.permissions.includes('inventory')&&data.user.permissions.includes('contracts'),'Role preserved and extras saved');
   await dialog.waitFor({state:'hidden'});
-  await page.getByRole('row').filter({hasText:'finance@gingtto.test'}).getByRole('button',{name:'编辑',exact:true}).click();
+  await openFinance();await expandPermissions();
   assert(await dialog.getByRole('checkbox',{name:'库存管理',exact:true}).isChecked(),'Extra grant persisted');
-  await page.setViewportSize({width:1100,height:850});
   // Pointer actions wait for the drawer transition before its visual capture.
   await dialog.getByRole('textbox',{name:'*姓名',exact:true}).click();
   await page.screenshot({path:'output/playwright/department-finance-permissions.png'});
   await dialog.getByRole('button',{name:'取消',exact:true}).click();
-  return {staffModuleCheckboxesEnabled:true,financeDefaultsOnly:true,restoreDefaults:true,extraGrantSavedAndPersisted:true,roleUnchanged:true};
+  return {phoneNavigationAndEditor:phone,staffModuleCheckboxesEnabled:true,financeDefaultsOnly:true,restoreDefaults:true,extraGrantSavedAndPersisted:true,roleUnchanged:true};
 }
