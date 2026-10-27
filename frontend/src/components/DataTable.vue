@@ -1,8 +1,8 @@
 <template>
-  <div ref="container" class="data-toolbar">
+  <div ref="container" class="data-toolbar" :class="{ 'mobile-toolbar-hidden': isPhone && !mobileTools }">
     <span>{{ total }} 条记录</span>
     <div>
-      <MobileActionMenu v-if="$slots.toolbar" label="列表操作"><slot name="toolbar" /></MobileActionMenu><ElPopover trigger="click" width="200"
+      <MobileActionMenu v-if="$slots.toolbar" label="列表操作"><slot name="toolbar" /></MobileActionMenu><ElPopover v-if="!isPhone" trigger="click" width="200"
         ><template #reference><ElButton>显示列</ElButton></template
         ><ElCheckboxGroup v-model="visible"
           ><ElCheckbox
@@ -25,6 +25,9 @@
     :data="rows"
     row-key="id"
     :expand-row-keys="expandedKeys"
+    :mobile-selection="mobileSelection"
+    :mobile-actions="mobileActions"
+    :mobile-tools="mobileTools"
     @expand-change="(row, rows) => $emit('expand-change', row, rows)"
     size="small"
     empty-text="暂无符合条件的数据"
@@ -78,6 +81,8 @@ import AdaptiveTable from "./AdaptiveTable";
 import MobileActionMenu from "./MobileActionMenu.vue";
 import { computed, ref, watch, onMounted, onBeforeUnmount } from "vue";
 import { useAdminAuthStore } from "../stores/auth";
+import { useResponsive } from '../composables/responsive';
+const { isPhone } = useResponsive();
 const props = defineProps({
   rows: Array,
   columns: Array,
@@ -91,6 +96,9 @@ const props = defineProps({
   expandable: Boolean,
   expandedKeys: Array,
   storageKey: String,
+  mobileSelection: { type: Boolean, default: true },
+  mobileActions: { type: Boolean, default: true },
+  mobileTools: { type: Boolean, default: true },
 });
 defineEmits(["expand-change", "retry", "sort-change", "selection-change", "page", "page-size"]);
 const key = `gingtto-table:${useAdminAuthStore().user?.id}:${props.storageKey}`;

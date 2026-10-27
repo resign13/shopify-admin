@@ -1,7 +1,7 @@
 <template>
   <div class="workspace" :class="{ 'is-collapsed': collapsed, 'mobile-menu-open': menuOpen }">
-    <button v-if="isCompact && menuOpen" class="navigation-mask" aria-label="关闭导航" @click="menuOpen = false" />
-    <aside class="workspace-sidebar" :inert="isCompact && !menuOpen" :aria-hidden="isCompact && !menuOpen" aria-label="模块导航" @keydown.esc="menuOpen = false">
+    <button v-if="isCompact && !isPhone && menuOpen" class="navigation-mask" aria-label="关闭导航" @click="menuOpen = false" />
+    <aside v-if="!isPhone" class="workspace-sidebar" :inert="isCompact && !menuOpen" :aria-hidden="isCompact && !menuOpen" aria-label="模块导航" @keydown.esc="menuOpen = false">
       <RouterLink to="/" class="brand"
         ><span class="brand-symbol">G</span
         ><span v-if="!collapsed || isCompact"
@@ -35,9 +35,9 @@
             :aria-label="isCompact ? (menuOpen ? '关闭导航' : '展开导航') : collapsed ? '展开导航' : '收起导航'"
             :aria-expanded="isCompact ? menuOpen : !collapsed"
             @click="toggle"
-            ><ElIcon
+            ><span v-if="isPhone" class="mobile-brand-symbol">G</span><ElIcon v-else
               ><Expand v-if="collapsed" /><Fold v-else /></ElIcon></ElButton
-          ><span class="mobile-brand">GINGTTO<span>工作台</span></span><span class="topbar-breadcrumb"
+          ><span class="mobile-brand">GINGTTO<span>BUSINESS CONSOLE</span></span><span class="topbar-breadcrumb"
             ><span class="desktop-breadcrumb">管理工作台 /</span>
             <strong>{{ route.meta.title }}</strong></span
           >
@@ -62,6 +62,18 @@
       </header>
       <main class="workspace-content"><RouterView :key="auth.user?.id" /></main>
     </div>
+    <nav v-if="isPhone" class="mobile-bottom-nav" aria-label="快捷导航">
+      <RouterLink v-for="item in mobileNavigation" :key="item.to" :to="item.to" :class="{ 'is-active': route.path.startsWith(item.to) }" @click="menuOpen = false">
+        <ElIcon><component :is="item.icon" /></ElIcon><span>{{ item.label }}</span>
+      </RouterLink>
+      <button :class="{ 'is-active': menuOpen || !mobileNavigation.some(item => route.path.startsWith(item.to)) }" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><ElIcon><Grid /></ElIcon><span>全部</span></button>
+    </nav>
+    <ElDrawer v-if="isPhone" v-model="menuOpen" title="全部模块" direction="btt" size="auto" append-to-body class="mobile-module-drawer">
+      <section v-for="group in groups" :key="group.label" class="mobile-module-group">
+        <h2>{{ group.label }}</h2>
+        <div><RouterLink v-for="item in group.items" :key="item.to" :to="item.to" @click="menuOpen = false"><ElIcon><component :is="item.icon" /></ElIcon><span>{{ item.label }}</span><ElIcon><ArrowRight /></ElIcon></RouterLink></div>
+      </section>
+    </ElDrawer>
   </div>
 </template>
 <script setup>
@@ -85,6 +97,8 @@ import {
   Fold,
   ArrowDown,
   Bell,
+  Grid,
+  ArrowRight,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { useAdminAuthStore } from "../stores/auth";
@@ -92,7 +106,7 @@ import { roleNames } from "../composables/workbench";
 const auth = useAdminAuthStore(),
   route = useRoute(),
   router = useRouter();
-const { isCompact } = useResponsive();
+const { isCompact, isPhone } = useResponsive();
 const menuOpen = ref(false), voiceOpen = ref(false);
 watch(() => route.path, () => { menuOpen.value = false; voiceOpen.value = false; });
 watch(isCompact, () => { menuOpen.value = false; });
@@ -159,6 +173,12 @@ const groups = computed(() =>
     }))
     .filter((g) => g.items.length),
 );
+const mobileNavigation = computed(() => [
+  { to: '/dashboard', label: '经营', icon: DataAnalysis },
+  { to: '/orders', label: '订单', icon: Document },
+  { to: '/inventory', label: '库存', icon: Box },
+  { to: '/finance', label: '财务', icon: Collection },
+].filter(item => auth.can(routeModule(item.to))));
 async function logout() {
   await auth.logout();
   router.push("/login");

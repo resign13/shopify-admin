@@ -1,0 +1,5 @@
+Noto Sans SC variable font
+Source: https://github.com/google/fonts/tree/main/ofl/notosanssc
+Font: https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf
+License: SIL Open Font License 1.1; see OFL-NotoSansSC.txt
+WOFF2 is a lossless webfont conversion of the source variable TTF.

@@ -1,6 +1,8 @@
 <template>
   <PageHeader
     title="经营工作台"
+    mobile-title="经营"
+    mobile-description="让日常经营，心中有数"
     :description="personalScope ? '查看对应业务员的订单、销量与经营表现。' : '从经营表现到日常业务，一站掌握全局。'"
     eyebrow="OVERVIEW / 经营概览"
     ><span class="muted">更新于 {{ dateTime(data?.updatedAt) }}</span
@@ -8,7 +10,11 @@
       >刷新数据</ElButton
     ></PageHeader
   >
-  <section class="panel">
+  <div v-if="isPhone" class="mobile-dashboard-range">
+    <div><button v-for="item in [['1','今天'],['7','近7天'],['30','近30天']]" :key="item[0]" :class="{active: preset === item[0]}" @click="setPreset(item[0])">{{ item[1] }}</button><button :class="{active:preset === 'custom'}" @click="mobileFilterOpen = true">自定义</button></div>
+    <button class="mobile-dashboard-filter" aria-label="经营筛选" @click="mobileFilterOpen = true"><ElIcon><Filter /></ElIcon></button>
+  </div>
+  <section v-if="!isPhone" class="panel">
     <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
       <ElRadioGroup v-model="preset" @change="setPreset"
         ><ElRadioButton value="1">今天</ElRadioButton
@@ -51,6 +57,15 @@
       }}<span v-if="hasDraftGlobal">；筛选已更改，点击查询应用</span>
     </p>
   </section>
+  <ElDrawer v-if="isPhone" v-model="mobileFilterOpen" title="经营筛选" class="mobile-dashboard-filter-drawer">
+    <ElForm label-position="top" @submit.prevent="applyMobileFilters">
+      <ElFormItem label="统计日期"><ElDatePicker v-model="dates" type="daterange" value-format="YYYY-MM-DD" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @change="preset = 'custom'" /></ElFormItem>
+      <ElFormItem label="国家"><ElSelect v-model="country" clearable filterable placeholder="全部国家"><ElOption v-for="item in data?.filters.countries" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
+      <ElFormItem label="款号"><ElSelect v-model="style" clearable filterable placeholder="全部款号"><ElOption v-for="item in data?.filters.styles" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
+      <ElFormItem v-if="auth.isSuperAdmin" label="业务员"><ElSelect v-model="salespersonId" clearable filterable placeholder="全公司业务员"><ElOption label="未分配订单" value="unassigned"/><ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name"/></ElSelect></ElFormItem>
+    </ElForm>
+    <template #footer><ElButton @click="mobileFilterOpen=false">取消</ElButton><ElButton type="primary" :loading="loading" @click="applyMobileFilters">应用筛选</ElButton></template>
+  </ElDrawer>
   <ElAlert v-if="error" :title="error" type="error" :closable="false" show-icon
     ><ElButton link type="primary" @click="load(false, false)"
       >重新加载</ElButton
@@ -63,7 +78,12 @@
     class="dashboard-content"
     :aria-busy="loading"
   >
-    <div class="metric-grid">
+    <div v-if="isPhone" class="mobile-dashboard-summary">
+      <article class="mobile-dashboard-hero"><div><span>商品销售额 <small>USD</small></span><span class="mobile-dashboard-scope">{{ scopeLabel }}</span></div><strong>{{ money(data.metrics.amount) }}</strong><p><span>{{ changeText('amount') }}</span>较上一等长周期 · 不含运费</p></article>
+      <div class="mobile-dashboard-kpis"><article v-for="item in metrics.filter(m => ['orders','units','customers'].includes(m.key))" :key="item.key"><small>{{ {orders:'有效订单',units:'销售件数',customers:'下单客户'}[item.key] }}</small><strong>{{ number(data.metrics[item.key]) }}</strong><span>{{ changeText(item.key) }}</span></article></div>
+      <details class="mobile-dashboard-additional"><summary>平均每单与统计范围 <span>＋</span></summary><p>平均每单 {{ money(data.metrics.average) }} · {{ appliedRange }} · {{ appliedGlobal.country || '全部国家' }} · {{ appliedGlobal.style || '全部款号' }}</p></details>
+    </div>
+    <div v-else class="metric-grid">
       <article v-for="metric in metrics" :key="metric.key" class="metric">
         <span>{{ metric.label }}</span
         ><strong>{{
@@ -84,7 +104,7 @@
       </article>
     </div>
     <div class="dashboard-grid">
-      <section class="panel">
+      <section class="panel mobile-dashboard-trend">
         <div class="panel-title">
           <div>
             <h2>经营趋势</h2>
@@ -99,7 +119,8 @@
         </div>
         <TrendChart :points="data.trend" :metric="trendMetric" />
       </section>
-      <section class="panel">
+      <section v-if="isPhone" class="mobile-dashboard-status"><div class="mobile-section-title"><h2>订单状态</h2><RouterLink to="/orders">查看订单 →</RouterLink></div><div><RouterLink v-for="(label,status) in statusNames" :key="status" :to="{path:'/orders',query:{status,...appliedGlobal}}"><span>{{ label }}</span><strong>{{ number(data.statusCounts[status]) }}</strong></RouterLink></div></section>
+      <section v-if="!isPhone" class="panel">
         <div class="panel-title">
           <h2>订单状态</h2>
           <small>当前筛选</small>
@@ -157,6 +178,7 @@
           <small>{{ stylePersonalScope ? '按款号汇总对应业务员的订单，展开查看颜色 SKU 和真实尺码销量。' : '按款号汇总颜色 SKU，展开查看每个真实尺码的销量与库存。' }}</small>
         </div>
         <div class="inline-actions">
+          <ElButton v-if="isPhone" link @click="mobileStyleFilters = !mobileStyleFilters">筛选与排序</ElButton>
           <ElRadioGroup
             v-model="velocityWindow"
             size="small"
@@ -173,7 +195,7 @@
           >
         </div>
       </div>
-      <ResponsiveFilters class="style-performance-filters" @submit="loadStylePerformance(true)">
+      <ResponsiveFilters v-show="!isPhone || mobileStyleFilters" class="style-performance-filters" @submit="loadStylePerformance(true)">
         <ElInput
           v-model="styleKeyword"
           clearable
@@ -275,7 +297,8 @@
         :aria-busy="stylePerformanceLoading"
       >
         <template v-if="stylePerformance.items">
-          <div class="style-summary-grid">
+          <button v-if="isPhone" class="mobile-style-summary-toggle" @click="mobileStyleSummary = !mobileStyleSummary">{{ number(stylePerformance.summary?.styleCount) }} 个款号 · {{ number(stylePerformance.summary?.units) }} 件<span>{{ mobileStyleSummary ? '收起汇总 −' : '汇总 ＋' }}</span></button>
+          <div v-show="!isPhone || mobileStyleSummary" class="style-summary-grid">
             <div>
               <span>款号</span
               ><strong>{{
@@ -330,7 +353,10 @@
             row-key="styleCode"
             size="small"
             class="style-performance-table"
+            :mobile-tools="false"
+            :mobile-actions="false"
           >
+            <template v-if="isPhone" #mobile-card="{row,index}"><button class="mobile-performing-row" @click="openStyle(row)"><span class="mobile-performing-rank">{{ String(index+1+(stylePage-1)*stylePageSize).padStart(2,'0') }}</span><span><strong>{{ row.styleCode }}</strong><small>{{ row.colorSkuCount }} 个颜色 SKU<span v-if="!stylePersonalScope"> · {{ riskName(row.risk) }}</span></small></span><span><strong>{{ money(row.amount) }}</strong><small>{{ number(row.units) }} 件</small></span><ElIcon><ArrowRight/></ElIcon></button></template>
             <ElTableColumn label="款号 / 商品" min-width="180" fixed="left">
               <template #default="{ row }"
                 ><button
@@ -579,17 +605,17 @@
         </template>
       </ElDrawer>
     </section>
-    <section class="panel country-panel">
+    <section class="panel country-panel" :class="{'mobile-dashboard-collapsible':isPhone}">
       <div class="panel-title">
         <h2>国家分布</h2>
-        <small>订单数 / 商品金额</small>
+        <button v-if="isPhone" @click="mobileCountries = !mobileCountries">{{ mobileCountries ? '收起 −' : '展开 ＋' }}</button><small v-else>订单数 / 商品金额</small>
       </div>
       <ElEmpty
         v-if="!data.countries.length"
         description="暂无国家数据"
         :image-size="70"
       />
-      <div class="country-grid">
+      <div v-show="!isPhone || mobileCountries" class="country-grid">
         <div
           v-for="item in data.countries"
           :key="item.country"
@@ -608,9 +634,9 @@
     <section v-if="!personalScope" class="panel">
       <div class="panel-title">
         <h2>当前业务快照</h2>
-        <ElTag type="info">当前全库 · 不受上方筛选影响</ElTag>
+        <button v-if="isPhone" @click="mobileSnapshot = !mobileSnapshot">{{ mobileSnapshot ? '收起 −' : '展开 ＋' }}</button><ElTag v-else type="info">当前全库 · 不受上方筛选影响</ElTag>
       </div>
-      <div class="snapshot-grid">
+      <div v-show="!isPhone || mobileSnapshot" class="snapshot-grid">
         <div>
           <span>待付款订单</span
           ><strong>{{ data.snapshot.statuses.pending_payment || 0 }}</strong>
@@ -651,8 +677,8 @@
         <h2>最近订单</h2>
         <RouterLink class="small-note" to="/orders">查看全部订单 →</RouterLink>
       </div>
-      <AdaptiveTable :data="data.recentOrders"
-        ><ElTableColumn label="订单号"
+      <AdaptiveTable :data="data.recentOrders" :mobile-tools="false"
+        ><template v-if="isPhone" #mobile-card="{row}"><RouterLink class="mobile-dashboard-order" :to="{path:'/orders',query:{orderId:row.id}}"><span class="mobile-dashboard-initial">{{ (row.userName || '客').slice(0,1) }}</span><span><strong>{{ row.orderNo }}</strong><small>{{ row.userName }} · {{ row.country }}</small></span><ElTag type="info">{{ statusNames[row.status] }}</ElTag></RouterLink></template><ElTableColumn label="订单号"
           ><template #default="{ row }"
             ><RouterLink
               :to="{ path: '/orders', query: { orderId: row.id } }"
@@ -682,8 +708,11 @@
 </template>
 <script setup>
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import { Filter, ArrowRight } from '@element-plus/icons-vue';
 import { useResponsive } from '../composables/responsive';
 const { isPhone } = useResponsive();
+const mobileFilterOpen = ref(false), mobileStyleFilters = ref(false), mobileStyleSummary = ref(false), mobileCountries = ref(false), mobileSnapshot = ref(false);
+function applyMobileFilters() { mobileFilterOpen.value = false; load(true); }
 import AdaptiveTable from "../components/AdaptiveTable";
 import {
   computed,

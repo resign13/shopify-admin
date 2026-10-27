@@ -1,9 +1,11 @@
 <template>
   <PageHeader
     title="库存管理"
+    mobile-title="库存"
+    :mobile-description="`${list.total} 个颜色 SKU · 按真实尺码管理`"
     description="商品按分类顺序展示，采购入库与独立临时入库分开登记，清晰掌握尺码到货进度。"
     eyebrow="INVENTORY / 商品与库存"
-    ><template v-if="canEdit"
+    ><template v-if="isPhone"><MobileActionMenu :label="canEdit ? '库存操作' : '库存排序'"><ElButton v-if="canEdit" @click="mobileSelection = !mobileSelection; clearSelection()">{{ mobileSelection ? '退出选择模式' : '批量入库 / 打回' }}</ElButton><ElButton v-if="canEdit" :loading="exporting" @click="exportFile">导出库存</ElButton><ElButton v-if="canEdit" :loading="importing" @click="input.click()">导入库存</ElButton><ElButton @click="list.sort({prop:'stock',order:'descending'})">现货余额降序</ElButton><ElButton @click="list.sort({prop:'stock',order:'ascending'})">现货余额升序</ElButton><ElButton @click="list.sort({prop:'category',order:'ascending'})">默认分类顺序</ElButton></MobileActionMenu><input v-if="canEdit" ref="input" type="file" accept=".xlsx" hidden @change="previewFile"/></template><template v-else><template v-if="canEdit"
       ><ElButton :loading="exporting" @click="exportFile">导出库存</ElButton
       ><ElButton type="primary" :loading="importing" @click="input.click()"
         >导入库存</ElButton
@@ -13,8 +15,9 @@
         accept=".xlsx"
         hidden
         @change="previewFile" /></template
-  ></PageHeader>
-  <div
+  ></template></PageHeader>
+  <div v-if="isPhone" class="m-stock-summary"><div><span>现货余额</span><strong>{{ Number(list.summary.stock || 0).toLocaleString() }}<small>件</small></strong></div><div><span>{{ canEdit ? '欠货待处理' : '零库存尺码' }}</span><strong class="is-amber">{{ canEdit ? list.summary.shortageUnits || 0 : list.summary.zeroSizes || 0 }}<small>{{ canEdit ? '件' : '个' }}</small></strong></div></div>
+  <div v-else
     class="metric-grid inventory-overview"
     :class="{'is-expanded': summaryExpanded}"
     :style="{ gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))' }"
@@ -50,13 +53,14 @@
       <span>临时待入库合计</span><strong>{{ list.summary.temporaryInbound || 0 }}</strong>
     </div>
   </div>
-  <button class="mobile-summary-toggle" :aria-expanded="summaryExpanded" @click="summaryExpanded = !summaryExpanded">{{ summaryExpanded ? '收起库存概览' : '查看全部库存阶段' }} <span aria-hidden="true">{{ summaryExpanded ? '−' : '+' }}</span></button>
+  <button v-if="isPhone" class="mobile-summary-toggle" :aria-expanded="summaryExpanded" @click="summaryExpanded = !summaryExpanded">{{ summaryExpanded ? '收起库存概览' : '查看全部库存阶段' }} <span aria-hidden="true">{{ summaryExpanded ? '−' : '+' }}</span></button>
+  <section v-if="isPhone && summaryExpanded" class="m-stock-extra-summary"><span v-for="field in (canEdit ? mobileStageFields : mobileStageFields.slice(0,1))" :key="field.key">{{ field.label }}<b>{{ field.key === 'stock' ? list.summary.stock || 0 : list.summary[field.key] || 0 }}</b></span></section>
   <section class="panel">
     <ResponsiveFilters :active="list.query" @remove="key => { filters[key] = ''; apply(); }" @submit.prevent="apply">
       <ElInput
         v-model="filters.keyword"
         clearable
-        placeholder="商品名、款式、SKU、颜色"
+        :placeholder="isPhone ? 'SKU、款号或颜色' : '商品名、款式、SKU、颜色'"
       /><ElSelect v-model="filters.category" clearable placeholder="全部分类"
         ><ElOption
           v-for="c in categories"
@@ -67,7 +71,10 @@
       ><ElButton @click="reset">重置</ElButton
       ><span class="small-note">汇总和导出覆盖全部筛选结果</span>
     </ResponsiveFilters>
+    <div v-if="isPhone" class="m-stock-stage"><ElSelect v-model="mobileStage" aria-label="查看库存阶段"><ElOption v-for="field in (canEdit ? mobileStageFields : mobileStageFields.slice(0,1))" :key="field.key" :value="field.key" :label="field.label"/></ElSelect><span>{{ mobileSelection ? '选择商品后统一处理' : '当前尺码余额' }}</span></div>
+    <div v-if="isPhone && mobileSelection && canEdit" class="m-stock-batch" data-testid="mobile-inventory-selection"><strong>已选 {{ selectedRows.length }} 个</strong><ElButton text @click="inventoryTable.selectCurrentPage()">本页全选</ElButton><ElButton text @click="mobileSelection=false;clearSelection()">完成</ElButton><MobileActionMenu label="批量处理"><ElButton :disabled="!selectedRows.length || receiving || preparingBatch" @click="prepareSelectedReceipt('normal')">合格一键入库</ElButton><ElButton :disabled="!selectedRows.length || receiving || preparingBatch" @click="prepareSelectedReceipt('defective')">次品一键打回</ElButton><ElButton :disabled="!selectedRows.length || receiving || preparingBatch" @click="prepareSelectedReceipt('temporary')">临时入库</ElButton><ElButton @click="clearSelection">清空选择</ElButton></MobileActionMenu></div>
     <DataTable
+      :mobile-selection="false" :mobile-actions="false" :mobile-tools="false"
       ref="inventoryTable"
       expandable
       :selectable="canEdit"
@@ -87,7 +94,7 @@
       @sort-change="list.sort"
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
-      ><template #toolbar
+      ><template #mobile-card="{row,selected:rowSelected,toggleSelection}"><article v-if="isPhone" class="m-stock-card" :class="{'is-selected':mobileSelection && rowSelected}"><button class="m-stock-head" @click="mobileSelection ? toggleSelection() : canEdit ? edit(row) : inventoryTable.toggleExpansion(row)"><span v-if="mobileSelection" class="m-stock-check">{{ rowSelected ? '✓' : '' }}</span><ProductImage v-else :src="row.image" :alt="productName(row)"/><span class="m-stock-copy"><strong>{{ row.sku }}</strong><small>{{ shortName(row) }}</small></span><strong class="m-stock-total">{{ total(row,mobileStage) }}<small>件</small></strong></button><div class="m-stock-sizes"><button v-for="size in row.sizePrices" :key="size.sizeCode" :class="{'is-negative':size[mobileStage] < 0}" @click="mobileSelection ? toggleSelection() : canEdit ? edit(row,size.sizeCode) : inventoryTable.toggleExpansion(row)"><span>{{ inventorySizeLabel(size.sizeCode) }}</span><b>{{ size[mobileStage] || 0 }}</b></button></div><div class="m-stock-foot"><span :class="{'is-negative':canEdit && row.shortageUnits}">{{ canEdit && row.shortageUnits ? `欠货 ${row.shortageUnits} 件 · ${row.shortageSizeCount} 个尺码` : `${row.sizePrices.length} 个真实尺码 · ${row.categoryLabel}` }}</span><ElButton v-if="canEdit && !mobileSelection" text @click="edit(row)">登记</ElButton></div></article></template><template #toolbar
         ><template v-if="canEdit"><span class="small-note">已勾选 {{ selectedRows.length }} 个商品</span>
           <ElButton :disabled="list.loading || !list.rows.length || receiving || preparingBatch" @click="inventoryTable.selectCurrentPage()">全部勾选</ElButton>
           <ElButton :disabled="!selectedRows.length || receiving || preparingBatch" @click="clearSelection">清空勾选</ElButton>
@@ -168,7 +175,7 @@
   </section>
   <ElDrawer
     v-model="editing"
-    title="登记库存与到货进度"
+    :title="isPhone ? '登记库存' : '登记库存与到货进度'"
     size="min(1140px, 96vw)"
     :before-close="close"
     class="inventory-registration"
@@ -195,7 +202,8 @@
           </div>
         </ElPopover>
       </div>
-      <AdaptiveTable :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
+      <div v-if="isPhone" class="m-registration" data-testid="mobile-inventory-registration"><nav class="m-registration-sizes" aria-label="登记真实尺码"><button v-for="row in draft" :key="row.sizeCode" :class="{active:mobileRegistrationRow?.sizeCode === row.sizeCode,changed:registrationRowChanged(row)}" @click="registrationSize=row.sizeCode">{{ inventorySizeLabel(row.sizeCode) }}</button></nav><section v-if="mobileRegistrationRow" class="m-registration-card"><div class="m-registration-title"><strong>{{ inventorySizeLabel(mobileRegistrationRow.sizeCode) }} · 登记数量</strong><InventoryInspectionAllowance :row="mobileRegistrationRow"/></div><div class="m-registration-grid"><label v-for="field in mobileStageFields" :key="field.key"><span>{{ field.label }}</span><ElInputNumber :model-value="mobileRegistrationRow[field.key]" :min="field.key === 'stock' ? -2147483648 : 0" :max="2147483647" :precision="0" :controls="false" :aria-label="`${field.label} ${mobileRegistrationRow.sizeCode}`" @update:model-value="value => setMobileRegistration(field.key,value)"/><InventoryQuantityChange :value="mobileRegistrationRow[field.key]" :original="mobileRegistrationRow[field.original]"/></label></div></section></div>
+      <AdaptiveTable v-else :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
         ><ElTableColumn
           prop="sizeCode"
           label="真实尺码"
@@ -270,7 +278,7 @@
         </p>
         <ElButton @click="adoptLatest">使用最新数据重新编辑</ElButton>
       </div>
-      <section class="inventory-history">
+      <details v-if="isPhone" class="m-registration-history"><summary>登记操作记录 <small>{{ operationHistory.total }} 次</small></summary>      <section class="inventory-history">
         <div class="panel-title">
           <strong>登记操作记录</strong>
           <span class="small-note">每次成功保存或打回记为一次操作 · 最新记录在前 · 每页 10 条</span>
@@ -296,7 +304,33 @@
           </template></ElTableColumn>
         </AdaptiveTable>
         <ElPagination v-model:current-page="operationHistory.page" :page-size="10" :total="operationHistory.total" layout="total,prev,pager,next" class="section-gap" />
-      </section></template
+      </section></details><template v-else>      <section class="inventory-history">
+        <div class="panel-title">
+          <strong>登记操作记录</strong>
+          <span class="small-note">每次成功保存或打回记为一次操作 · 最新记录在前 · 每页 10 条</span>
+        </div>
+        <ElAlert v-if="operationHistory.error" :title="operationHistory.error" type="error" :closable="false">
+          <ElButton link type="primary" @click="loadOperations">重新加载记录</ElButton>
+        </ElAlert>
+        <AdaptiveTable v-loading="operationHistory.loading" :data="operationHistory.items" row-key="id" empty-text="暂无登记操作记录">
+          <ElTableColumn label="操作时间" width="165"><template #default="{ row }">{{ dateTime(row.occurredAt) }}</template></ElTableColumn>
+          <ElTableColumn label="操作人" width="110"><template #default="{ row }">
+            {{ row.actor.name || '未知操作人' }}<small class="history-role">{{ roleNames[row.actor.role] || row.actor.role }}</small>
+          </template></ElTableColumn>
+          <ElTableColumn label="登记数量 / 变化明细" min-width="400"><template #default="{ row }">
+            <div v-for="change in row.changes" :key="change.sizeCode" class="history-size">
+              <ElTag v-if="change.operation === 'defective_return'" type="danger">次品打回</ElTag>
+              <strong>{{ inventorySizeLabel(change.sizeCode) }}</strong>
+              <span v-for="field in change.fields" :key="field.field" class="history-field">
+                {{ inventoryFieldLabels[field.field] || field.field }} {{ field.before }} → {{ field.after }}
+                <b :class="field.delta < 0 ? 'negative' : 'positive'">（{{ delta(field.after, field.before) }}）</b>
+              </span>
+            </div>
+            <span v-if="!row.changes.length" class="small-note">本次保存数量未变化</span>
+          </template></ElTableColumn>
+        </AdaptiveTable>
+        <ElPagination v-model:current-page="operationHistory.page" :page-size="10" :total="operationHistory.total" layout="total,prev,pager,next" class="section-gap" />
+      </section></template></template
     ><template #footer
       ><div class="registration-footer"><span class="registration-save-note">{{ changedSizeCount ? `已调整 ${changedSizeCount} 个尺码，尚未保存` : '尚未修改数量' }}</span><div class="registration-footer__actions"><ElButton :disabled="saving" @click="close()">取消</ElButton
       ><ElButton
@@ -482,6 +516,8 @@
   >
 </template>
 <script setup>
+import MobileActionMenu from "../components/MobileActionMenu.vue";
+import { useResponsive } from "../composables/responsive";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
@@ -510,6 +546,11 @@ import {
   dateTime,
   roleNames,
 } from "../composables/workbench";
+const { isPhone } = useResponsive();
+const mobileSelection = ref(false), mobileStage = ref('stock'), registrationSize = ref('');
+const mobileStageFields = [{key:'stock',label:'现货余额',original:'originalStock'},{key:'contractPending',label:'合同未送',original:'originalPending'},{key:'pendingInspection',label:'待验货',original:'originalInspection'},{key:'defectivePending',label:'次品',original:'originalDefective'},{key:'pendingInbound',label:'合格',original:'originalInbound'},{key:'temporaryInbound',label:'临时待入库',original:'originalTemporary'}];
+const mobileRegistrationRow = computed(() => draft.value.find(row=>row.sizeCode === registrationSize.value) || draft.value[0]);
+function setMobileRegistration(key,value){const row=mobileRegistrationRow.value;if(!row)return;if(key==='pendingInspection')return moveStage(row,'inspection',value);if(key==='pendingInbound')return moveStage(row,'inbound',value);row[key]=value;}
 const auth = useAdminAuthStore(),
   summaryExpanded = ref(false),
   canEdit = computed(() => auth.userRole !== "customer"),
@@ -634,10 +675,11 @@ function populate(item) {
   conflict.value = false;
   latest.value = null;
 }
-async function edit(row) {
+async function edit(row, sizeCode) {
   try {
     populate((await api(`inventory/${row.id}`)).product);
     Object.assign(operationHistory, { items: [], total: 0, page: 1, error: '' });
+    registrationSize.value = typeof sizeCode === "string" ? sizeCode : draft.value[0]?.sizeCode || "";
     editing.value = true;
   } catch (e) {
     notifyError(e);
@@ -715,6 +757,13 @@ async function submit() {
       ),
       defectivePendingBySize: Object.fromEntries(draft.value.filter((s) => s.defectivePending !== s.originalDefective).map((s) => [s.sizeCode, s.defectivePending])),
       temporaryInboundBySize: Object.fromEntries(draft.value.filter((s) => s.temporaryInbound !== s.originalTemporary).map((s) => [s.sizeCode, s.temporaryInbound])),
+      // A phone user may arrive then qualify the same quantity, leaving inspection
+      // equal to its original value. Send both final procurement targets so the
+      // server does not infer a different inspection balance from a partial map.
+      ...(isPhone.value ? {
+        pendingInspectionBySize: Object.fromEntries(draft.value.map(s => [s.sizeCode, s.pendingInspection])),
+        pendingInboundBySize: Object.fromEntries(draft.value.map(s => [s.sizeCode, s.pendingInbound])),
+      } : {}),
     });
     markClean();
     editing.value = false;
@@ -1015,5 +1064,13 @@ onMounted(async () => {
 }
 .stock-line.inbound b {
   color: #b45309;
+}
+</style>
+
+<style scoped>
+@media(max-width:767px){
+.m-stock-summary{display:grid;grid-template-columns:1fr 1fr;padding:0 3px 19px;gap:30px}.m-stock-summary span{display:block;color:#9aa7b9;font-size:11px;margin-bottom:8px}.m-stock-summary strong{font-size:28px;font-weight:700;color:#182b49;letter-spacing:-.7px}.m-stock-summary small{font-size:10px;font-weight:400;margin-left:5px;color:#a4afbe}.m-stock-summary .is-amber{color:#c29664}.m-stock-extra-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:15px;color:#9aa8bb;font-size:10px}.m-stock-extra-summary b{display:block;font-size:15px;color:#586f8e;margin-top:3px}.m-stock-stage{display:flex;align-items:center;justify-content:space-between;font-size:10px;color:#a3afbf;padding:1px 2px 12px}.m-stock-stage :deep(.el-select){width:126px}.m-stock-stage :deep(.el-select__wrapper){box-shadow:none;background:none;padding-left:0;font-size:12px;color:#546f94}
+.m-stock-card{background:white;border:1px solid #e9eef6;border-radius:18px;padding:16px;box-sizing:border-box}.m-stock-card.is-selected{border-color:#9ebcf0;background:#f8fbff}.m-stock-head{border:0;background:none;width:100%;padding:0;display:flex;align-items:center;gap:11px;text-align:left;color:#182b49}.m-stock-head :deep(img){width:43px;height:52px;object-fit:contain;border-radius:9px}.m-stock-copy{flex:1;min-width:0}.m-stock-copy strong{font-size:12px;overflow-wrap:anywhere}.m-stock-copy small{display:block;font-size:10px;color:#9dabbe;margin-top:5px}.m-stock-total{font-size:21px;font-weight:650;white-space:nowrap}.m-stock-total small{display:block;font-size:9px;text-align:right;font-weight:400;color:#a4afbe}.m-stock-sizes{display:flex;gap:7px;margin-top:17px;overflow:auto}.m-stock-sizes button{flex:1;min-width:46px;min-height:57px;border:0;border-radius:10px;background:#f5f8fc;color:#5b7498;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px}.m-stock-sizes span{font-size:9px;color:#a4afc0;overflow-wrap:anywhere}.m-stock-sizes b{font-size:14px;font-weight:550}.m-stock-sizes .is-negative{background:#fff4eb;color:#c08e5f}.m-stock-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px;font-size:9px;color:#a4afbf;gap:7px}.m-stock-foot :deep(.el-button){font-size:11px;min-height:38px;padding:0 2px}.m-stock-foot .is-negative{color:#c29664}.m-stock-check{width:21px;height:21px;display:grid;place-items:center;border-radius:6px;border:1px solid #c6d5ed;color:#2f69eb;flex:none}.m-stock-batch{position:sticky;bottom:75px;z-index:12;display:flex;align-items:center;justify-content:space-between;background:white;border:1px solid #e3ebf7;border-radius:15px;padding:9px;gap:4px;margin-bottom:13px;box-shadow:0 5px 22px #243c6210}.m-stock-batch strong{font-size:11px}.m-stock-batch :deep(.el-button){font-size:11px;margin:0;min-height:38px}
+.registration-product{padding-bottom:13px}.registration-product h3{font-size:13px}.registration-product__meta{font-size:10px}.registration-guide{font-size:10px;background:#f0f5fc;border:0}.registration-rule-trigger{font-size:10px}.m-registration-sizes{display:flex;gap:7px;overflow:auto;padding:4px 0 16px}.m-registration-sizes button{position:relative;border:1px solid #e0e8f4;border-radius:12px;min-width:47px;min-height:44px;padding:9px 12px;color:#9aabc1;background:white;font-size:12px;flex:none}.m-registration-sizes button.active{background:#2f69eb;color:white;border-color:#2f69eb}.m-registration-sizes button.changed:after{content:'';position:absolute;right:5px;top:5px;width:5px;height:5px;border-radius:50%;background:#e3b486}.m-registration-card{background:white;border:1px solid #e4ebf5;border-radius:18px;padding:17px}.m-registration-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:16px}.m-registration-title strong{font-size:12px;color:#465f82}.m-registration-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px 14px}.m-registration-grid>label{display:flex;flex-direction:column;min-width:0;gap:8px}.m-registration-grid>label>span{font-size:10px;color:#91a3bd}.m-registration-grid :deep(.el-input-number){width:100%}.m-registration-grid :deep(.el-input__wrapper){min-height:46px;border-radius:11px;background:#f8fbff;box-shadow:0 0 0 1px #e2eaf6 inset}.m-registration-grid :deep(input){font-size:16px;text-align:left}.m-registration-grid :deep(.quantity-change){font-size:10px}.m-registration-history{margin-top:18px}.m-registration-history>summary{font-size:12px;color:#6c84a5;min-height:44px;display:flex;align-items:center;justify-content:space-between}.m-registration-history small{font-size:10px;color:#a0aec2}.registration-footer{width:100%;flex-wrap:wrap}.registration-save-note{font-size:10px}.registration-footer__actions{width:100%;display:flex;gap:10px}.registration-footer__actions :deep(.el-button){flex:1;margin:0;min-height:44px;border-radius:12px}.registration-footer__actions :deep(.el-button--primary){flex:1.5}
 }
 </style>

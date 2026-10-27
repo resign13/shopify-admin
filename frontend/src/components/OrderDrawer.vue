@@ -1,10 +1,10 @@
 <template>
   <ElDrawer
     :model-value="open"
-    :title="order ? `订单详情 · ${order.orderNo}` : '订单详情'"
+    :title="isPhone ? '订单详情' : order ? `订单详情 · ${order.orderNo}` : '订单详情'"
     size="min(800px, 100vw)"
     :before-close="close"
-    ><div v-if="order" class="order-drawer-heading">
+    ><div v-if="order && !isPhone" class="order-drawer-heading">
       <OrderNumber :value="order.orderNo" :secondary="order.secondaryOrderNo" :warehouse-printed="order.warehousePrinted" expanded />
     </div><ElSkeleton v-if="loading && !order" :rows="10" animated />
     <ElAlert v-if="!order && !loading && error" :title="error" type="error" :closable="false"><ElButton text @click="refreshDetails">重试读取详情</ElButton></ElAlert>
@@ -17,6 +17,15 @@
         embedded
         @saved="detailsSaved"
       />
+      <section v-else-if="isPhone && !editing" class="m-order-detail" data-testid="mobile-order-detail">
+        <div class="m-detail-hero"><div><small>{{ order.orderNo }}</small><span class="m-detail-status">{{ statusNames[order.status] }}</span></div><strong>{{ warehouseStatusOnly ? `${order.itemCount} 件` : money(order.totalAmount) }}</strong><p>{{ order.itemCount }} 件<span v-if="!warehouseStatusOnly"> · 含运费 {{ money(order.shippingFee) }}</span><span v-if="order.warehousePrinted"> · 仓库已打单</span></p></div>
+        <section class="m-detail-card"><h3>客户</h3><div class="m-detail-customer"><span>{{ (order.contactName || order.userName || '客').slice(0,1) }}</span><div><strong>{{ order.contactName || order.userName }}</strong><small>{{ order.userName }} · {{ order.country }}</small></div></div><p class="m-detail-address">{{ order.shippingAddress }}</p></section>
+        <header class="m-detail-section-head"><h3>商品明细</h3><ElButton text type="primary" :loading="loading" @click="refreshDetails">刷新</ElButton></header>
+        <ElAlert v-if="stockRefreshError" :title="stockRefreshError" type="warning" :closable="false"/>
+        <section v-for="group in mobileGroups" :key="group.key" class="m-detail-card"><header><h3>{{ group.sku }}</h3><small>{{ group.quantity }} 件</small></header><div v-for="row in group.items" :key="row.productId + ':' + row.sizeCode" class="m-detail-item"><div><strong>{{ row.sizeCode }} <small>× {{ row.quantity }}</small></strong><VariantStockHint :stock="row.currentStock" :title="stockTitle(row)" :data-testid="`detail-stock-${row.productId}-${row.sizeCode}`"/></div><div><strong v-if="!warehouseStatusOnly">{{ money(row.unitPrice) }}</strong><small>{{ row.unitWeightGrams == null ? '净重未设置' : `${row.unitWeightGrams} g / 件` }}</small></div></div></section>
+        <section class="m-detail-card m-detail-folds"><details><summary>收货与订单资料<small>联系人 · 地址 · 副单号</small></summary><dl><div><dt>商城客户</dt><dd>{{ order.userName }}</dd></div><div><dt>联系人 / 电话</dt><dd>{{ order.contactName }} · {{ order.phone || order.userEmail }}</dd></div><div><dt>国家 / 地址</dt><dd>{{ order.country }} · {{ order.shippingAddress }}</dd></div><div><dt>副单号</dt><dd>{{ order.secondaryOrderNo || '未填写' }}</dd></div><div><dt>业务员</dt><dd>{{ order.ownerAdminName || '未分配' }}</dd></div><div><dt>下单时间</dt><dd>{{ dateTime(order.createdAt) }}</dd></div></dl></details><details><summary>物流与付款<small>{{ order.trackingNo || '未填写物流' }}</small></summary><dl><div><dt>物流单号</dt><dd>{{ order.trackingNo || '未填写' }}</dd></div><div v-if="!warehouseStatusOnly"><dt>付款链接</dt><dd>{{ order.paymentLink || '未填写' }}</dd></div><div v-if="!warehouseStatusOnly"><dt>商品金额 / 运费</dt><dd>{{ money(order.goodsAmount) }} / {{ money(order.shippingFee) }}</dd></div></dl></details><details><summary>备注与附件<small>{{ order.labelImageUrls?.length || 0 }} 个附件</small></summary><p class="m-detail-note">{{ order.note || '未填写备注' }}</p><div class="image-grid"><template v-for="url in order.labelImageUrls || []" :key="url"><a v-if="/\.pdf(?:\?|$)/i.test(url)" :href="url" target="_blank" rel="noopener">打开PDF附件 ↗</a><ElImage v-else :src="imageUrl(url,160)" :preview-src-list="order.labelImageUrls.filter(u=>!u.includes('.pdf'))" fit="contain" style="width:80px;height:95px"/></template></div></details><details><summary>重量信息<small>{{ orderWeightText(order) }}</small></summary><p>商品净重 {{ orderWeightText(order) }}，不含包装。刷新详情可读取最新重量。</p></details></section>
+        <section v-if="order.status==='cancelled'" class="m-detail-card"><header><h3>取消备注</h3><ElButton v-if="auth.can('orders')" text type="primary" :disabled="busy || loading" @click="cancelNoteOpen=true">修改</ElButton></header><p class="m-detail-note">{{ order.cancelNote || '未填写' }}</p></section>
+      </section>
       <template v-else
         ><div class="detail-section">
           <div class="panel-title">
@@ -197,10 +206,10 @@
           <ElButton @click="useLatest">放弃草稿并使用最新数据</ElButton>
         </div>
         </template
-      ><OrderOperations :order-id="order.id" :open="open" :revision="order.version" />
+      ><OrderOperations v-if="!isPhone" :order-id="order.id" :open="open" :revision="order.version" />
       </template
-    ><template #footer>
-      <MobileActionMenu :disabled="busy">
+    ><template #footer><template v-if="isPhone && fullEditing"><ElButton :disabled="busy" @click="editor?.mobileStep > 1 ? editor.mobilePrevious() : cancelEdit()">{{ editor?.mobileStep > 1 ? '上一步' : '取消修改' }}</ElButton><ElButton type="primary" :disabled="!editor?.ready || (editor?.mobileStep === 3 && !editor?.dirty)" :loading="busy" @click="editor?.mobileStep < 3 ? editor.mobileNext() : editor.submit()">{{ editor?.mobileStep < 3 ? '下一步' : '保存修改' }}</ElButton></template><template v-else>
+      <MobileActionMenu :disabled="busy"><ElButton v-if="isPhone && !editing" @click="mobileHistoryOpen=true">订单操作记录</ElButton>
       <ElButton v-if="!editing && auth.canEditOrders"
         :disabled="loading || !order || busy" type="primary" plain @click="emit('reorder', order.id)">再来一单</ElButton>
       <ElButton
@@ -237,11 +246,13 @@
         @click="fullEditing ? editor.submit() : submit()"
         >保存修改</ElButton
       >
-    </template></ElDrawer
+    </template></template></ElDrawer
   >
+  <ElDrawer v-if="isPhone" v-model="mobileHistoryOpen" title="订单操作记录" size="100%" append-to-body><OrderOperations v-if="order" :order-id="order.id" :open="mobileHistoryOpen" :revision="order.version"/></ElDrawer>
   <OrderCancellationDialog v-model:open="cancelNoteOpen" :order="order" note-only @saved="cancelNoteSaved" />
 </template>
 <script setup>
+import { useResponsive } from "../composables/responsive";
 import MobileActionMenu from './MobileActionMenu.vue';
 import AdaptiveTable from "./AdaptiveTable";
 import { computed, reactive, ref, watch } from "vue";
@@ -269,6 +280,9 @@ import {
 const props = defineProps({ open: Boolean, id: [Number, String] }),
   emit = defineEmits(["update:open", "saved", "reorder"]),
   auth = useAdminAuthStore();
+const { isPhone } = useResponsive();
+const mobileHistoryOpen = ref(false);
+const mobileGroups = computed(()=>{const groups=new Map();for(const item of order.value?.items || []){const key=String(item.productId)+':'+item.sku;if(!groups.has(key))groups.set(key,{key,sku:item.sku,quantity:0,items:[]});const group=groups.get(key);group.quantity+=Number(item.quantity||0);group.items.push(item);}return [...groups.values()];});
 const invoiceLoading = ref(false);
 const editing = ref(false),
   editor = ref();
@@ -457,4 +471,10 @@ async function exportInvoice() {
 .order-weight-summary .weight-incomplete { color: #b45309; font-size: 14px; }
 .cancel-note-text { white-space:pre-wrap; overflow-wrap:anywhere; color:#475569; margin:8px 0 0; }
 .order-detail-quantity { display:flex; flex-direction:column; align-items:flex-end; gap:3px; }
+</style>
+
+<style scoped>
+@media(max-width:767px){
+.m-order-detail{color:#182b49}.m-detail-hero{padding:7px 3px 23px}.m-detail-hero>div{display:flex;align-items:center;justify-content:space-between;gap:8px}.m-detail-hero small{font-size:10px;color:#9cabc0}.m-detail-status{font-size:10px;background:#edf3ff;border-radius:7px;padding:5px 9px;color:#7293c2}.m-detail-hero>strong{display:block;font-size:31px;letter-spacing:-1px;font-weight:700;margin:15px 0 7px}.m-detail-hero>p{font-size:10px;color:#9bacbf;margin:0}.m-detail-card{background:white;border:1px solid #e5edf7;border-radius:18px;margin-bottom:15px;padding:17px}.m-detail-card h3,.m-detail-section-head h3{font-size:12px;font-weight:650;margin:0;color:#435f86}.m-detail-card>h3{margin-bottom:16px}.m-detail-card>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:13px}.m-detail-card header>small{font-size:10px;color:#a0aec1}.m-detail-customer{display:flex;align-items:center;gap:12px}.m-detail-customer>span{width:40px;height:44px;border-radius:13px;display:grid;place-items:center;background:#edf3ff;color:#7e9dcb;font-size:16px}.m-detail-customer strong{font-size:14px}.m-detail-customer small{display:block;font-size:10px;color:#9cacc2;margin-top:4px}.m-detail-address{font-size:11px;color:#8a9eba;line-height:1.7;margin:13px 0 0 52px;overflow-wrap:anywhere}.m-detail-section-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:11px}.m-detail-section-head :deep(.el-button),.m-detail-card header :deep(.el-button){font-size:11px;min-height:44px;padding:0 2px}.m-detail-item{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;border-top:1px solid #edf2f9;padding:12px 0}.m-detail-item:last-child{padding-bottom:0}.m-detail-item>div{display:flex;flex-direction:column;gap:5px}.m-detail-item>div:last-child{text-align:right}.m-detail-item strong{font-size:12px}.m-detail-item small{font-size:10px;font-weight:400;color:#a1b0c4}.m-detail-item :deep(.variant-stock-hint){font-size:9px}.m-detail-folds{padding:0 16px}.m-detail-folds>details{border-bottom:1px solid #edf2f8}.m-detail-folds>details:last-child{border-bottom:0}.m-detail-folds summary{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:53px;font-size:12px;color:#6e87a9;cursor:pointer}.m-detail-folds summary>small{font-size:9px;color:#a5b2c5;font-weight:400}.m-detail-folds dl{margin:0 0 15px}.m-detail-folds dl>div{display:grid;grid-template-columns:90px minmax(0,1fr);gap:10px;font-size:10px;margin-bottom:10px}.m-detail-folds dt{color:#a0b0c7}.m-detail-folds dd{margin:0;color:#6983a6;overflow-wrap:anywhere}.m-detail-folds details>p,.m-detail-note{font-size:11px;color:#8ca0bc;line-height:1.8;white-space:pre-wrap}.m-detail-folds .image-grid{padding-bottom:15px}
+}
 </style>

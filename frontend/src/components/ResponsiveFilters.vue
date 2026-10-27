@@ -1,7 +1,7 @@
 <template>
   <form class="filters responsive-filters" :class="{'is-expanded': expanded}" @submit.prevent="$emit('submit', $event)">
     <slot />
-    <ElButton v-if="hasAdvanced" native-type="button" class="mobile-filter-toggle" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '收起筛选' : '更多筛选' }}{{ chips.length ? ` (${chips.length})` : '' }}</ElButton>
+    <ElButton v-if="hasAdvanced" native-type="button" class="mobile-filter-toggle" :aria-label="expanded ? '收起筛选' : '更多筛选'" :aria-expanded="expanded" @click="expanded = !expanded"><ElIcon v-if="isPhone"><Filter/></ElIcon><template v-else>{{ expanded ? '收起筛选' : '更多筛选' }}{{ chips.length ? ` (${chips.length})` : '' }}</template></ElButton>
     <div v-if="chips.length" class="mobile-filter-chips">
       <ElTag v-for="chip in chips" :key="chip.key" closable @close="$emit('remove', chip.key)">{{ chip.label }}：{{ chip.value }}</ElTag>
     </div>
@@ -9,6 +9,9 @@
 </template>
 <script setup>
 import { computed, ref } from 'vue';
+import { Filter } from '@element-plus/icons-vue';
+import { useResponsive } from '../composables/responsive';
+const { isPhone } = useResponsive();
 const props = defineProps({ active: { type: Object, default: () => ({}) }, labels: { type: Object, default: () => ({}) }, hasAdvanced: { type: Boolean, default: true } });
 defineEmits(['submit', 'remove']);
 const expanded = ref(false);

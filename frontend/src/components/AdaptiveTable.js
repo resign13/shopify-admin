@@ -24,6 +24,9 @@ export default defineComponent({
     data: { type: Array, default: () => [] },
     rowKey: [String, Function], expandRowKeys: Array,
     mobileCards: { type: Boolean, default: true },
+    mobileSelection: { type: Boolean, default: true },
+    mobileActions: { type: Boolean, default: true },
+    mobileTools: { type: Boolean, default: true },
   },
   emits: ['selection-change', 'expand-change', 'sort-change'],
   setup(props, { attrs, slots, emit, expose }) {
@@ -108,8 +111,8 @@ export default defineComponent({
       const count = eligible.filter(r => selected.value.has(key(r))).length;
       const rowClass = attrs['row-class-name'] || attrs.rowClassName;
       return h('div', { class: ['mobile-table', attrs.class], style: attrs.style, 'data-testid': 'mobile-table' }, [
-        !!(selectionColumn() || sortable.length) && h('div', { class: 'mobile-table-tools' }, [
-          selectionColumn() && h(ElCheckbox, { modelValue: !!eligible.length && count === eligible.length,
+        props.mobileTools && !!((props.mobileSelection && selectionColumn()) || sortable.length) && h('div', { class: 'mobile-table-tools' }, [
+          props.mobileSelection && selectionColumn() && h(ElCheckbox, { modelValue: !!eligible.length && count === eligible.length,
             indeterminate: count > 0 && count < eligible.length, disabled: !eligible.length,
             'onUpdate:modelValue': value => { eligible.forEach(row => toggleRowSelection(row, value)); },
           }, () => '全选本页'),
@@ -120,18 +123,18 @@ export default defineComponent({
         ]),
         !props.data.length && h(ElEmpty, { description: attrs['empty-text'] || attrs.emptyText || '暂无符合条件的数据' }),
         ...props.data.map((row, index) => h('article', {
-          key: key(row, index), class: ['mobile-record', { 'has-selection': !!selectionColumn() }, typeof rowClass === 'function' ? rowClass({ row, rowIndex: index }) : rowClass],
+          key: key(row, index), class: ['mobile-record', { 'has-selection': props.mobileSelection && !!selectionColumn(), 'has-custom-card': !!slots['mobile-card'] }, typeof rowClass === 'function' ? rowClass({ row, rowIndex: index }) : rowClass],
         }, [
-          selectionColumn() && h(ElCheckbox, { class: 'mobile-record-select', modelValue: selected.value.has(key(row, index)), disabled: !selectable(row, index),
+          props.mobileSelection && selectionColumn() && h(ElCheckbox, { class: 'mobile-record-select', modelValue: selected.value.has(key(row, index)), disabled: !selectable(row, index),
             'aria-label': `选择第 ${index + 1} 项`, 'onUpdate:modelValue': v => toggleRowSelection(row, v) }, () => '选择'),
-          slots['mobile-card'] ? slots['mobile-card']({ row, index, field: ({ name }) => {
+          slots['mobile-card'] ? slots['mobile-card']({ row, index, selected: selected.value.has(key(row, index)), toggleSelection: checked => toggleRowSelection(row, checked), field: ({ name }) => {
             const column = fields.find(c => c.props?.prop === name);
             return column ? cell(column, row, index) : null;
           } }) : h('dl', { class: 'mobile-record-fields' }, content.map((column, i) => h('div', {
             key: column.key ?? column.props?.prop ?? column.props?.label ?? i,
             class: ['mobile-record-field', { 'is-primary': i === 0, 'is-wide': ['商品','商品 / SKU','登记数量 / 变化明细','变化明细','备注'].includes(column.props?.label) }],
           }, [h('dt', column.props?.label || ''), h('dd', cell(column, row, index))]))),
-          actions.length > 0 && h('div', { class: 'mobile-record-actions' }, actions.map(c => cell(c, row, index))),
+          props.mobileActions && actions.length > 0 && h('div', { class: 'mobile-record-actions' }, actions.map(c => cell(c, row, index))),
           expand && h(ElButton, { text: true, onClick: () => toggleRowExpansion(row) }, () => (props.expandRowKeys || expanded.value).includes(key(row, index)) ? '收起明细' : '展开明细'),
           expand && (props.expandRowKeys || expanded.value).includes(key(row, index)) && h('div', { class: 'mobile-record-expanded' }, cell(expand, row, index)),
         ])),

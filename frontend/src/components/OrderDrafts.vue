@@ -1,7 +1,7 @@
 <template>
   <ElDrawer :model-value="open" title="订单草稿" size="min(860px, 100vw)" :close-on-click-modal="false" @update:model-value="$emit('update:open', $event)">
     <ElAlert title="草稿保存在服务器，不生成订单、不占库存。业务员只看自己的；管理员可查看全部，其他人的草稿只读。" type="info" :closable="false" />
-    <form class="filters section-gap" @submit.prevent="page = 1; load()">
+    <form class="filters section-gap draft-search" @submit.prevent="page = 1; load()">
       <ElSelect v-if="auth.isSuperAdmin" v-model="scope" aria-label="草稿查看范围" @change="page = 1; load()">
         <ElOption label="我的草稿" value="mine"/><ElOption label="全部草稿" value="all"/>
       </ElSelect>

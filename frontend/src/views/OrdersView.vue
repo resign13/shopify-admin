@@ -1,9 +1,22 @@
 <template>
   <PageHeader
     title="订单管理"
+    mobile-title="订单"
+    :mobile-description="`${list.total} 笔订单 · 跟进每一步进展`"
     description="跟进订单状态、付款与物流，保持业务进度清晰可见。"
     eyebrow="ORDERS / 订单业务"
-    ><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
+    ><template v-if="isPhone">
+      <ElButton v-if="canEditDetails" type="primary" circle aria-label="新增订单" data-testid="mobile-order-create" @click="editOrder()">＋</ElButton>
+      <MobileActionMenu label="订单操作">
+        <ElButton @click="mobileSelection = !mobileSelection; clear()">{{ mobileSelection ? '退出选择模式' : '选择订单' }}</ElButton>
+        <ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton>
+        <ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton>
+        <ElButton v-if="canExportOrders" :loading="exporting" @click="exportOrders('export')">{{ selected.length ? `已选 ${selected.length} 笔` : '当前筛选订单' }} · 合并导出</ElButton>
+        <ElButton v-if="canExportOrders" :loading="exporting" @click="exportOrders('export-by-sheet')">分 Sheet 导出</ElButton>
+        <ElButton @click="list.sort({prop:'createdAt',order:'descending'})">按下单时间降序</ElButton><ElButton @click="list.sort({prop:'createdAt',order:'ascending'})">按下单时间升序</ElButton>
+        <ElButton v-if="!auth.isWarehouse" @click="list.sort({prop:'totalAmount',order:'descending'})">按应付金额降序</ElButton><ElButton v-if="!auth.isWarehouse" @click="list.sort({prop:'totalAmount',order:'ascending'})">按应付金额升序</ElButton><ElButton @click="list.sort({prop:'',order:null})">默认排序</ElButton>
+      </MobileActionMenu>
+    </template><template v-else><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
       >＋ 新增订单</ElButton
     ><MobileActionMenu v-if="canEditDetails || canExportOrders"><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
     ><ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton
@@ -24,10 +37,14 @@
           ></ElDropdownMenu
         ></template
       ></ElDropdown
-    ></MobileActionMenu></PageHeader
+    ></MobileActionMenu></template></PageHeader
   >
   <section class="panel">
-    <ElTabs
+    <div v-if="isPhone" class="m-order-tabs" data-testid="mobile-order-tabs">
+      <button v-for="tab in mobileStatusTabs" :key="tab.value" :class="{active:(list.query.status || 'all') === tab.value}" @click="changeStatus(tab.value)">{{ tab.label }}<small v-if="tab.value !== 'all'">{{ list.statusCounts[tab.value] || 0 }}</small></button>
+      <ElSelect :model-value="list.query.status || 'all'" aria-label="其他订单状态" @change="changeStatus"><ElOption label="全部状态" value="all"/><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value"/></ElSelect>
+    </div>
+    <ElTabs v-else
       :model-value="list.query.status || 'all'"
       @update:model-value="changeStatus"
       ><ElTabPane label="全部" name="all" /><ElTabPane
@@ -40,7 +57,7 @@
       <ElInput
         v-model="filters.keyword"
         clearable
-        placeholder="主／副单号、客户名称、账号、公司、物流单号、商品款号"
+        :placeholder="isPhone ? '订单号、客户、款号' : '主／副单号、客户名称、账号、公司、物流单号、商品款号'"
         aria-label="订单查询关键词"
         style="width: 300px; max-width: 100%"
       /><ElDatePicker
@@ -73,12 +90,14 @@
         >{{ list.query.style }}</ElTag
       >
     </ResponsiveFilters>
-    <div v-if="selected.length" class="batch-bar">
+    <div v-if="!isPhone && selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个订单</strong
       ><ElButton text @click="clear">清空选择</ElButton
       >
     </div>
+    <div v-if="isPhone && mobileSelection" class="m-order-batch" data-testid="mobile-order-selection"><strong>已选 {{ selected.length }} 笔</strong><ElButton text @click="table?.selectCurrentPage()">选择本页</ElButton><ElButton text @click="clear">清空</ElButton><ElButton text @click="mobileSelection=false; clear()">完成</ElButton><ElButton type="primary" :disabled="!selected.length" :loading="exporting" @click="exportOrders('export')">导出</ElButton></div>
     <DataTable
+      :mobile-selection="false" :mobile-actions="false" :mobile-tools="false"
       ref="table"
       :key="list.filterKey"
       storage-key="orders"
@@ -95,7 +114,12 @@
       @sort-change="list.sort"
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
-      ><template #mobile-card="{row,field}">
+      ><template #mobile-card="{row,field,selected:rowSelected,toggleSelection}">
+        <button v-if="isPhone" type="button" class="m-order-card" :class="{'is-selected':mobileSelection && rowSelected}" :aria-label="mobileSelection ? `选择订单 ${row.orderNo}` : `查看订单 ${row.orderNo}`" @click="mobileSelection ? toggleSelection() : open(row.id)">
+          <div class="m-order-top"><strong><span v-if="mobileSelection" class="m-order-check">{{ rowSelected ? '✓' : '' }}</span>{{ row.orderNo }}<small v-if="row.warehousePrinted" aria-label="仓库已打单">已打单</small></strong><span class="m-order-state" :class="row.status">{{ statusNames[row.status] }}</span></div>
+          <div class="m-order-person"><span class="m-order-avatar">{{ (row.contactName || row.userName || '客').slice(0,1) }}</span><span class="m-order-client"><strong>{{ row.contactName || row.userName }}</strong><small>{{ row.country }} · {{ row.ownerAdminName || '未分配' }}</small></span><strong class="m-order-amount">{{ auth.isWarehouse ? `${row.itemCount} 件` : money(row.totalAmount,row.currency) }}</strong></div>
+          <div class="m-order-bottom"><span>{{ row.itemCount }} 件<span v-if="row.secondaryOrderNo"> · {{ row.secondaryOrderNo }}</span></span><time>{{ dateTime(row.createdAt) }}</time></div>
+        </button><template v-else>
         <div class="mobile-order-summary">
           <div class="mobile-order-heading"><component :is="field" name="orderNo" /><component :is="field" name="status" /></div>
           <div><small>客户</small><component :is="field" name="contactName" /></div>
@@ -109,6 +133,7 @@
           <div v-if="!auth.isWarehouse"><dt>商品金额</dt><dd><component :is="field" name="goodsAmount" /></dd></div>
           <div v-if="!auth.isWarehouse"><dt>运费</dt><dd><component :is="field" name="shippingFee" /></dd></div>
         </dl></details>
+        </template>
       </template><template #orderNo="{ row }"
         ><OrderNumber :value="row.orderNo" :secondary="row.secondaryOrderNo" :warehouse-printed="row.warehousePrinted" clickable @open="open(row.id)" /></template
       ><template #userName="{ row }"
@@ -170,6 +195,7 @@
   <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
 </template>
 <script setup>
+import { useResponsive } from "../composables/responsive";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -196,6 +222,9 @@ import {
   dateTime,
   statusNames,
 } from "../composables/workbench";
+const { isPhone } = useResponsive();
+const mobileSelection = ref(false);
+const mobileStatusTabs = computed(() => [{value:"all",label:"全部"},{value:"pending_payment",label:"待付款"},{value:"allocated",label:"已配货"},...(!["all","pending_payment","allocated"].includes(list.query.status || "all") ? [{value:list.query.status,label:statusNames[list.query.status]}] : [])]);
 const auth = useAdminAuthStore(),
   route = useRoute(),
   list = useList("orders"),
@@ -383,3 +412,10 @@ onMounted(async () => {
   }
 });
 </script>
+
+<style scoped>
+@media(max-width:767px){
+.m-order-tabs{display:flex;align-items:center;gap:19px;padding:2px 2px 12px}.m-order-tabs>button{border:0;background:none;color:#97a4b6;font-size:12px;min-height:44px;white-space:nowrap;position:relative;padding:8px 0}.m-order-tabs>button.active{color:#2f69eb;font-weight:650}.m-order-tabs>button.active:after{content:'';height:2px;position:absolute;bottom:0;left:0;right:0;background:#2f69eb}.m-order-tabs small{font-size:10px;margin-left:5px;opacity:.7}.m-order-tabs :deep(.el-select){margin-left:auto;width:86px}.m-order-tabs :deep(.el-select__wrapper){box-shadow:none;background:none;padding:0;font-size:11px}
+.m-order-card{display:block;text-align:left;width:100%;padding:17px 16px 13px;background:white;border:1px solid #e9eef6;border-radius:18px;color:#182b49;box-sizing:border-box}.m-order-card.is-selected{border-color:#8dafef;background:#f7faff}.m-order-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:17px}.m-order-top>strong{font-size:12px;display:flex;align-items:center;gap:7px;min-width:0;overflow-wrap:anywhere}.m-order-top strong small{color:#83a894;font-size:9px;font-weight:400}.m-order-state{font-size:10px;padding:4px 8px;border-radius:7px;background:#edf3fd;color:#7192c0;white-space:nowrap}.m-order-state.pending_payment{background:#fcf2e3;color:#c49a62}.m-order-state.paid,.m-order-state.completed{background:#eaf6f1;color:#73a18e}.m-order-state.cancelled{background:#f7eeee;color:#bd8a8a}.m-order-person{display:flex;align-items:center;gap:10px}.m-order-avatar{display:grid;place-items:center;width:35px;height:39px;flex:none;border-radius:11px;background:#eef3fc;color:#86a0c7;font-size:12px}.m-order-client{min-width:0;flex:1}.m-order-client strong{display:block;font-size:12px;overflow-wrap:anywhere}.m-order-client small{display:block;font-size:10px;color:#9ba8ba;margin-top:4px}.m-order-amount{font-size:16px;font-variant-numeric:tabular-nums;letter-spacing:-.4px}.m-order-bottom{display:flex;justify-content:space-between;gap:8px;color:#a1adbd;font-size:10px;margin-top:15px}.m-order-bottom time{font-size:9px}.m-order-check{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;border:1px solid #b9ccec;color:#2f69eb;flex:none}.m-order-batch{position:sticky;bottom:75px;z-index:12;display:flex;align-items:center;flex-wrap:wrap;gap:3px;background:white;border:1px solid #e3ebf7;border-radius:15px;padding:9px;margin-bottom:13px;box-shadow:0 5px 22px #243c6210}.m-order-batch strong{font-size:11px;margin:0 5px}.m-order-batch :deep(.el-button){min-height:38px;font-size:11px;margin:0}
+}
+</style>

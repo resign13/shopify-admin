@@ -22,7 +22,7 @@
   <ElDrawer v-model="managerOpen" title="客户模板管理" size="850px" :close-on-click-modal="false"
     :before-close="closeManager">
     <ElAlert title="管理员可管理全部模板，其他人员仅可管理自己创建的模板；修改或删除模板不会改变已创建的订单。" type="info" :closable="false" />
-    <form class="filters section-gap" @submit.prevent="page = 1; loadList()">
+    <form class="filters section-gap template-manager-search" @submit.prevent="page = 1; loadList()">
       <ElInput v-model="keyword" placeholder="模板名称、联系人、客户、公司或邮箱" clearable />
       <ElButton type="primary" native-type="submit">查询</ElButton>
       <ElButton @click="edit()">＋ 新建客户模板</ElButton>

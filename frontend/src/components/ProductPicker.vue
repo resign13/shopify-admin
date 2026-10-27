@@ -4,7 +4,7 @@
     @update:visible="emit('update:visible', $event)" />
   <ElDrawer v-else v-model="open" title="选择商品" size="820px"
     ><form
-      class="filters"
+      class="filters product-picker-filters"
       @submit.prevent="
         query.page = 1;
         load();

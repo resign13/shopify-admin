@@ -14,7 +14,8 @@
     <p v-if="preview?.summary.error" class="cost-import-danger cost-import-help">存在错误，本批不会保存。请按行号核对文件；版本冲突需重新导出。</p>
     <p v-else-if="canSave" class="cost-import-help">首次成本将补算此前 {{ preview.affectedOrders }} 个有效订单；后续修改仅用于保存后的新订单。保存时间由服务器统一确定，历史记录保留。</p>
     <div v-loading="loading" class="cost-import-table-scroll">
-      <AdaptiveTable v-if="preview" :data="preview.rows" size="small" max-height="48vh" class="cost-import-table" :row-class-name="({row})=>row.status==='error'?'cost-import-error-row':''">
+      <div v-if="preview && isPhone" class="mobile-import-rows"><article v-for="row in preview.rows" :key="row.rowNumber" :class="{'has-error':row.status==='error'}"><header><strong>{{ row.styleCode||'未填写款号' }}</strong><small>第 {{ row.rowNumber }} 行</small></header><div><span>{{ row.oldCostCny??'未设置' }}</span><span>→</span><b>{{ row.costCny??'—' }} <small>CNY</small></b></div><p>{{ row.message }}</p></article></div>
+      <AdaptiveTable v-else-if="preview" :data="preview.rows" size="small" max-height="48vh" class="cost-import-table" :row-class-name="({row})=>row.status==='error'?'cost-import-error-row':''">
         <ElTableColumn label="款号" min-width="150"><template #default="{row}"><span>{{ row.styleCode||'未填写款号' }}</span><small class="cost-import-row-number">第 {{ row.rowNumber }} 行</small></template></ElTableColumn>
         <ElTableColumn label="原成本 CNY" width="120" align="right"><template #default="{row}">{{ row.oldCostCny??'未设置' }}</template></ElTableColumn>
         <ElTableColumn label="新成本 CNY" width="120" align="right"><template #default="{row}">{{ row.costCny??'—' }}</template></ElTableColumn>
@@ -27,6 +28,8 @@
 </template>
 
 <script setup>
+import {useResponsive} from "../composables/responsive";
+const {isPhone}=useResponsive();
 import AdaptiveTable from "./AdaptiveTable";
 import {computed,ref,watch} from 'vue';
 import {ElMessage} from 'element-plus';
@@ -69,4 +72,8 @@ async function commit(){
 
 <style scoped>
 .cost-import-help{font-size:12px;line-height:1.7;color:#718198;margin:0 0 12px}.cost-import-file{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px}.cost-import-filename{font-size:12px;color:#61738a;overflow-wrap:anywhere;flex:1;min-width:120px}.cost-import-file :deep(.el-button+.el-button){margin-left:0}.cost-import-summary{display:flex;flex-wrap:wrap;gap:8px 20px;margin:16px 0 12px;font-size:12px;color:#61738a}.cost-import-summary b{color:#2563eb}.cost-import-danger{color:#dc2626}.cost-import-error{margin:12px 0}.cost-import-row-number{display:block;font-size:11px;color:#8996a7;margin-top:3px}.cost-import-table-scroll{overflow-x:auto;min-height:100px}.cost-import-table{font-size:12px}.cost-import-table :deep(.cell){overflow-wrap:anywhere;font-variant-numeric:tabular-nums}.cost-import-table :deep(.cost-import-error-row){--el-table-tr-bg-color:#fff7f7}.cost-import-empty{padding:32px 0;text-align:center;color:#8996a7;font-size:12px}@media(max-width:600px){.cost-import-table{min-width:620px}.cost-import-file{gap:8px}.cost-import-filename{flex-basis:calc(100% - 115px)}}
+</style>
+
+<style scoped>
+@media(max-width:767px){.mobile-import-rows{display:flex;flex-direction:column;gap:10px;max-height:48vh;overflow:auto}.mobile-import-rows article{padding:14px;border:1px solid #e8edf6;border-radius:14px;background:#fff}.mobile-import-rows header{display:flex;justify-content:space-between;align-items:center;gap:10px}.mobile-import-rows header strong{font-size:13px;color:#496c9a;overflow-wrap:anywhere}.mobile-import-rows header small{font-size:10px;color:#a5b4c9}.mobile-import-rows article>div{display:flex;align-items:center;gap:12px;color:#a2b1c7;font-size:12px;margin:13px 0}.mobile-import-rows b{color:#6485af;font-weight:550}.mobile-import-rows b small{font-size:10px;color:#9caec6}.mobile-import-rows p{font-size:11px;line-height:1.8;color:#8b9eb9;margin:0}.mobile-import-rows .has-error{border-color:#eedcdd;background:#fffafa}.mobile-import-rows .has-error p{color:#b57b7d}.cost-import-dialog .cost-import-help{font-size:11px;line-height:1.9}.cost-import-dialog .cost-import-summary{padding:12px;background:#f4f7fc;border-radius:12px;font-size:11px}.cost-import-dialog .cost-import-filename{font-size:11px}}
 </style>

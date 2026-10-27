@@ -31,7 +31,189 @@
     </section>
     <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
     <p v-if="ready && !id && !readOnly && draftSavedAt" class="small-note" role="status">已保存至服务器 · {{ dateTime(draftSavedAt) }}{{ dirty ? ' · 有未保存修改' : '' }}</p>
-    <ElForm v-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
+    <ElForm v-if="ready && isPhone" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top" class="m-order-editor" data-testid="mobile-order-editor">
+      <nav class="m-editor-steps" aria-label="订单填写进度"><button v-for="(label,index) in ['客户','商品','完成']" :key="label" type="button" :class="{active:mobileStep===index+1,done:mobileStep>index+1}" :aria-current="mobileStep===index+1 ? 'step' : undefined" @click="mobileStep=index+1"><span>{{ mobileStep>index+1 ? '✓' : index+1 }}</span>{{ label }}</button></nav>
+      <section v-show="mobileStep===1" class="m-editor-section">
+        <div class="m-editor-card"><header><h3>客户与收货</h3><ElButton text type="primary" :disabled="readOnly" @click="openMobileRecipient" data-testid="mobile-order-recipient">{{ form.userId ? '编辑收货资料' : '选择客户' }}</ElButton></header><div class="m-editor-customer"><span>{{ (form.contactName || selectedCustomer?.name || '客').slice(0,1) }}</span><div><strong>{{ form.contactName || selectedCustomer?.name || '选择商城客户' }}</strong><small>{{ [selectedCustomer?.companyName || selectedCustomer?.name, form.country].filter(Boolean).join(' · ') || '填写本单的客户与收货资料' }}</small></div></div><p v-if="form.address" class="m-editor-address">{{ [form.address,form.apartment,form.city,form.state,form.zip].filter(Boolean).join(', ') }}</p></div>
+        <details v-if="!id && !readOnly" class="m-editor-card m-editor-fold"><summary>客户模板 <small>填入常用资料</small></summary><CustomerTemplates :profile="form" :customer="selectedCustomer" @apply="applyTemplate" @busy="templateBusy = $event"/></details>
+        <p class="m-editor-caption">{{ form.secondaryOrderNo ? `副单号 ${form.secondaryOrderNo} · ` : '' }}归属业务员 {{ salespeople.find(p=>p.id===form.ownerAdminId)?.name || (auth.canAssignOrderOwner ? '未分配' : auth.user?.name) }}</p>
+        <ElAlert v-if="customerUnavailable && !form.userId" title="原商城客户已停用，请选择有效客户；原收货资料已保留。" type="warning" :closable="false"/>
+        <ElAlert v-if="!form.ownerConfirmed" title="原业务员已停用，请重新确认归属。" type="warning" :closable="false"/>
+      </section>
+      <section v-show="mobileStep===2" class="m-editor-section">      <div class="panel-title section-gap">
+        <h3>商品明细</h3>
+        <div class="order-product-actions"><ElButton size="small" :disabled="readOnly || saving || loading || lockedLines || !matrixRows.length" @click="pricingOpen=true" data-testid="order-unified-pricing">统一改价</ElButton>
+        <ElButton :disabled="lockedLines || readOnly || saving || loading" @click="picker = true"
+          >＋ 添加商品</ElButton
+        ></div>
+      </div>
+      <ElAlert
+        :title="
+          lockedLines
+            ? '已取消订单保留原商品明细；可修改客户与收货资料。'
+            : '后台允许欠货下单。新增扣减现货余额，修改仅按数量差额调整；实际余额以保存时为准。'
+        "
+        type="info"
+        :closable="false"
+      />
+      <div class="order-product-list" role="list" aria-label="订单商品尺码数量" data-testid="order-product-list">
+        <div class="order-product-list-header" aria-hidden="true"><span>颜色 SKU</span><span>尺码及数量</span><span>操作</span></div>
+        <div v-for="row in matrixRows" :key="row.productId" class="order-product-row" role="listitem" :data-testid="`order-product-${row.productId}`">
+          <div class="order-product-identity"><span class="product-name" :title="row.sku">{{ row.sku }}</span>
+            <small>{{ orderProductQuantity(form.items, row.productId) }} 件</small></div>
+          <div class="order-product-sizes">
+            <div v-for="sizeCode in productSizes(row)" :key="sizeCode" class="order-size-unit">
+              <label :for="`order-qty-${editorId}-${row.productId}-${encodeURIComponent(sizeCode)}`" class="order-size-label">{{ sizeCode }}</label>
+              <!-- ElInputNumber snapshots aria-disabled at mount; remount only
+                   across lock/loading/save boundaries to keep accessibility current. -->
+              <ElInputNumber :key="String(lockedLines || readOnly || saving || loading)" :id="`order-qty-${editorId}-${row.productId}-${encodeURIComponent(sizeCode)}`"
+                :aria-label="`${row.sku} ${sizeCode} 数量`" :model-value="quantityFor(row, sizeCode)"
+                :min="0" :max="2147483647" :precision="0" :controls="false" size="small"
+                :disabled="lockedLines || readOnly || saving || loading"
+                @update:model-value="setMatrixQuantity(row, sizeCode, $event)" />
+              <VariantStockHint class="order-size-stock" :stock="inventoryFor(row, sizeCode).after" unavailable-text="库存不可用"
+                :data-testid="`size-stock-${row.productId}-${sizeCode}`"
+                :title="`当前库存 ${inventoryFor(row, sizeCode).current ?? '不可用'}；预计保存后库存，实际以保存时为准`" />
+            </div>
+          </div>
+          <ElButton link type="danger" class="order-product-remove" :disabled="lockedLines || readOnly || saving || loading" @click="removeMatrixProduct(row)">移除</ElButton>
+        </div>
+        <p v-if="!matrixRows.length" class="order-product-empty">请添加颜色商品并填写至少一个尺码数量</p>
+      </div>
+      <section v-if="form.pendingItems.length" class="reorder-issues" data-testid="reorder-issues">
+        <strong>待处理商品 · {{ form.pendingItems.length }} 项</strong>
+        <p>以下商品未计入本次金额。请移除，或先移除后通过“添加商品”重新选择。</p>
+        <div v-for="(item, index) in form.pendingItems" :key="index" class="inherited-attachment">
+          <span>{{ item.sku || item.productName }} · {{ item.sizeCode || '未指定尺码' }} · {{ item.quantity }} 件 <small>{{ item.reason }}</small></span>
+          <ElButton link type="danger" @click="form.pendingItems.splice(index, 1)">移除待处理项</ElButton>
+        </div>
+      </section>
+<div class="m-editor-running-total"><span>{{ units }} 件商品</span><strong>{{ money(subtotal + Number(form.shippingFee || 0)) }}</strong><small>净重 {{ draftWeightText }}</small></div></section>
+      <section v-show="mobileStep===3" class="m-editor-section">      <div class="order-goods-summary" data-testid="order-goods-summary">
+        <div class="order-amount-summary">
+          <div class="order-quote-controls">
+          <ElFormItem
+            :label="`运费（${form.currency}）`"
+            prop="shippingFee"
+            :rules="[{ validator: validateFee }]"
+            ><ElInputNumber
+              v-model="form.shippingFee"
+              size="default"
+              :min="0"
+              :precision="2"
+              :controls="false"
+          /></ElFormItem>
+          </div>
+          <div class="order-amount-values">
+            <div><span>商品金额</span><strong>{{ money(subtotal) }}</strong></div>
+            <h3>订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}</h3>
+          </div>
+        </div>
+        <p v-if="willClearPayment" class="quote-notice" role="status">金额已调整，保存后将清空旧付款链接，请按新报价重新填写。</p>
+        <p v-if="form.items.some(row=>row.catalogPriceChanged)" class="quote-notice">目录售价已变化，请在“统一改价”中恢复当前售价，或填写确认的成交价。</p>
+        <div v-if="sourceOrderId || activeDraftId" class="reorder-pricing">
+          <span>{{ sourceOrderId || form.sourceOrderId ? '运费沿用原单，请在创建前核对。' : '草稿报价已恢复，请在创建前核对金额及运费。' }}</span>
+          <ElPopover v-if="priceChanges.length" trigger="click" placement="bottom" :width="380" :popper-style="{maxWidth:'calc(100vw - 32px)'}">
+            <template #reference><ElButton link type="primary">{{ priceChanges.length }} 项与来源报价不同</ElButton></template>
+            <div class="reorder-price-details" data-testid="reorder-price-details">
+              <strong>原单／保存时单价 → 本单报价</strong>
+              <p v-for="row in priceChanges" :key="`${row.productId}:${row.sizeCode}`">{{ row.sku }} · {{ row.sizeCode }}：{{ row.oldUnitPrices.map(value=>formatMoney(value,row.oldPriceCurrency||form.currency)).join(' / ') }} → {{ money(row.unitPrice) }}</p>
+            </div>
+          </ElPopover>
+          <span v-else>商品按本单成交价计算，可通过统一改价调整。</span>
+        </div>
+        <div class="order-draft-weight" data-testid="order-draft-weight">
+          <div class="order-weight-heading">
+            <div class="order-weight-total">
+              <span class="order-weight-label">商品总重量（kg）</span>
+              <span class="order-weight-value" :class="{ 'is-placeholder': weightValuePlaceholder }" role="status" aria-live="polite">{{ draftWeightText }}</span>
+              <ElPopover
+                v-if="!weightLoading && (weightError || weightPreview.missingWeightQuantity)"
+                trigger="click"
+                placement="bottom-start"
+                :width="320"
+                :popper-style="{ maxWidth: 'calc(100vw - 32px)' }"
+              >
+                <template #reference>
+                  <ElButton text size="small" class="order-weight-hint" :aria-label="weightError ? '查看重量计算异常' : `查看${weightPreview.missingWeightQuantity}件未设置重量的商品`">
+                    <ElIcon><InfoFilled /></ElIcon>
+                    <span>{{ weightError ? '查看原因' : `${weightPreview.missingWeightQuantity} 件未设置` }}</span>
+                  </ElButton>
+                </template>
+                <div class="order-weight-details" data-testid="order-weight-details">
+                  <template v-if="weightError">
+                    <strong>暂未取得重量</strong>
+                    <p>{{ weightError }}；可点击“刷新重量”重试，不影响保存订单。</p>
+                  </template>
+                  <template v-else>
+                    <strong>{{ weightPreview.missingWeightQuantity }} 件商品未设置重量</strong>
+                    <p>当前重量不完整，仅统计已设置重量的商品。</p>
+                    <ul>
+                      <li v-for="item in weightPreview.missingItems" :key="`${item.productId}:${item.sizeCode}`">
+                        <span>{{ item.sku }} · {{ item.sizeCode || '未指定尺码' }}</span><span>{{ item.quantity }} 件</span>
+                      </li>
+                    </ul>
+                  </template>
+                </div>
+              </ElPopover>
+            </div>
+            <ElButton class="order-weight-refresh" :loading="weightLoading" :disabled="!weightItems.length" @click="refreshWeightPreview">刷新重量</ElButton>
+          </div>
+        </div>
+      </div>
+<details v-if="id" class="m-editor-card m-editor-fold"><summary>订单状态与物流 <small>{{ statusNames[form.status] }}</small></summary>      <div v-if="id" class="detail-grid">
+        <ElFormItem label="订单状态"
+          ><ElSelect v-model="form.status" @change="form.cancelNote = ''"
+            ><ElOption
+              v-for="(label, value) in statusNames"
+              :key="value"
+              :value="value"
+              :label="label" /></ElSelect
+        ></ElFormItem>
+        <ElFormItem label="物流单号"
+          ><ElInput v-model.trim="form.trackingNo" placeholder="发货时必填"
+        /></ElFormItem>
+        <ElFormItem label="付款链接"
+          ><ElInput v-model.trim="form.paymentLink"
+        /></ElFormItem>
+      </div>
+      <ElFormItem v-if="id && form.status === 'cancelled'" label="取消备注（选填）">
+        <ElInput v-model="form.cancelNote" type="textarea" :rows="3" maxlength="500" show-word-limit aria-label="取消备注（选填）" placeholder="填写取消原因，仅后台可见" />
+      </ElFormItem>
+</details><div class="m-editor-card">      <ElFormItem label="备注"
+        ><ElInput
+          v-model="form.note"
+          type="textarea"
+          :rows="3"
+          maxlength="5000"
+      /></ElFormItem>
+      <ElFormItem label="备注图片（最多 9 张）"
+        ><ImageUploader
+          v-model="form.labelImageUrls"
+          :max="remainingImageSlots"
+          @busy="imageUploading = $event"
+      /></ElFormItem>
+      <ElFormItem v-if="form.inheritedAttachmentUrls.length" label="已保留的辅料／历史附件">
+        <div class="inherited-attachments" data-testid="inherited-attachments">
+          <div v-for="(url, index) in form.inheritedAttachmentUrls" :key="url" class="inherited-attachment">
+            <ElImage v-if="isImage(url) && attachmentHref(url)" :src="attachmentHref(url)" :preview-src-list="form.inheritedAttachmentUrls.filter(isImage).map(attachmentHref).filter(Boolean)" fit="contain" preview-teleported />
+            <a v-if="attachmentHref(url)" :href="attachmentHref(url)" target="_blank" rel="noopener">附件 {{ index + 1 }} · {{ isImage(url) ? '图片' : /\.pdf(?:[?#]|$)/i.test(url) ? 'PDF' : '文件' }}</a>
+            <span v-else>附件 {{ index + 1 }}（地址暂不支持打开）</span>
+            <ElButton link type="danger" @click="form.inheritedAttachmentUrls.splice(index, 1)">移除附件</ElButton>
+          </div>
+          <small>仅修改本订单附件清单，不删除原文件或影响来源订单。</small>
+        </div>
+      </ElFormItem>
+      <ElFormItem label="PDF 附件"><small v-if="hasInheritedPdf">如需替换，请先移除上方保留的 PDF；历史附件可继续保留。</small><PdfAttachment v-else v-model="form.labelPdfUrl" @busy="pdfUploading = $event" /></ElFormItem>
+      <ElAlert
+        v-if="id && dirty"
+        :title="`保存前核对：商品 ${originalCount} → ${units} 件；总额 ${formatMoney(originalTotal,originalCurrency)} → ${money(subtotal + Number(form.shippingFee || 0))}`"
+        type="warning"
+        :closable="false"
+      />
+</div></section>
+    </ElForm>
+    <ElForm v-else-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
       <ElFormItem label="副单号（选填）" prop="secondaryOrderNo">
         <SecondaryOrderInput v-model="form.secondaryOrderNo" />
       </ElFormItem>
@@ -261,7 +443,7 @@
       />
     </ElForm>
     <template v-if="!embedded" #footer
-      ><ElButton :disabled="saving || uploading" @click="close()">取消</ElButton
+      ><template v-if="isPhone"><ElButton :disabled="saving || uploading" @click="mobileStep===1 ? close() : mobileStep--">{{ mobileStep===1 ? '取消' : '上一步' }}</ElButton><MobileActionMenu v-if="!id && !readOnly" :disabled="saving || uploading"><ElButton :disabled="!ready || uploading" :loading="saving" @click="saveDraft">保存草稿</ElButton></MobileActionMenu><ElButton v-if="!readOnly" type="primary" :disabled="!ready || uploading || (mobileStep===3 && !!id && !dirty) || (mobileStep===3 && (!!form.pendingItems.length || !form.ownerConfirmed))" :loading="saving" @click="mobileStep<3 ? mobileStep++ : mobileSubmit()">{{ mobileStep<3 ? '下一步' : id ? '保存修改' : '创建待付款订单' }}</ElButton></template><template v-else><ElButton :disabled="saving || uploading" @click="close()">取消</ElButton
       ><MobileActionMenu v-if="!id && !readOnly" :disabled="saving || uploading"><ElButton :loading="saving" :disabled="!ready || uploading" @click="saveDraft">保存草稿</ElButton></MobileActionMenu
       ><ElButton
         v-if="!readOnly"
@@ -270,9 +452,20 @@
         :disabled="!ready || uploading || (!!id && !dirty) || !!form.pendingItems.length || !form.ownerConfirmed"
         @click="submit"
         >{{ id ? "保存订单修改" : "创建待付款订单" }}</ElButton
-      ></template
+      ></template></template
     >
   </component>
+  <ElDrawer v-if="isPhone" v-model="mobileRecipientOpen" title="编辑收货资料" size="100%" append-to-body :close-on-click-modal="false" :before-close="closeMobileRecipient" class="m-recipient-drawer">
+    <ElForm ref="mobileRecipientForm" :model="mobileRecipient" label-position="top" :disabled="saving || readOnly" class="m-order-recipient-form">
+      <ElFormItem label="商城客户" prop="userId" :rules="[{required:true,message:'请选择客户'}]"><ElSelect v-model="mobileRecipient.userId" filterable remote :remote-method="searchCustomers" :loading="customerLoading" placeholder="搜索客户姓名、公司或邮箱" class="full-width"><ElOption v-for="c in customers" :key="c.id" :value="c.id" :label="`${c.name} · ${c.companyName || c.email}`"/></ElSelect></ElFormItem>
+      <div class="m-recipient-fields"><ElFormItem v-for="field in fields" :key="field.key" :label="field.label" :prop="field.key" :rules="field.required ? [{required:true,whitespace:true,message:`请填写${field.label}`}] : []"><ElInput v-model="mobileRecipient[field.key]" :maxlength="500"/></ElFormItem></div>
+      <ElFormItem label="副单号（选填）"><SecondaryOrderInput v-model="mobileRecipient.secondaryOrderNo"/></ElFormItem>
+      <ElFormItem v-if="auth.canAssignOrderOwner" label="归属业务员"><ElSelect v-model="mobileRecipient.ownerAdminId" filterable clearable placeholder="未分配" class="full-width" @change="mobileRecipient.ownerConfirmed=true"><ElOption v-for="person in salespeople" :key="person.id" :value="person.id" :label="person.name" :disabled="person.status !== 'active' && person.id !== mobileRecipient.ownerAdminId"/></ElSelect></ElFormItem>
+      <ElAlert v-if="!mobileRecipient.ownerConfirmed" type="warning" title="原业务员已停用，请重新选择或确认未分配。" :closable="false"><ElButton text @click="mobileRecipient.ownerAdminId=null;mobileRecipient.ownerConfirmed=true">确认未分配</ElButton></ElAlert>
+      <p v-if="!auth.canAssignOrderOwner" class="m-editor-caption">归属业务员：{{ auth.user?.name }}（固定本人）</p>
+    </ElForm>
+    <template #footer><ElButton @click="closeMobileRecipient()">返回订单</ElButton><ElButton type="primary" @click="applyMobileRecipient">应用收货资料</ElButton></template>
+  </ElDrawer>
   <ProductPicker
     v-model:visible="picker"
     quantity-mode
@@ -286,6 +479,8 @@
   <OrderPricingDialog v-model:open="pricingOpen" :items="form.items" :products="products" :currency="form.currency" :exchange-rate="form.exchangeRate" @apply="applyPrices" />
 </template>
 <script setup>
+import { nextTick } from "vue";
+import { useResponsive } from "../composables/responsive";
 import AdaptiveTable from "./AdaptiveTable";
 import MobileActionMenu from "./MobileActionMenu.vue";
 import { useId, computed, onBeforeUnmount, reactive, ref, watch } from "vue";
@@ -323,6 +518,9 @@ const props = defineProps({
     embedded: Boolean,
   }),
   emit = defineEmits(["update:open", "saved"]);
+const { isPhone } = useResponsive();
+const mobileStep = ref(1), mobileRecipientOpen = ref(false), mobileRecipientForm = ref();
+const mobileRecipient = reactive({});
 const form = reactive({
   userId: null,
   sourceOrderId: null,
@@ -359,6 +557,14 @@ const willClearPayment=computed(()=>!!props.id && !!originalPaymentLink.value &&
 function applyPrices(items){if(!lockedLines.value&&!readOnly.value&&!saving.value)form.items=items;}
 const auth = useAdminAuthStore(), salespeople = ref([]);
 const fields = customerFields;
+const selectedCustomer = computed(()=>customers.value.find(c=>c.id===form.userId));
+const mobileRecipientKeys = ['userId','secondaryOrderNo','ownerAdminId','ownerConfirmed',...customerFields.map(field=>field.key)];
+const { dirty: mobileRecipientDirty, markClean: markMobileRecipientClean, canLeave: canLeaveMobileRecipient } = useDirty(()=>mobileRecipient);
+function openMobileRecipient(){for(const key of mobileRecipientKeys)mobileRecipient[key]=form[key];markMobileRecipientClean();mobileRecipientOpen.value=true;}
+async function closeMobileRecipient(done){if(saving.value)return;if(mobileRecipientDirty.value && !(await canLeaveMobileRecipient()))return;markMobileRecipientClean();mobileRecipientOpen.value=false;if(typeof done==='function')done();}
+function applyMobileRecipient(){for(const key of mobileRecipientKeys)form[key]=mobileRecipient[key];markMobileRecipientClean();mobileRecipientOpen.value=false;}
+async function mobileSubmit(){if(isPhone.value && (!form.userId || fields.some(field=>field.required && !String(form[field.key]||'').trim()))){mobileStep.value=1;openMobileRecipient();await nextTick();await mobileRecipientForm.value?.validate().catch(()=>false);return;}return submit();}
+
 const originalItems = ref([]);
 const sourceOrderNo = ref(''), customerUnavailable = ref(false);
 const activeDraftId = ref(null), draftVersion = ref(''), draftKey = ref(''), draftSavedAt = ref(''), readOnly = ref(false);
@@ -585,6 +791,7 @@ watch(
   async ([open, id, sourceId, savedId]) => {
     const current = ++serial;
     pricingOpen.value=false;
+    mobileStep.value=1;mobileRecipientOpen.value=false;markMobileRecipientClean();
     if (!open) { ++customerSerial; return; }
     loading.value = true;
     ready.value = false;
@@ -718,7 +925,7 @@ async function canClose() {
   markClean();
   return true;
 }
-defineExpose({ submit, canClose, saving, uploading, ready, dirty });
+defineExpose({ submit: mobileSubmit, canClose, saving, uploading, ready, dirty, mobileStep, mobileNext:()=>{mobileStep.value=Math.min(3,mobileStep.value+1);}, mobilePrevious:()=>{mobileStep.value=Math.max(1,mobileStep.value-1);} });
 async function close(done) {
   if (saving.value || uploading.value) return;
   if (readOnly.value || await canLeave()) {
@@ -921,5 +1128,11 @@ async function adoptLatest() {
   .order-goods-summary { padding: 14px 0; }
   .order-weight-total { flex-basis: 100%; }
   .order-weight-refresh { margin-left: auto; }
+}
+</style>
+
+<style scoped>
+@media(max-width:767px){
+.m-order-editor{color:#182b49}.m-editor-steps{display:flex;margin:2px 0 23px}.m-editor-steps button{border:0;border-bottom:2px solid #e6edf7;background:none;display:flex;align-items:center;justify-content:center;gap:7px;min-height:45px;flex:1;color:#9ca9bc;font-size:11px;padding:7px 3px 13px}.m-editor-steps button>span{width:21px;height:21px;display:grid;place-items:center;background:#eaf0f9;border-radius:50%;font-size:10px}.m-editor-steps button.active{color:#2f69eb;border-bottom-color:#2f69eb;font-weight:650}.m-editor-steps button.active>span{background:#2f69eb;color:white}.m-editor-card{background:white;border:1px solid #e6edf7;border-radius:18px;padding:17px;margin-bottom:15px}.m-editor-card>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:13px}.m-editor-card h3{font-size:13px;margin:0;color:#496386}.m-editor-card>header :deep(.el-button){font-size:11px;min-height:44px;padding:0 2px}.m-editor-customer{display:flex;gap:12px;align-items:center}.m-editor-customer>span{width:41px;height:44px;display:grid;place-items:center;background:#edf3ff;color:#7799ca;border-radius:13px;font-size:16px}.m-editor-customer strong{font-size:14px}.m-editor-customer small{display:block;color:#9eacbf;font-size:10px;margin-top:4px}.m-editor-address{font-size:11px;color:#8b9db7;margin:13px 0 0 53px;line-height:1.7;overflow-wrap:anywhere}.m-editor-caption{font-size:10px;color:#9baac0;line-height:1.7}.m-editor-fold>summary{display:flex;justify-content:space-between;gap:8px;min-height:35px;font-size:12px;color:#7088ab;cursor:pointer}.m-editor-fold>summary>small{font-size:10px;color:#a2afc3}.m-editor-section>.panel-title{margin:0 0 11px}.m-editor-section>.panel-title h3{font-size:13px}.m-editor-section .order-product-actions{gap:7px}.m-editor-section .order-product-actions :deep(.el-button){font-size:11px;min-height:39px;margin:0;padding:7px 10px}.m-editor-section>.el-alert{font-size:10px;margin-bottom:12px;background:#f0f5fc}.m-editor-section .order-product-list-header{display:none}.m-editor-section .order-product-row{display:grid;grid-template-columns:1fr auto;gap:15px 8px;padding:16px;background:white;border:1px solid #e7edf6;border-radius:18px;margin-bottom:12px}.m-editor-section .order-product-identity{grid-column:1;grid-row:1;display:flex;align-items:center;gap:8px}.m-editor-section .order-product-identity .product-name{font-size:12px;color:#314e76;font-weight:650}.m-editor-section .order-product-identity small{font-size:10px;color:#a1aec0;margin:0}.m-editor-section .order-product-remove{grid-column:2;grid-row:1;font-size:10px;min-height:35px}.m-editor-section .order-product-sizes{grid-column:1 / -1;grid-row:2;display:flex;gap:12px 8px}.m-editor-section .order-size-unit{flex:1;width:54px;min-width:48px;max-width:80px;gap:7px}.m-editor-section .order-size-label{font-size:10px;color:#9faec3}.m-editor-section .order-size-unit :deep(.el-input-number){width:100%;height:44px}.m-editor-section .order-size-unit :deep(.el-input__wrapper){height:44px;border-radius:10px;background:#f8fbff;box-shadow:0 0 0 1px #dfe8f6 inset}.m-editor-section .order-size-unit :deep(input){height:42px;font-size:16px}.m-editor-section .order-size-stock{font-size:9px;line-height:1.4;color:#9eaec5}.m-editor-running-total{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;background:white;padding:17px;border:1px solid #e6edf7;border-radius:18px;margin-top:17px}.m-editor-running-total span{font-size:11px;color:#9cabbe}.m-editor-running-total strong{font-size:23px;color:#182b49;letter-spacing:-.6px}.m-editor-running-total small{width:100%;text-align:right;color:#9caec7;font-size:10px}.m-editor-section .order-goods-summary{border:1px solid #e5ecf6;background:white;border-radius:18px;padding:17px;margin-bottom:14px}.m-editor-section .order-amount-summary{gap:14px}.m-editor-section .order-quote-controls{width:100%}.m-editor-section .order-quote-controls .el-form-item{width:100%}.m-editor-section .order-quote-controls :deep(.el-input-number){width:100%;height:46px}.m-editor-section .order-amount-values{width:100%}.m-editor-section .order-amount-values h3{font-size:23px;color:#182b49}.m-editor-section .order-amount-values>div{font-size:11px;color:#9baec7}.m-editor-section .order-weight-label,.m-editor-section .order-weight-value{font-size:11px}.m-editor-section .order-weight-refresh{font-size:10px}.m-order-editor :deep(.el-form-item__label),.m-order-recipient-form :deep(.el-form-item__label){font-size:11px;color:#8c9fba}.m-order-editor :deep(input),.m-order-editor :deep(textarea),.m-order-recipient-form :deep(input){font-size:16px}.m-recipient-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 13px}.m-recipient-fields>.el-form-item:nth-child(1),.m-recipient-fields>.el-form-item:nth-child(5){grid-column:1 / -1}.m-order-recipient-form :deep(.el-input__wrapper),.m-order-recipient-form :deep(.el-select__wrapper){min-height:45px;border-radius:11px;box-shadow:0 0 0 1px #dfe8f6 inset;background:white}
 }
 </style>

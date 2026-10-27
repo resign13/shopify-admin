@@ -5,6 +5,7 @@ import router from './router'
 import { pinia } from './stores'
 import './styles.css'
 import './mobile.css'
+import './mobile-refined.css'
 
 const app = createApp(App)
 
