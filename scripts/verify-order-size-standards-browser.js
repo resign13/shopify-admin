@@ -61,7 +61,6 @@ async (page) => {
   await many.screenshot({path:'output/playwright/order-independent-many-sizes.png',animations:'disabled'});
   for(const width of [768,390,320]){
     await page.setViewportSize({width,height:844});
-    if(width<768)await editor.getByRole('navigation',{name:'订单填写进度'}).getByRole('button',{name:/商品$/}).click();
     await page.waitForFunction(w=>{
       const d=document.querySelector('.order-quantity-picker'), list=d?.querySelector('.quantity-list');
       return d?.getBoundingClientRect().width<=w+1 && list && list.scrollWidth<=list.clientWidth+1;
@@ -96,6 +95,7 @@ async (page) => {
   await editor.screenshot({path:'output/playwright/order-editor-independent-desktop.png',animations:'disabled'});
   for(const width of [768,390,320]){
     await page.setViewportSize({width,height:844});
+    if(width<768)await editor.getByRole('navigation',{name:'订单填写进度'}).getByRole('button',{name:/商品$/}).click();
     await page.waitForFunction(()=>{
       const el=document.querySelector('[data-testid=order-product-list]');
       return el && el.getBoundingClientRect().right<=innerWidth+1 && el.scrollWidth<=el.clientWidth+1 && [...el.querySelectorAll('.order-size-unit')].every(n=>{const a=n.getBoundingClientRect(),b=n.querySelector('.el-input-number').getBoundingClientRect();return a.left>=-1&&a.right<=innerWidth+1&&b.width<=(innerWidth<768?81:73)&&Math.abs(b.height-(innerWidth<768?44:32))<1;});

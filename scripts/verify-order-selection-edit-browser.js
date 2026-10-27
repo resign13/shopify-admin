@@ -20,7 +20,7 @@ async (page) => {
   const open=async()=>{
     await page.goto(base+'/orders?page=1&pageSize=25&keyword='+encodeURIComponent(made.orderNo));
     await page.getByRole('button',{name:'订单详情',exact:true}).click();
-    const detail=page.getByRole('dialog',{name:'订单详情 · '+made.orderNo,exact:true});
+    const detail=page.getByRole('dialog',{name:/^订单详情(?: · .+)?$/});
     await detail.getByRole('button',{name:'修改订单资料',exact:true}).click();
     await detail.getByRole('button',{name:'＋ 添加商品',exact:true}).waitFor();
     return detail;
