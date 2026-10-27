@@ -348,6 +348,52 @@ jobs:
           grep -q '"apiOnlyRoleIsolation":true' "$RUNNER_TEMP/api-browser-result.log"
           grep -q '"desktopAndMobile":true' "$RUNNER_TEMP/api-browser-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=apici close
+      - name: Isolated iPhone-sized admin layout and interactions
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: '5432'
+          PGDATABASE: gingtto_admin_mobile_browser_test
+          PGUSER: postgres
+          PGPASSWORD: fixture-only-password
+        run: |
+          set -euo pipefail
+          python scripts/admin-mobile-browser-fixture.py > "$RUNNER_TEMP/admin-mobile.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:5380/api/health >/dev/null; then break; fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then cat "$RUNNER_TEMP/admin-mobile.log"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5380/api/health >/dev/null
+          mkdir -p output/playwright
+          # One admin login for this isolated fixture. The checks reuse its cookie
+          # session; role checks log in only distinct accounts in new contexts.
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci open http://127.0.0.1:5380/login --browser chrome
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/login-admin-mobile-browser-fixture.js
+          run_mobile_check() {
+            local stage="$1"
+            local result="$RUNNER_TEMP/$stage.log"
+            npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename "scripts/$stage.js" | tee "$result"
+            if grep -q '^### Error' "$result"; then return 1; fi
+            # Match the top-level result, never nested successful assertions in
+            # a {"passed":false,"checks":[{"passed":true}]} failure report.
+            grep -Eq '^[[:space:]]*\{[[:space:]]*"passed"[[:space:]]*:[[:space:]]*true[[:space:]]*[,}]' "$result"
+          }
+          # Finance creates the dedicated finance account consumed by permissions.
+          # Goods creates the wide chart used by the presentation-only matrix check.
+          for stage in \
+            verify-admin-mobile-refined-finance-system-browser \
+            verify-admin-mobile-refined-layout-browser \
+            verify-admin-mobile-refined-orders-stock-browser \
+            verify-admin-mobile-refined-goods-browser \
+            verify-admin-mobile-refined-interactions-browser \
+            verify-admin-mobile-refined-resilience-browser \
+            verify-admin-mobile-refined-permissions-browser \
+            verify-admin-mobile-search-browser; do
+            run_mobile_check "$stage"
+          done
+          npx --yes --package @playwright/cli playwright-cli -s=mobileci close
       - name: Isolated size chart edit, Excel import and preview lifecycle
         env:
           PGHOST: 127.0.0.1

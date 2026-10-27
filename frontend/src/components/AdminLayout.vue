@@ -1,28 +1,30 @@
 <template>
-  <div class="workspace" :class="{ 'is-collapsed': collapsed, 'is-api-page': routeModule(route.path) === 'api-integrations' }">
-    <aside class="workspace-sidebar">
+  <div class="workspace" :class="{ 'is-collapsed': collapsed, 'mobile-menu-open': menuOpen }">
+    <button v-if="isCompact && !isPhone && menuOpen" class="navigation-mask" aria-label="关闭导航" @click="menuOpen = false" />
+    <aside v-if="!isPhone" class="workspace-sidebar" :inert="isCompact && !menuOpen" :aria-hidden="isCompact && !menuOpen" aria-label="模块导航" @keydown.esc="menuOpen = false">
       <RouterLink to="/" class="brand"
         ><span class="brand-symbol">G</span
-        ><span v-if="!collapsed"
+        ><span v-if="!collapsed || isCompact"
           >GINGTTO<small>BUSINESS CONSOLE</small></span
         ></RouterLink
       >
       <nav>
         <section v-for="group in groups" :key="group.label">
-          <p v-if="!collapsed">{{ group.label }}</p>
+          <p v-if="!collapsed || isCompact">{{ group.label }}</p>
           <RouterLink
             v-for="item in group.items"
             :key="item.to"
             :to="item.to"
             :title="item.label"
+            @click="menuOpen = false"
             ><ElIcon><component :is="item.icon" /></ElIcon
-            ><span v-if="!collapsed">{{ item.label }}</span></RouterLink
+            ><span v-if="!collapsed || isCompact">{{ item.label }}</span></RouterLink
           >
         </section>
       </nav>
       <div class="sidebar-bottom">
         <span class="status-dot"></span
-        ><span v-if="!collapsed">GINGTTO · 管理工作台</span>
+        ><span v-if="!collapsed || isCompact">GINGTTO · 管理工作台</span>
       </div>
     </aside>
     <div class="workspace-main">
@@ -30,16 +32,18 @@
         <div class="topbar-left">
           <ElButton
             text
-            :aria-label="collapsed ? '展开导航' : '收起导航'"
+            :aria-label="isCompact ? (menuOpen ? '关闭导航' : '展开导航') : collapsed ? '展开导航' : '收起导航'"
+            :aria-expanded="isCompact ? menuOpen : !collapsed"
             @click="toggle"
-            ><ElIcon
+            ><span v-if="isPhone" class="mobile-brand-symbol">G</span><ElIcon v-else
               ><Expand v-if="collapsed" /><Fold v-else /></ElIcon></ElButton
-          ><span class="topbar-breadcrumb"
-            >管理工作台 <span>/</span>
+          ><span class="mobile-brand">GINGTTO<span>BUSINESS CONSOLE</span></span><span class="topbar-breadcrumb"
+            ><span class="desktop-breadcrumb">管理工作台 /</span>
             <strong>{{ route.meta.title }}</strong></span
           >
         </div>
-        <OrderVoiceReminder />
+        <ElButton v-if="isCompact && auth.can('orders') && ['admin','sales','warehouse'].includes(auth.userRole)" text class="mobile-voice-trigger" aria-label="提醒" :aria-expanded="voiceOpen" @click="voiceOpen = !voiceOpen"><ElIcon><Bell /></ElIcon></ElButton>
+        <div class="voice-panel" :class="{ 'is-open': voiceOpen }"><OrderVoiceReminder /></div>
         <ElDropdown @command="logout"
           ><button class="profile-button">
             <span class="avatar">{{ auth.user?.name?.slice(0, 1) }}</span
@@ -58,12 +62,25 @@
       </header>
       <main class="workspace-content"><RouterView :key="auth.user?.id" /></main>
     </div>
+    <nav v-if="isPhone" class="mobile-bottom-nav" aria-label="快捷导航">
+      <RouterLink v-for="item in mobileNavigation" :key="item.to" :to="item.to" :class="{ 'is-active': route.path.startsWith(item.to) }" @click="menuOpen = false">
+        <ElIcon><component :is="item.icon" /></ElIcon><span>{{ item.label }}</span>
+      </RouterLink>
+      <button :class="{ 'is-active': menuOpen || !mobileNavigation.some(item => route.path.startsWith(item.to)) }" :aria-expanded="menuOpen" @click="menuOpen = !menuOpen"><ElIcon><Grid /></ElIcon><span>全部</span></button>
+    </nav>
+    <ElDrawer v-if="isPhone" v-model="menuOpen" title="全部模块" direction="btt" size="auto" append-to-body class="mobile-module-drawer">
+      <section v-for="group in groups" :key="group.label" class="mobile-module-group">
+        <h2>{{ group.label }}</h2>
+        <div><RouterLink v-for="item in group.items" :key="item.to" :to="item.to" @click="menuOpen = false"><ElIcon><component :is="item.icon" /></ElIcon><span>{{ item.label }}</span><ElIcon><ArrowRight /></ElIcon></RouterLink></div>
+      </section>
+    </ElDrawer>
   </div>
 </template>
 <script setup>
 import OrderVoiceReminder from "./OrderVoiceReminder.vue";
 import { routeModule } from "../permissions";
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { useResponsive } from '../composables/responsive';
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import {
   DataAnalysis,
@@ -79,6 +96,9 @@ import {
   Expand,
   Fold,
   ArrowDown,
+  Bell,
+  Grid,
+  ArrowRight,
 } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { useAdminAuthStore } from "../stores/auth";
@@ -86,6 +106,10 @@ import { roleNames } from "../composables/workbench";
 const auth = useAdminAuthStore(),
   route = useRoute(),
   router = useRouter();
+const { isCompact, isPhone } = useResponsive();
+const menuOpen = ref(false), voiceOpen = ref(false);
+watch(() => route.path, () => { menuOpen.value = false; voiceOpen.value = false; });
+watch(isCompact, () => { menuOpen.value = false; });
 const collapsed = ref(
   window.innerWidth < 1280 ||
     localStorage.getItem("gingtto-sidebar") === "collapsed",
@@ -94,6 +118,7 @@ const collapseNarrow = () => { if (window.innerWidth < 1024) collapsed.value = t
 window.addEventListener('resize', collapseNarrow);
 onBeforeUnmount(() => window.removeEventListener('resize', collapseNarrow));
 const toggle = () => {
+  if (isCompact.value) { menuOpen.value = !menuOpen.value; voiceOpen.value = false; return; }
   collapsed.value = !collapsed.value;
   localStorage.setItem(
     "gingtto-sidebar",
@@ -148,6 +173,12 @@ const groups = computed(() =>
     }))
     .filter((g) => g.items.length),
 );
+const mobileNavigation = computed(() => [
+  { to: '/dashboard', label: '经营', icon: DataAnalysis },
+  { to: '/orders', label: '订单', icon: Document },
+  { to: '/inventory', label: '库存', icon: Box },
+  { to: '/finance', label: '财务', icon: Collection },
+].filter(item => auth.can(routeModule(item.to))));
 async function logout() {
   await auth.logout();
   router.push("/login");
@@ -162,13 +193,3 @@ onBeforeUnmount(() =>
   window.removeEventListener("auth-session-expired", expired),
 );
 </script>
-<style scoped>
-@media(max-width:700px) {
-  .is-api-page .workspace-topbar { padding:0 8px; gap:4px; }
-  .is-api-page .topbar-breadcrumb { display:none; }
-  .is-api-page .profile-button { padding:4px; gap:4px; }
-  .is-api-page .profile-button > span:not(.avatar) { display:none; }
-  .is-api-page :deep(.order-voice-reminder) { margin-right:0; gap:4px; }
-  .is-api-page :deep(.voice-status) { display:none; }
-}
-</style>

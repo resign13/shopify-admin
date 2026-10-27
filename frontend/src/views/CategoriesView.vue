@@ -1,12 +1,14 @@
 <template>
   <PageHeader
     title="商品分类"
+    :mobile-description="`${items.length} 个分类 · 全站共用顺序`"
     description="调整分类顺序后，商城、库存及所有商品选择列表按此顺序展示。"
     eyebrow="CATALOG / 商品与库存"
-    ><ElButton type="primary" :disabled="reordering || loading" @click="edit()">＋ 新建分类</ElButton></PageHeader
+    ><MobileActionMenu v-if="isPhone" icon-only label="分类操作"><ElButton :disabled="reordering || loading" @click="edit()">新建分类</ElButton><ElButton @click="mobileListTools = !mobileListTools">{{ mobileListTools ? '收起列表设置' : '排序与列表设置' }}</ElButton></MobileActionMenu><ElButton v-else type="primary" :disabled="reordering || loading" @click="edit()">＋ 新建分类</ElButton></PageHeader
   >
-  <section class="panel">
-    <div class="filters">
+  <section class="panel goods-list-panel">
+    <MobileGoodsSearch v-if="isPhone" v-model="keyword" placeholder="搜索分类名称或编码" @update:model-value="page = 1" />
+    <div v-else class="filters">
       <ElInput
         v-model="keyword"
         clearable
@@ -16,6 +18,8 @@
     </div>
     <DataTable
       storage-key="categories"
+      :mobile-actions="false"
+      :mobile-tools="mobileListTools"
       :rows="filtered.slice((page - 1) * pageSize, page * pageSize)"
       :columns="columns"
       :total="filtered.length"
@@ -30,7 +34,7 @@
         pageSize = $event;
         page = 1;
       "
-      ><template #zh="{ row }">{{ row.labels.zh }}</template
+      ><template #mobile-card="{ row }"><MobileGoodsCard :title="row.labels.zh" :subtitle="row.labels.en" @open="edit(row)"><template #leading><span class="mobile-goods-category">▱</span></template><template #footer><span>{{ row.productCount }} 个商品 · {{ row.key }}</span></template><template #actions><MobileActionMenu label="更多"><ElButton :disabled="reordering" @click="edit(row)">编辑分类</ElButton><ElButton :disabled="reordering || loading || categoryIndex(row) === 0" @click="moveCategory(row, -1)">上移一位</ElButton><ElButton :disabled="reordering || loading || categoryIndex(row) === items.length - 1" @click="moveCategory(row, 1)">下移一位</ElButton><ElButton :disabled="reordering" type="danger" @click="remove(row)">删除分类</ElButton></MobileActionMenu></template></MobileGoodsCard></template><template #zh="{ row }">{{ row.labels.zh }}</template
       ><template #en="{ row }">{{ row.labels.en }}</template
       ><template #actions="{ row }"
         ><ElButton link :disabled="reordering || loading || categoryIndex(row) === 0" @click="moveCategory(row, -1)">上移</ElButton
@@ -84,6 +88,10 @@
   >
 </template>
 <script setup>
+import { useResponsive } from '../composables/responsive';
+import MobileActionMenu from '../components/MobileActionMenu.vue';
+import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
+import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -96,6 +104,8 @@ import {
   confirm,
   useDirty,
 } from "../composables/workbench";
+const { isPhone } = useResponsive();
+const mobileListTools = ref(false);
 const route = useRoute(),
   router = useRouter(),
   items = ref([]),
@@ -242,3 +252,5 @@ async function remove(row) {
 }
 onMounted(load);
 </script>
+
+<style scoped src="../components/mobile-goods/mobileGoods.css"></style>

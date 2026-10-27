@@ -75,6 +75,7 @@ async (page) => {
   check(await weight('深靛蓝','30/M').inputValue()==='400','Weight not retained on reopen');
   await page.getByRole('button',{name:'收起导航',exact:true}).click();
   await page.setViewportSize({width:390,height:844});
+  await page.getByRole('navigation',{name:'商品编辑步骤'}).getByRole('button',{name:/尺码$/}).click();
   await page.locator('[data-testid="weight-bulk-tools"]').scrollIntoViewIfNeeded();
   check(await page.locator('[data-testid="weight-bulk-tools"]').evaluate(el=>el.getBoundingClientRect().right<=window.innerWidth+1),'Bulk toolbar overflows narrow viewport');
   await page.screenshot({path:'output/playwright/product-weights-editor-mobile.png'});

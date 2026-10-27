@@ -46,5 +46,13 @@ test('allowance details are accessible by click and retain all quota fields with
   for (const field of ['originalContractQuantity', 'overdeliveryLimit', 'overdeliveryUsed', 'overdeliveryRemaining', 'overdeliveryInspection']) {
     assert.match(allowance, new RegExp(`row\\.${field}`));
   }
-  assert.equal((view.match(/<InventoryQuantityChange /g) || []).length, 6);
+  // Desktop retains six fixed columns; the phone renders those same six fields
+  // for its selected real size with a single v-for quantity-change component.
+  const desktopRegistration = view.match(/<AdaptiveTable v-else :data="draft"[\s\S]*?<\/AdaptiveTable/)[0];
+  assert.equal((desktopRegistration.match(/<InventoryQuantityChange /g) || []).length, 6);
+  assert.match(view, /<InventoryInspectionAllowance :row="mobileRegistrationRow"/);
+  assert.match(view, /v-for="field in mobileStageFields"/);
+  for (const field of ['stock', 'contractPending', 'pendingInspection', 'defectivePending', 'pendingInbound', 'temporaryInbound']) {
+    assert.match(view, new RegExp(`key:'${field}'`));
+  }
 });

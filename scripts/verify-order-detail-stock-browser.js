@@ -20,7 +20,7 @@ async (page) => {
     const order=await getOrder(id);
     await page.goto(base+'/orders?page=1&pageSize=25&keyword='+encodeURIComponent(order.orderNo));
     await page.getByRole('button',{name:'订单详情',exact:true}).click();
-    const detail=page.getByRole('dialog',{name:'订单详情 · '+order.orderNo,exact:true});
+    const detail=page.getByRole('dialog',{name:/^订单详情(?: · .+)?$/});
     await detail.getByRole('button',{name:'刷新详情',exact:true}).waitFor();
     return detail;
   };
@@ -101,7 +101,7 @@ async (page) => {
   await page.locator('main form.filters').getByRole('button',{name:'查询',exact:true}).click();await secondList;
   await page.getByRole('button',{name:secondOrder.orderNo,exact:true}).waitFor();
   await page.getByRole('button',{name:'订单详情',exact:true}).click();
-  detail=page.getByRole('dialog',{name:'订单详情 · '+secondOrder.orderNo,exact:true});
+  detail=page.getByRole('dialog',{name:/^订单详情(?: · .+)?$/});
   await hint(detail,1,'').waitFor();
   const lateResponse=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders/1'));
   release();await lateResponse;

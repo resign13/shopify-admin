@@ -1,6 +1,6 @@
 import { authenticatedFetch, csrfHeaders } from '../authTransport';
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { onBeforeRouteLeave, useRoute, useRouter } from "vue-router";
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import "element-plus/es/components/message/style/css";
 import "element-plus/es/components/message-box/style/css";
@@ -84,8 +84,11 @@ export async function download(path, filename, options = {}) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  a.remove();
+  // Mobile browsers may start consuming a large download after the click returns.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 export function useList(resource, defaults = {}, ignoredKeys = []) {
   const route = useRoute(),
@@ -219,6 +222,7 @@ export function useDirty(value) {
     window.removeEventListener("beforeunload", beforeUnload),
   );
   onBeforeRouteLeave(canLeave);
+  onBeforeRouteUpdate(canLeave);
   return { dirty, markClean, canLeave };
 }
 

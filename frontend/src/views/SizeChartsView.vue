@@ -1,18 +1,22 @@
 <template>
-  <PageHeader title="商品尺码表" eyebrow="PRODUCT / 尺码资料" description="每款一份尺寸资料，全部颜色共用；独立维护，不改变商品库存、价格或商城尺码表图片。">
-    <ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">导出维护表（{{ selected.length }}）</ElButton>
-    <ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">导出英文客户表</ElButton>
-    <ElButton type="primary" @click="openImport">导入覆盖</ElButton>
+  <PageHeader title="商品尺码表" mobile-description="每款一份，全部颜色共用" eyebrow="PRODUCT / 尺码资料" description="每款一份尺寸资料，全部颜色共用；独立维护，不改变商品库存、价格或商城尺码表图片。">
+    <MobileActionMenu v-if="isPhone" icon-only label="尺码表操作"><ElButton @click="openImport">导入维护表覆盖</ElButton><ElButton @click="toggleMobileSelection">{{ mobileSelectionMode ? '结束选择' : '选择款号 · 导出尺码表' }}</ElButton><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">导出所选维护表（{{ selected.length }}）</ElButton><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">导出所选英文客户表</ElButton><ElButton @click="mobileListTools = !mobileListTools">列表设置</ElButton><ElButton @click="reset">重置筛选</ElButton></MobileActionMenu>
+    <template v-else><MobileActionMenu><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">导出维护表（{{ selected.length }}）</ElButton>
+    <ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">导出英文客户表</ElButton></MobileActionMenu>
+    <ElButton type="primary" @click="openImport">导入覆盖</ElButton></template>
   </PageHeader>
-  <section class="panel">
-    <form class="filters" @submit.prevent="query">
+  <section class="panel goods-list-panel">
+    <MobileGoodsSearch v-if="isPhone" v-model="filters.keyword" placeholder="搜索款号或商品名称" filterable :active="Boolean(applied.category || applied.status)" @submit="query" @filter="mobileFilterOpen = true" />
+    <div v-if="isPhone" class="mobile-goods-heading"><span>{{ mobileSelectionMode ? '选择要导出的款号' : '尺寸资料' }}</span><small>{{ total }} 款</small></div>
+    <ResponsiveFilters v-if="!isPhone" :active="{category:categories.find(c => c.key === applied.category)?.label || applied.category,status:statuses[applied.status] || ''}" @remove="key => { filters[key] = ''; query(); }" @submit.prevent="query">
       <ElInput v-model="filters.keyword" placeholder="款号或商品标题" clearable />
       <ElSelect v-model="filters.category" placeholder="全部分类" clearable><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.label" /></ElSelect>
       <ElSelect v-model="filters.status" placeholder="全部填写状态" clearable><ElOption v-for="(v,k) in statuses" :key="k" :value="k" :label="v" /></ElSelect>
       <ElButton type="primary" native-type="submit">查询</ElButton><ElButton @click="reset">重置</ElButton>
-    </form>
+    </ResponsiveFilters>
     <ElAlert v-if="listError" :title="listError" type="error" :closable="false"><ElButton @click="load">重试</ElButton></ElAlert>
-    <ElTable ref="table" :data="rows" v-loading="loading" row-key="styleCode" @selection-change="selected = $event.map(r => r.styleCode)">
+    <AdaptiveTable ref="table" :mobile-selection="mobileSelectionMode" :mobile-actions="false" :mobile-tools="mobileListTools" :data="rows" v-loading="loading" row-key="styleCode" @selection-change="selected = $event.map(r => r.styleCode)">
+      <template #mobile-card="{ row, selected: checked, toggleSelection }"><MobileGoodsCard :title="row.title" :eyebrow="row.styleCode" :image="row.image" :selectable="mobileSelectionMode" :selected="checked" @select="toggleSelection($event)" @open="open(row.styleCode)"><template #footer><ElTag :type="row.status === 'complete' ? 'success' : row.status === 'partial' ? 'warning' : 'info'" size="small">{{ statuses[row.status] }}</ElTag><small class="mobile-goods-muted">{{ row.updatedDate ? `更新于 ${row.updatedDate}` : '尚未保存' }}</small></template><template v-if="!mobileSelectionMode" #actions><MobileActionMenu label="更多"><ElButton @click="open(row.styleCode)">编辑尺寸资料</ElButton><ElButton @click="open(row.styleCode, true)">预览尺码表</ElButton><ElButton :disabled="exporting" @click="exportCharts([row.styleCode], 'maintenance')">导出维护表</ElButton><ElButton :disabled="exporting" @click="exportCharts([row.styleCode], 'english')">导出英文客户表</ElButton></MobileActionMenu></template></MobileGoodsCard></template>
       <ElTableColumn type="selection" width="45" />
       <ElTableColumn label="代表图" width="88"><template #default="{row}"><ElImage v-if="row.image" :src="imageUrl(row.image,160)" fit="contain" style="width:54px;height:64px" /><span v-else class="muted">未设置</span></template></ElTableColumn>
       <ElTableColumn prop="styleCode" label="款号" width="180" />
@@ -20,9 +24,11 @@
       <ElTableColumn label="填写状态" width="120"><template #default="{row}"><ElTag :type="row.status === 'complete' ? 'success' : 'info'">{{ statuses[row.status] }}</ElTag></template></ElTableColumn>
       <ElTableColumn prop="updatedDate" label="尺码更新时间" width="150"><template #default="{row}">{{ row.updatedDate || '未保存' }}</template></ElTableColumn>
       <ElTableColumn label="操作" width="130"><template #default="{row}"><ElButton link type="primary" @click="open(row.styleCode)">编辑</ElButton><ElButton link @click="open(row.styleCode, true)">预览</ElButton></template></ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <ElPagination v-model:current-page="page" :page-size="25" :total="total" layout="total, prev, pager, next" @current-change="load" class="section-gap" />
+    <div v-if="isPhone && mobileSelectionMode" class="mobile-goods-selection"><span>已选 {{ selected.length }} 款</span><MobileActionMenu label="导出"><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">完整维护表</ElButton><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">英文客户表</ElButton></MobileActionMenu><ElButton @click="toggleMobileSelection">完成</ElButton></div>
   </section>
+  <ElDrawer v-if="isPhone" v-model="mobileFilterOpen" title="筛选尺码表" size="100%"><ElForm class="mobile-goods-filter-form" label-position="top"><ElFormItem label="商品分类"><ElSelect v-model="filters.category" clearable placeholder="全部分类"><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.label" /></ElSelect></ElFormItem><ElFormItem label="填写状态"><ElSelect v-model="filters.status" clearable placeholder="全部填写状态"><ElOption v-for="(v,k) in statuses" :key="k" :value="k" :label="v" /></ElSelect></ElFormItem></ElForm><template #footer><ElButton @click="reset">重置</ElButton><ElButton type="primary" @click="query">应用筛选</ElButton></template></ElDrawer>
 
   <component :is="readonly ? ElDialog : ElDrawer" v-model="editorOpen" :class="{ 'chart-preview-window': readonly }" :title="(readonly ? '预览尺码表 · ' : '编辑尺码表 · ') + (form?.styleCode || '')" size="min(1280px, 94vw)" width="min(1040px, 94vw)" :align-center="readonly" :before-close="closeEditor" :close-on-click-modal="false">
     <template v-if="form">
@@ -49,7 +55,8 @@
         </ElForm>
         <div class="chart-heading"><h3>测量维度与数值</h3><div class="chart-unit-actions"><span>整款单位</span><ElSelect :model-value="form.unit" @update:model-value="unit" aria-label="整款单位" style="width:130px" :disabled="saving"><ElOption label="厘米 cm" value="cm" /><ElOption label="英寸 in" value="in" /></ElSelect><ElButton @click="addDimension" :disabled="form.dimensions.length >= 64">＋ 添加维度</ElButton></div></div>
         <p class="muted">整款统一 {{ form.unit }}；1 in = 2.54 cm，切换时自动换算，四舍五入保留两位小数，保存后生效。空白表示未填写，0 表示零。</p>
-        <div class="chart-matrix-scroll">
+        <div v-if="isPhone" class="mobile-goods-chart-matrix"><article v-for="(d,i) in form.dimensions" :key="d.id" class="mobile-goods-dimension"><div class="mobile-goods-dimension-head"><strong>测量维度 {{ i + 1 }}</strong><MobileActionMenu label="更多"><ElButton :disabled="i === 0" @click="move(i,-1)">上移</ElButton><ElButton :disabled="i === form.dimensions.length-1" @click="move(i,1)">下移</ElButton><ElButton type="danger" @click="removeDimension(d)">删除维度</ElButton></MobileActionMenu></div><ElForm label-position="top"><ElFormItem label="中文名称"><ElInput v-model="d.name" maxlength="80" /></ElFormItem><ElFormItem label="英文名称"><ElInput v-model="d.nameEn" maxlength="80" /></ElFormItem></ElForm><ElCheckbox v-model="d.showEn">英文客户表中展示</ElCheckbox><div class="mobile-goods-measurements"><label v-for="size in form.sizes" :key="size">{{ size }} · {{ form.unit }}<ElInput v-model="form.values[d.id][size]" inputmode="decimal" :aria-label="`${d.name} ${size}`" placeholder="未填写" /></label></div></article></div>
+        <div v-else class="chart-matrix-scroll">
           <table class="chart-matrix">
             <thead><tr><th>中文维度</th><th>English</th><th>单位</th><th>英文展示</th><th v-for="size in form.sizes" :key="size">{{ size }}</th><th>操作</th></tr></thead>
             <tbody><tr v-for="(d,i) in form.dimensions" :key="d.id">
@@ -93,12 +100,12 @@
     <ElAlert v-if="importError" :title="importError" type="error" :closable="false" class="section-gap" />
     <template v-if="proposal">
       <p>完整款号 {{ proposal.styleCount }} 个 · 数值变更 {{ proposal.valueChangedCount }} 项 · 维度变更 {{ proposal.dimensionChangedCount }} 项 · <strong class="negative">删除维度 {{ proposal.removedDimensionCount }} 项／清空数值 {{ proposal.clearCount }} 项</strong> · 错误 {{ proposal.errors.length }} 项</p>
-      <ElTable :data="proposal.errors" v-if="proposal.errors.length" max-height="180"><ElTableColumn prop="sheet" label="工作表" /><ElTableColumn prop="message" label="错误" /></ElTable>
+      <AdaptiveTable :data="proposal.errors" v-if="proposal.errors.length" max-height="180"><ElTableColumn prop="sheet" label="工作表" /><ElTableColumn prop="message" label="错误" /></AdaptiveTable>
       <template v-if="proposal.dimensionRows.length">
         <h3>维度变更</h3>
-        <ElTable :data="proposal.dimensionRows" max-height="240" aria-label="维度变更预览"><ElTableColumn prop="styleCode" label="款号" width="120" /><ElTableColumn label="操作" width="85"><template #default="{row}"><span :class="{negative:row.kind==='remove'}">{{ row.action }}</span></template></ElTableColumn><ElTableColumn prop="old" label="原维度／顺序"><template #default="{row}">{{ row.old || '—' }}</template></ElTableColumn><ElTableColumn prop="new" label="新维度／顺序"><template #default="{row}">{{ row.new || '删除' }}</template></ElTableColumn><ElTableColumn label="说明" width="170"><template #default="{row}">{{ row.kind==='remove' ? `已填 ${row.filledCount} 项，历史保留` : row.kind==='add' ? '新维度默认在英文版展示' : '原英文展示设置保留' }}</template></ElTableColumn></ElTable>
+        <AdaptiveTable :data="proposal.dimensionRows" max-height="240" aria-label="维度变更预览"><ElTableColumn prop="styleCode" label="款号" width="120" /><ElTableColumn label="操作" width="85"><template #default="{row}"><span :class="{negative:row.kind==='remove'}">{{ row.action }}</span></template></ElTableColumn><ElTableColumn prop="old" label="原维度／顺序"><template #default="{row}">{{ row.old || '—' }}</template></ElTableColumn><ElTableColumn prop="new" label="新维度／顺序"><template #default="{row}">{{ row.new || '删除' }}</template></ElTableColumn><ElTableColumn label="说明" width="170"><template #default="{row}">{{ row.kind==='remove' ? `已填 ${row.filledCount} 项，历史保留` : row.kind==='add' ? '新维度默认在英文版展示' : '原英文展示设置保留' }}</template></ElTableColumn></AdaptiveTable>
       </template>
-      <template v-if="proposal.rows.length"><h3>数值变更</h3><ElTable :data="proposal.rows" max-height="320"><ElTableColumn prop="styleCode" label="款号" /><ElTableColumn prop="dimension" label="维度" /><ElTableColumn prop="size" label="尺码" /><ElTableColumn prop="cell" label="位置" /><ElTableColumn prop="unit" label="保存单位" width="90" /><ElTableColumn label="原值"><template #default="{row}">{{ display(row.old) }}</template></ElTableColumn><ElTableColumn label="新值"><template #default="{row}"><span :class="{negative:row.cleared}">{{ row.cleared ? '清空' : display(row.new) }}</span></template></ElTableColumn></ElTable></template>
+      <template v-if="proposal.rows.length"><h3>数值变更</h3><AdaptiveTable :data="proposal.rows" max-height="320"><ElTableColumn prop="styleCode" label="款号" /><ElTableColumn prop="dimension" label="维度" /><ElTableColumn prop="size" label="尺码" /><ElTableColumn prop="cell" label="位置" /><ElTableColumn prop="unit" label="保存单位" width="90" /><ElTableColumn label="原值"><template #default="{row}">{{ display(row.old) }}</template></ElTableColumn><ElTableColumn label="新值"><template #default="{row}"><span :class="{negative:row.cleared}">{{ row.cleared ? '清空' : display(row.new) }}</span></template></ElTableColumn></AdaptiveTable></template>
       <p v-if="!proposal.changedCount && !proposal.errors.length">维度与数值均未变化，不需要保存。</p>
     </template>
     <template #footer><ElButton :disabled="importBusy" @click="importOpen=false">取消</ElButton><ElButton type="primary" :loading="importBusy" :disabled="!proposal?.changedCount || !!proposal?.errors.length" @click="importConfirm">确认覆盖</ElButton></template>
@@ -106,6 +113,12 @@
 </template>
 
 <script setup>
+import { useResponsive } from '../composables/responsive';
+import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
+import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
+import AdaptiveTable from "../components/AdaptiveTable";
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElDialog, ElDrawer } from 'element-plus';
 import 'element-plus/es/components/dialog/style/css';
@@ -114,6 +127,9 @@ import PageHeader from '../components/PageHeader.vue';
 import { api, save, download, confirm, notifyError, useDirty } from '../composables/workbench';
 import { imageUrl } from '../utils/imageUrl';
 import { changeChartUnit, previewChartInUnit } from '../utils/sizeChartUnits';
+const { isPhone } = useResponsive();
+const mobileSelectionMode=ref(false),mobileListTools=ref(false),mobileFilterOpen=ref(false);
+function toggleMobileSelection(){mobileSelectionMode.value=!mobileSelectionMode.value;selected.value=[];table.value?.clearSelection();}
 const rows=ref([]), categories=ref([]), page=ref(1), total=ref(0), selected=ref([]), table=ref();
 const filters=reactive({keyword:'',category:'',status:''}); let applied={...filters};
 const loading=ref(false),listError=ref(''),editorOpen=ref(false),readonly=ref(false),form=ref(null),error=ref(''),mode=ref('zh'),saving=ref(false),exporting=ref(false);
@@ -122,7 +138,7 @@ const statuses={empty:'未填写',partial:'部分填写',complete:'已填完整'
 const {dirty,markClean,canLeave}=useDirty(()=>editorOpen.value ? form.value : null);
 let sequence=0, saveAttempt=null; const unitAnchors=new Map();
 async function load(){const seq=++sequence;loading.value=true;listError.value='';try{const r=await api('size-charts?'+new URLSearchParams({...applied,page:page.value,pageSize:25}));if(seq!==sequence)return;rows.value=r.items;total.value=r.total;categories.value=r.categories;selected.value=[];table.value?.clearSelection();}catch(e){if(seq===sequence)listError.value=e.message;}finally{if(seq===sequence)loading.value=false;}}
-function query(){applied={...filters};page.value=1;load();}
+function query(){applied={...filters};page.value=1;mobileFilterOpen.value=false;load();}
 function reset(){Object.assign(filters,{keyword:'',category:'',status:''});query();}
 async function open(code, preview=false){if(!(await canLeave()))return;try{const data=await api('size-charts/detail?'+new URLSearchParams({styleCode:code}));form.value=data;previewUnit.value=data.unit;unitAnchors.clear();readonly.value=preview;mode.value='zh';error.value='';editorOpen.value=true;saveAttempt=null;markClean();}catch(e){notifyError(e);}}
 async function closeEditor(done){if(saving.value)return;if(await canLeave()){editorOpen.value=false;markClean();if(typeof done==='function')done();}}
@@ -176,3 +192,23 @@ onMounted(()=>{markClean();load();});
 .chart-import-window .el-dialog__body{min-height:0;overflow:auto}
 </style>
 
+<style scoped>
+@media (max-width:767px) {
+  .chart-form-grid { grid-template-columns:minmax(0,1fr); }
+  .chart-heading { flex-direction:column; align-items:stretch; gap:12px; }
+  .chart-unit-actions { flex-wrap:wrap; gap:8px; }
+  .chart-preview-actions { justify-content:flex-start; }
+  .chart-heading > div { min-width:0; }
+}
+</style>
+<style>
+@media (max-width:767px) {
+  .chart-preview-window.el-dialog, .chart-import-window.el-dialog { max-height:var(--mobile-viewport-height,100dvh); padding:0; border-radius:0; }
+  .chart-preview-window .el-dialog__header { height:auto; min-height:56px; padding:14px 54px 12px 16px; }
+  .chart-preview-window .el-dialog__headerbtn { width:44px; height:44px; }
+  .chart-preview-window .el-dialog__body { padding:16px; }
+  .chart-preview-window .el-dialog__footer { padding:12px 16px calc(12px + env(safe-area-inset-bottom)); margin-top:0; }
+}
+</style>
+
+<style scoped src="../components/mobile-goods/mobileGoods.css"></style>

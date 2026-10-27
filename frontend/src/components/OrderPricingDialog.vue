@@ -2,7 +2,7 @@
   <ElDialog v-model="visible" :title="`统一改价 · ${currency}`" width="min(820px, 96vw)" :close-on-click-modal="false" class="order-pricing-dialog">
     <p class="pricing-caption">仅修改本单成交价；整行设置覆盖该颜色全部尺码，可展开分别调整。</p>
     <ElAlert v-if="error" :title="error" type="error" :closable="false" />
-    <div class="pricing-table-scroll"><ElTable ref="table" :data="groups" row-key="productId" size="small" empty-text="暂无商品">
+    <div class="pricing-table-scroll"><AdaptiveTable ref="table" :data="groups" row-key="productId" size="small" empty-text="暂无商品">
       <ElTableColumn type="expand" width="34"><template #default="{row}"><div class="size-prices">
         <label v-for="line in row.lines" :key="line.sizeCode"><span>{{ line.sizeCode }}</span>
           <ElInputNumber :model-value="line.unitPrice" :min="0" :max="9999999999.99" :precision="2" :controls="false" :aria-label="`${row.sku} ${line.sizeCode} 单价`" @update:model-value="value=>setPrice(line,value)" />
@@ -17,11 +17,12 @@
       <ElTableColumn label="操作" min-width="170"><template #default="{row}">
         <ElButton link type="primary" size="small" @click="table?.toggleRowExpansion(row)">按尺码设置</ElButton><ElButton link size="small" @click="restore(row)">恢复当前售价</ElButton>
       </template></ElTableColumn>
-    </ElTable></div>
+    </AdaptiveTable></div>
     <template #footer><ElButton @click="visible=false">取消</ElButton><ElButton type="primary" @click="apply">确认应用</ElButton></template>
   </ElDialog>
 </template>
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
 import { computed, ref, watch } from 'vue';
 import { catalogQuote, validAmount } from '../utils/orderPricing';
 import { money } from '../composables/workbench';

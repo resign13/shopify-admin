@@ -47,6 +47,8 @@ async (page) => {
   await dialog().getByRole('button',{name:'确认保存',exact:true}).waitFor();
   await page.screenshot({path:'output/playwright/finance-cost-excel-preview-desktop.png',fullPage:true,animations:'disabled'});
   await page.setViewportSize({width:390,height:844});
+  await dialog().locator('.mobile-import-rows article').first().waitFor();
+  check(await dialog().locator('.mobile-import-rows article').count()===data.rows.length,'Mobile preview retains every workbook row');
   check(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Mobile page has no horizontal overflow');
   check(await dialog().getByRole('button',{name:'确认保存',exact:true}).isVisible(),'Mobile confirmation remains reachable');
   await page.screenshot({path:'output/playwright/finance-cost-excel-preview-mobile.png',fullPage:true,animations:'disabled'});

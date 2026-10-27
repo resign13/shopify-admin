@@ -8,19 +8,23 @@
 </template>
 <script setup>
 import { onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { useResponsive } from '../composables/responsive';
 import { init, use } from "echarts/core";
 import { LineChart } from "echarts/charts";
 import { GridComponent, TooltipComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
+import chartDefaults from 'echarts/lib/model/globalDefault.js';
 use([LineChart, GridComponent, TooltipComponent, CanvasRenderer]);
 const props = defineProps({ points: Array, metric: String }),
   root = ref();
 let chart, observer;
+const { isPhone } = useResponsive();
 function draw() {
   chart?.setOption({
+    textStyle: { fontFamily: isPhone.value ? 'GINGTTO Mobile' : chartDefaults.textStyle.fontFamily },
     animation: false,
     grid: { left: 52, right: 22, top: 20, bottom: 30 },
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", triggerOn: "mousemove|click", confine: true },
     xAxis: {
       type: "category",
       boundaryGap: false,
@@ -53,8 +57,10 @@ onMounted(() => {
   draw();
   observer = new ResizeObserver(() => chart.resize());
   observer.observe(root.value);
+  if (isPhone.value) document.fonts.ready.then(() => draw());
 });
 watch(() => [props.points, props.metric], draw, { deep: true });
+watch(isPhone, draw);
 onBeforeUnmount(() => {
   observer?.disconnect();
   chart?.dispose();

@@ -114,13 +114,30 @@ async (page) => {
   // Mobile layout and another draft must not inherit the last draft's changes.
   await page.setViewportSize({width:430,height:920});
   await page.goto(base+'/orders');
-  await page.locator('.el-table__row').filter({has:page.getByText(source.orderNo,{exact:true})})
-    .getByRole('button',{name:'再来一单',exact:true}).click();
-  await draft.getByRole('textbox',{name:/收货人/}).waitFor();
+  await page.getByRole('button',{name:`查看订单 ${source.orderNo}`,exact:true}).click();
+  const mobileDetail=page.getByRole('dialog',{name:'订单详情',exact:true});
+  await mobileDetail.getByTestId('mobile-order-detail').waitFor();
+  await mobileDetail.getByRole('button',{name:'更多',exact:true}).click();
+  await page.getByRole('dialog',{name:'更多操作',exact:true}).getByRole('button',{name:'再来一单',exact:true}).click();
+  const mobileEditor=draft.getByTestId('mobile-order-editor');
+  await mobileEditor.waitFor();
+  check(await mobileEditor.getByRole('navigation',{name:'订单填写进度',exact:true}).getByRole('button').count()===3,'Mobile reorder must use the three-step editor');
+  await draft.getByTestId('mobile-order-recipient').click();
+  const recipient=page.getByRole('dialog',{name:'编辑收货资料',exact:true});
+  check(await recipient.getByRole('textbox',{name:/收货人/}).inputValue()==='Reorder QA','Mobile reorder contact not copied');
+  await recipient.getByRole('button',{name:'返回订单',exact:true}).click();
+  await recipient.waitFor({state:'hidden'});
+  await mobileEditor.locator('.m-editor-steps button').nth(1).click();
+  check(await mobileEditor.getByTestId('order-product-list').getByRole('spinbutton',{name:'GT-2026-1 M 数量',exact:true}).inputValue()==='2','Mobile reorder quantities not copied');
+  await mobileEditor.locator('.m-editor-steps button').nth(2).click();
   check(await draft.getByTestId('inherited-attachments').getByRole('link').count()===2,'Drafts shared attachment state');
+  check(await draft.getByRole('spinbutton',{name:'运费（USD）',exact:true}).inputValue()==='12.50','Mobile reorder freight not copied');
   await draft.getByTestId('order-goods-summary').scrollIntoViewIfNeeded();
   await page.screenshot({path:'output/playwright/order-reorder-mobile.png'});
   await page.setViewportSize({width:1440,height:1000});
+  // matchMedia updates Vue's v-if after resize; the mobile summary is replaced.
+  await mobileEditor.waitFor({state:'hidden'});
+  await draft.getByTestId('order-goods-summary').waitFor({state:'visible'});
   await draft.getByTestId('order-goods-summary').scrollIntoViewIfNeeded();
   await page.screenshot({path:'output/playwright/order-reorder-desktop.png'});
   const savingDraft=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders/drafts')&&r.request().method()==='POST');

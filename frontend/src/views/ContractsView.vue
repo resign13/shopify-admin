@@ -1,12 +1,16 @@
 <template>
   <PageHeader
     title="合同管理"
+    mobile-title="采购合同"
+    :mobile-description="`${list.total} 份合同`"
     description="从现有商品创建采购合同，按真实尺码登记合同未送。"
     eyebrow="ORDERS / 订单业务"
-    ><ElButton type="primary" @click="start">＋ 新建合同</ElButton></PageHeader
+    ><MobileActionMenu v-if="isPhone" icon-only label="合同操作"><ElButton @click="start">新建采购合同</ElButton><ElButton @click="mobileListTools = !mobileListTools">{{ mobileListTools ? '收起列表设置' : '列表设置' }}</ElButton></MobileActionMenu><ElButton v-else type="primary" @click="start">＋ 新建合同</ElButton></PageHeader
   >
-  <section class="panel">
-    <form class="filters" @submit.prevent="list.apply({ keyword })">
+  <section class="panel goods-list-panel">
+    <MobileGoodsSearch v-if="isPhone" v-model="keyword" placeholder="搜索合同号、工厂或款号" @submit="list.apply({ keyword })" />
+    <div v-if="isPhone" class="mobile-goods-heading"><span>合同记录</span><small>按创建时间排列</small></div>
+    <form v-else class="filters" @submit.prevent="list.apply({ keyword })">
       <ElInput
         v-model="keyword"
         clearable
@@ -15,6 +19,8 @@
     </form>
     <DataTable
       storage-key="contracts"
+      :mobile-actions="false"
+      :mobile-tools="mobileListTools"
       :rows="list.rows"
       :columns="columns"
       :total="list.total"
@@ -26,6 +32,7 @@
       @page="list.query.page = $event"
       @page-size="list.apply({ pageSize: $event })"
     >
+      <template #mobile-card="{ row }"><MobileGoodsCard :title="row.factoryName" :eyebrow="row.contractNo" @open="show(row)"><template #badge><ElTag :type="row.cancelled ? 'info' : 'success'" size="small">{{ row.cancelled ? '已取消' : '有效' }}</ElTag></template><template #footer><span>交货 {{ row.deliveryDate }}</span><strong class="mobile-goods-count">{{ row.quantity.toLocaleString() }}<small> 件</small></strong></template><template #actions><MobileActionMenu label="更多"><ElButton @click="show(row)">合同详情</ElButton><ElButton :loading="exporting === row.id" @click="exportFile(row)">导出合同 Excel</ElButton></MobileActionMenu></template></MobileGoodsCard></template>
       <template #cancelled="{row}">{{row.cancelled ? "已取消" : "有效"}}</template>
       <template #createdAt="{ row }">{{ dateTime(row.createdAt) }}</template>
       <template #actions="{ row }"
@@ -47,7 +54,8 @@
     :before-close="close"
   >
     <template v-if="!detail">
-      <ElSteps :active="step" finish-status="success" simple
+      <nav v-if="isPhone" class="mobile-contract-steps" aria-label="合同步骤"><span v-for="(label,index) in ['工厂与交期','商品与数量','确认合同']" :key="label" :class="{ active: step === index, done: step > index }"><b>{{ step > index ? '✓' : index+1 }}</b>{{ label }}</span></nav>
+      <ElSteps v-else :active="step" finish-status="success" simple
         ><ElStep title="工厂与交期" /><ElStep title="商品与数量" /><ElStep
           title="确认合同"
       /></ElSteps>
@@ -243,6 +251,10 @@
   />
 </template>
 <script setup>
+import { useResponsive } from '../composables/responsive';
+import MobileActionMenu from '../components/MobileActionMenu.vue';
+import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
+import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
 import { computed, reactive, ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "../components/PageHeader.vue";
@@ -262,6 +274,8 @@ import {
   notifyError,
   confirm,
 } from "../composables/workbench";
+const { isPhone } = useResponsive();
+const mobileListTools = ref(false);
 const standardSizes = ["S", "M", "L", "XL", "XXL"];
 const editingId = ref(null);
 const productInfo = reactive({});
@@ -614,4 +628,9 @@ onMounted(async () => {
 .contract-summary strong {
   color: #1f2937;
 }
+</style>
+
+<style scoped src="../components/mobile-goods/mobileGoods.css"></style>
+<style scoped>
+@media(max-width:767px){.mobile-contract-steps{display:flex;gap:7px;padding:6px;border:1px solid #e8eef7;border-radius:13px;background:#fff;margin-bottom:18px}.mobile-contract-steps>span{display:flex;flex:1;gap:5px;align-items:center;justify-content:center;min-width:0;padding:8px 3px;font-size:10px;white-space:nowrap;color:#98a6bb;border-radius:9px}.mobile-contract-steps b{display:grid;place-items:center;flex:0 0 17px;width:17px;height:17px;border-radius:6px;background:#f0f3f8;font-size:10px;font-weight:500}.mobile-contract-steps .active{background:#edf3ff;color:#2f69eb}.mobile-contract-steps .active b{background:#2f69eb;color:#fff}.mobile-contract-steps .done b{background:#eaf6f1;color:#258d6f}.contract-summary{padding:16px 0;gap:10px;font-size:12px}.contract-item{padding:15px;border-radius:15px;border-color:#e7edf6}.contract-item strong{white-space:normal;font-size:13px}.contract-item small{font-size:10px}.size-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:14px 0}.size-grid label{font-size:11px;color:#8394ad}.contract-images{grid-template-columns:1fr;gap:14px}.contract-images .el-image{height:190px}.contract-images h4{font-size:12px}.contract-item .el-input-number{width:100%}}
 </style>

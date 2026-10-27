@@ -1,6 +1,7 @@
 <template>
   <PageHeader
     :title="editing ? '编辑商品' : '新建商品'"
+    mobile-description="共同资料统一维护，颜色与尺码独立设置"
     description="共同资料统一维护，各颜色独立设置图片、真实尺码、价格、库存与净重。"
     eyebrow="CATALOG / 商品资料"
     ><ElButton @click="router.push('/products')"
@@ -13,13 +14,13 @@
     :closable="false"
     ><ElButton @click="load">重试</ElButton></ElAlert
   ><template v-if="!loading && !loadError"
-    ><div class="editor-layout">
+    ><nav v-if="isPhone" class="mobile-editor-tabs" aria-label="商品编辑步骤"><button v-for="(tab,index) in mobileEditorTabs" :key="tab.key" type="button" :class="{ active: mobileEditorSection === tab.key }" :aria-current="mobileEditorSection === tab.key ? 'step' : undefined" @click="mobileEditorSection = tab.key"><span>{{ index+1 }}</span>{{ tab.label }}</button></nav><div class="editor-layout">
       <nav class="editor-anchor">
         <a href="#basic">01 基础资料</a><a href="#colors">02 颜色与图片</a
         ><a href="#sizes">03 尺码与数量</a><a href="#assets">04 图片资料</a>
       </nav>
       <ElForm ref="formRef" :model="form" label-position="top"
-        ><section id="basic" class="panel editor-section">
+        ><section v-show="!isPhone || mobileEditorSection === 'basic'" id="basic" class="panel editor-section">
           <div class="panel-title">
             <h2>基础资料</h2>
             <small>同款颜色共同信息</small>
@@ -54,7 +55,7 @@
               show-word-limit /></ElFormItem
           >
         </section>
-        <section id="colors" class="panel editor-section">
+        <section v-show="!isPhone || mobileEditorSection === 'colors'" id="colors" class="panel editor-section">
           <div class="panel-title">
             <h2>颜色与图片</h2>
             <ElButton @click="addVariant">＋ 添加颜色</ElButton>
@@ -107,7 +108,7 @@
             />
           </div>
         </section>
-        <section id="sizes" class="panel editor-section">
+        <section v-show="!isPhone || mobileEditorSection === 'sizes'" id="sizes" class="panel editor-section">
           <div class="panel-title">
             <h2>真实尺码、价格、库存与净重</h2>
             <small>合同未送与合格在库存模块独立登记</small>
@@ -180,7 +181,7 @@
             </div>
           </div>
         </section>
-        <section id="assets" class="panel editor-section">
+        <section v-show="!isPhone || mobileEditorSection === 'assets'" id="assets" class="panel editor-section">
           <h2>尺码表与详情图片</h2>
           <div class="detail-grid">
             <div>
@@ -222,7 +223,7 @@
       <div>
         <ElButton :disabled="saving" @click="router.push('/products')"
           >取消</ElButton
-        ><ElButton
+        ><ElButton v-if="isPhone && mobileEditorSection !== 'assets'" type="primary" :disabled="saving" @click="nextMobileSection">下一步</ElButton><ElButton v-else
           type="primary"
           :loading="saving"
           :disabled="Object.values(uploadBusy).some(Boolean)"
@@ -234,6 +235,7 @@
   >
 </template>
 <script setup>
+import { useResponsive } from '../composables/responsive';
 import { productSlug } from "../utils/productSlug";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { MAX_WEIGHT_GRAMS, validWeight, realWeightSizes, weightTargets, applyWeight } from "../utils/productWeights";
@@ -249,6 +251,10 @@ import {
   notifyError,
   dateTime,
 } from "../composables/workbench";
+const { isPhone } = useResponsive();
+const mobileEditorSection=ref('basic');
+const mobileEditorTabs=[{key:'basic',label:'基础'},{key:'colors',label:'颜色'},{key:'sizes',label:'尺码'},{key:'assets',label:'图片'}];
+function nextMobileSection(){const index=mobileEditorTabs.findIndex(tab=>tab.key===mobileEditorSection.value);mobileEditorSection.value=mobileEditorTabs[Math.min(index+1,mobileEditorTabs.length-1)].key;window.scrollTo({top:0,behavior:'smooth'});}
 const route = useRoute(),
   router = useRouter(),
   editing = computed(() => !!route.params.id),
@@ -394,19 +400,26 @@ async function fill(field) {
       for (const s of v.sizePrices) s[field] = value;
 }
 async function submit() {
-  if (saving.value || !(await formRef.value.validate().catch(() => false)))
-    return;
+  if (saving.value) return;
+  const valid = await formRef.value.validate().catch((fields) => {
+    if (isPhone.value) mobileEditorSection.value = Object.keys(fields || {})[0]?.startsWith('variants.') ? 'colors' : 'basic';
+    return false;
+  });
+  if (!valid) return;
   error.value = "";
   if (!form.variants.length) {
+    if (isPhone.value) mobileEditorSection.value = "colors";
     error.value = "请至少添加一个颜色";
     return;
   }
   if (!form.chartImages.length || !form.descriptionImages.length) {
+    if (isPhone.value) mobileEditorSection.value = "assets";
     error.value = "请上传尺码表和详情图";
     return;
   }
   for (const v of form.variants) {
     if (v.images.length < 3 || v.images.length > 10) {
+      if (isPhone.value) mobileEditorSection.value = "colors";
       error.value = `${v.colorName} 需要 3–10 张图片`;
       return;
     }
@@ -422,6 +435,7 @@ async function submit() {
           (s.weightGrams != null && !validWeight(s.weightGrams)),
       )
     ) {
+      if (isPhone.value) mobileEditorSection.value = "sizes";
       error.value = `请核对 ${v.colorName} 的尺码、价格、整数现货余额及正整数净重`;
       return;
     }
@@ -501,4 +515,8 @@ onMounted(load);
   .editor-anchor { display: none; }
   .save-bar { padding: 12px; gap: 8px; flex-wrap: wrap; }
 }
+</style>
+
+<style scoped>
+@media(max-width:767px){.mobile-editor-tabs{display:flex;gap:6px;margin:0 0 18px;padding:6px;border:1px solid #e7edf6;border-radius:14px;background:#fff}.mobile-editor-tabs button{display:flex;gap:6px;align-items:center;justify-content:center;flex:1;min-width:0;padding:9px 4px;border:0;border-radius:10px;background:none;font:inherit;font-size:12px;color:#8c9ab0}.mobile-editor-tabs button span{display:grid;place-items:center;width:18px;height:18px;border-radius:6px;background:#f0f3f8;font-size:10px}.mobile-editor-tabs button.active{background:#eff4fe;color:#2f69eb}.mobile-editor-tabs button.active span{background:#2f69eb;color:#fff}.editor-section{padding:18px!important;border:1px solid #e7edf6!important;border-radius:17px!important;background:#fff!important}.editor-section h2{font-size:15px;color:#182b49}.editor-section h3{font-size:13px;color:#182b49}.editor-section .detail-grid{grid-template-columns:1fr}.variant-panel{margin:14px 0;padding:16px 0}.variant-panel .panel-title{align-items:flex-start}.size-editor-grid{grid-template-columns:1fr}.size-editor-cell{padding:15px;border-radius:14px;border:1px solid #e8edf5;background:#f9fbff}.size-editor-cell .el-input-number{width:100%}.filters{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}.filters .el-input,.filters .el-input-number{width:100%!important}.weight-bulk-tools{display:flex;flex-wrap:wrap}.weight-bulk-tools small{width:100%;font-size:10px;line-height:1.7}.save-bar{border-radius:15px;font-size:11px}.save-bar>div{display:flex;gap:8px}.save-bar .el-button+.el-button{margin-left:0}.editor-section :deep(.el-form-item__label){font-size:12px;color:#6f829f}.editor-section :deep(.el-input__wrapper){border-radius:10px}.editor-section :deep(.image-grid){grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.editor-section :deep(.image-tile){min-width:0}.editor-section :deep(.image-tools){flex-wrap:wrap}}
 </style>

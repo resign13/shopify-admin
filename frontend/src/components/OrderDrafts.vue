@@ -1,7 +1,7 @@
 <template>
   <ElDrawer :model-value="open" title="订单草稿" size="min(860px, 100vw)" :close-on-click-modal="false" @update:model-value="$emit('update:open', $event)">
     <ElAlert title="草稿保存在服务器，不生成订单、不占库存。业务员只看自己的；管理员可查看全部，其他人的草稿只读。" type="info" :closable="false" />
-    <form class="filters section-gap" @submit.prevent="page = 1; load()">
+    <form class="filters section-gap draft-search" @submit.prevent="page = 1; load()">
       <ElSelect v-if="auth.isSuperAdmin" v-model="scope" aria-label="草稿查看范围" @change="page = 1; load()">
         <ElOption label="我的草稿" value="mine"/><ElOption label="全部草稿" value="all"/>
       </ElSelect>
@@ -9,7 +9,7 @@
       <ElButton type="primary" native-type="submit">查询</ElButton>
     </form>
     <ElAlert v-if="error" :title="error" type="error" :closable="false"><ElButton text @click="load">重试</ElButton></ElAlert>
-    <ElTable :data="rows" v-loading="loading" empty-text="暂无保存的草稿">
+    <AdaptiveTable :data="rows" v-loading="loading" empty-text="暂无保存的草稿">
       <ElTableColumn label="客户 / 联系人" min-width="160"><template #default="{row}"><strong>{{ row.contactName }}</strong><div class="small-note">{{ row.customerName }}</div></template></ElTableColumn>
       <ElTableColumn label="来源" min-width="125"><template #default="{row}"><OrderNumber v-if="row.sourceOrderNo" :value="row.sourceOrderNo" /><span v-else>新增订单</span></template></ElTableColumn>
       <ElTableColumn prop="itemCount" label="件数" width="65"/>
@@ -19,11 +19,12 @@
         <ElButton link type="primary" :disabled="loading" @click="$emit('select', row)">{{ row.canEdit ? '继续编辑' : '查看' }}</ElButton>
         <ElButton v-if="row.canEdit" link type="danger" :disabled="loading" @click="remove(row)">删除</ElButton>
       </template></ElTableColumn>
-    </ElTable>
+    </AdaptiveTable>
     <ElPagination class="section-gap" :current-page="page" :page-size="10" :total="total" layout="total, prev, pager, next" @current-change="page = $event; load()" />
   </ElDrawer>
 </template>
 <script setup>
+import AdaptiveTable from "./AdaptiveTable";
 import { ref, watch } from 'vue';
 import OrderNumber from './OrderNumber.vue';
 import { api, save, confirm, dateTime } from '../composables/workbench';

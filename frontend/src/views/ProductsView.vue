@@ -1,14 +1,18 @@
 <template>
   <PageHeader
     title="商品管理"
+    mobile-title="商品"
+    :mobile-description="`${list.total} 个颜色 SKU`"
     description="商品按分类顺序分组展示，同分类内保留原有排序；顺序在商品分类中调整。"
     eyebrow="CATALOG / 商品与库存"
-    ><ElButton type="primary" @click="router.push('/products/new')"
+    ><MobileActionMenu v-if="isPhone" icon-only label="商品操作"><ElButton @click="router.push('/products/new')">新建商品</ElButton><ElButton @click="mobileSelectionMode = !mobileSelectionMode; clearSelection()">{{ mobileSelectionMode ? '结束选择' : '选择商品 · 批量调整分类' }}</ElButton><ElButton @click="mobileListTools = !mobileListTools">{{ mobileListTools ? '收起列表设置' : '排序与列表设置' }}</ElButton><ElButton @click="reset">重置筛选</ElButton></MobileActionMenu><ElButton v-else type="primary" @click="router.push('/products/new')"
       >＋ 新建商品</ElButton
     ></PageHeader
   >
-  <section class="panel">
-    <form class="filters" @submit.prevent="apply">
+  <section class="panel goods-list-panel">
+    <MobileGoodsSearch v-if="isPhone" v-model="filters.keyword" placeholder="搜索商品、款号或 SKU" filterable :active="Boolean(filters.category || filters.stock || filters.status !== 'active')" @submit="apply" @filter="mobileFilterOpen = true" />
+    <div v-if="isPhone" class="mobile-goods-heading"><span>{{ mobileSelectionMode ? '选择要调整的商品' : '商品目录' }}</span><small>按分类排列</small></div>
+    <ResponsiveFilters v-if="!isPhone" :active="list.query" @remove="key => { filters[key] = key === 'status' ? 'all' : ''; apply(); }" @submit.prevent="apply">
       <ElInput
         v-model="filters.keyword"
         clearable
@@ -26,9 +30,9 @@
       ><ElSelect v-model="filters.status" aria-label="商品状态"><ElOption value="active" label="启用商品"/><ElOption value="inactive" label="停用商品"/><ElOption value="all" label="全部商品"/></ElSelect
       ><ElButton native-type="submit" type="primary">查询</ElButton
       ><ElButton @click="reset">重置</ElButton>
-    </form>
+    </ResponsiveFilters>
     <ElTag v-if="filters.styleCode" closable @close="filters.styleCode = ''; apply()">款号：{{ filters.styleCode }}</ElTag>
-    <div v-if="selected.length" class="batch-bar">
+    <div v-if="!isPhone && selected.length" class="batch-bar">
       <strong>已选 {{ selected.length }} 个商品</strong
       ><ElButton @click="batchOpen = true">批量调整分类</ElButton
       ><ElButton text @click="clearSelection">清空选择</ElButton>
@@ -45,12 +49,22 @@
       :loading="list.loading"
       :error="list.error"
       selectable
+      :mobile-selection="mobileSelectionMode"
+      :mobile-actions="false"
+      :mobile-tools="mobileListTools"
       @retry="list.load"
       @sort-change="list.sort"
       @page="list.query.page = $event"
       @page-size="list.query = { ...list.query, page: 1, pageSize: $event }"
       @selection-change="selected = $event"
     >
+      <template #mobile-card="{ row, selected: checked, toggleSelection }">
+        <MobileGoodsCard :title="productName(row)" :eyebrow="row.sku" :subtitle="`${row.colorName || '未设置颜色'} · ${row.categoryLabel || '—'}`" :image="row.image" :selectable="mobileSelectionMode" :selected="checked" @select="toggleSelection($event)" @open="preview(row)">
+          <template v-if="row.isActive === false" #badge><ElTag type="info" size="small">已停用</ElTag></template>
+          <template #footer><span :class="{ 'mobile-goods-short': row.shortageUnits }">{{ row.shortageUnits ? `欠货 ${row.shortageUnits} 件` : `现货 ${row.stock} 件` }}</span><strong class="mobile-goods-price">{{ priceRange(row) }}</strong></template>
+          <template v-if="!mobileSelectionMode" #actions><MobileActionMenu label="更多"><ElButton @click="preview(row)">查看资料</ElButton><ElButton v-if="row.isActive !== false" @click="router.push(`/products/${row.id}/edit`)">编辑商品</ElButton><ElButton @click="copy(row.sku)">复制 SKU</ElButton><ElButton v-if="row.isActive !== false" type="danger" @click="remove(row)">删除商品</ElButton></MobileActionMenu></template>
+        </MobileGoodsCard>
+      </template>
       <template #toolbar><span class="small-note">分类顺序优先，表头排序仅调整同类商品</span></template>
       <template #name="{ row }"
         ><div class="product-cell">
@@ -102,7 +116,9 @@
         ></template
       ></DataTable
     >
+    <div v-if="isPhone && mobileSelectionMode" class="mobile-goods-selection"><span>已选 {{ selected.length }} 项</span><ElButton :disabled="!selected.length" type="primary" @click="batchOpen = true">调整分类</ElButton><ElButton @click="mobileSelectionMode = false; clearSelection()">完成</ElButton></div>
   </section>
+  <ElDrawer v-if="isPhone" v-model="mobileFilterOpen" title="筛选商品" size="100%"><ElForm class="mobile-goods-filter-form" label-position="top" @submit.prevent="apply"><ElFormItem label="商品分类"><ElSelect v-model="filters.category" clearable placeholder="全部分类"><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.labels?.zh || c.key" /></ElSelect></ElFormItem><ElFormItem label="库存状态"><ElSelect v-model="filters.stock" clearable placeholder="全部库存"><ElOption value="backordered" label="欠货"/><ElOption value="available" label="有可用现货"/><ElOption value="empty" label="无库存"/></ElSelect></ElFormItem><ElFormItem label="商品状态"><ElSelect v-model="filters.status"><ElOption value="active" label="启用商品"/><ElOption value="inactive" label="停用商品"/><ElOption value="all" label="全部商品"/></ElSelect></ElFormItem></ElForm><template #footer><ElButton @click="reset">重置</ElButton><ElButton type="primary" @click="apply">应用筛选</ElButton></template></ElDrawer>
   <ElDrawer v-model="previewOpen" title="商品资料" size="580px"
     ><template v-if="item"
       ><h2>{{ productName(item) }}</h2>
@@ -125,7 +141,7 @@
         ><ElDescriptionsItem label="当前库存">{{
           item.stock
         }}</ElDescriptionsItem></ElDescriptions
-      ><ElTable :data="item.sizePrices" class="section-gap"
+      ><AdaptiveTable :data="item.sizePrices" class="section-gap"
         ><ElTableColumn prop="sizeCode" label="真实尺码" /><ElTableColumn
           label="价格"
           align="right"
@@ -135,7 +151,7 @@
         ><ElTableColumn
           prop="stock"
           label="库存"
-          align="right" /><ElTableColumn label="单件净重（g）" align="right"><template #default="{ row }">{{ row.weightGrams == null ? "未设置" : row.weightGrams }}</template></ElTableColumn></ElTable></template
+          align="right" /><ElTableColumn label="单件净重（g）" align="right"><template #default="{ row }">{{ row.weightGrams == null ? "未设置" : row.weightGrams }}</template></ElTableColumn></AdaptiveTable></template
   ></ElDrawer>
   <ElDialog
     v-model="batchOpen"
@@ -166,6 +182,12 @@
   >
 </template>
 <script setup>
+import { useResponsive } from '../composables/responsive';
+import MobileActionMenu from '../components/MobileActionMenu.vue';
+import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
+import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
+import ResponsiveFilters from "../components/ResponsiveFilters.vue";
+import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
@@ -186,6 +208,8 @@ import {
   copy,
   dateTime,
 } from "../composables/workbench";
+const { isPhone } = useResponsive();
+const mobileSelectionMode = ref(false), mobileListTools = ref(false), mobileFilterOpen = ref(false);
 const router = useRouter(),
   list = useList("products", { sort: "category" }, ["featured"]),
   categories = ref([]),
@@ -228,6 +252,7 @@ function apply() {
   if (selected.value.length) ElMessage.info("筛选已改变，已清空选择");
   clearSelection();
   list.apply(filters);
+  mobileFilterOpen.value = false;
 }
 function reset() {
   Object.assign(filters, {
@@ -309,3 +334,6 @@ onMounted(async () => {
   }
 });
 </script>
+
+
+<style scoped src="../components/mobile-goods/mobileGoods.css"></style>
