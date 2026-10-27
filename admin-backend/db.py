@@ -31,7 +31,7 @@ SCHEMA_SQL_FILE = REPO_DIR / "db" / "postgres" / "init_lumiere_admin.sql"
 DEFAULT_LANG = "zh"
 SUPPORTED_LANGS = ("zh", "en")
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
-ORDER_STATUSES = ("pending_payment", "allocated", "paid", "shipped", "completed", "cancelled")
+ORDER_STATUSES = ("pending_payment", "partially_allocated", "allocated", "paid", "shipped", "completed", "cancelled")
 
 
 def _safe_decimal(value: Any) -> Decimal:
@@ -155,7 +155,7 @@ def _sync_order_status_constraint(cur: Any) -> None:
         """
         ALTER TABLE orders
         ADD CONSTRAINT orders_status_check
-        CHECK (status IN ('pending_payment', 'allocated', 'paid', 'shipped', 'completed', 'cancelled'))
+        CHECK (status IN ('pending_payment', 'partially_allocated', 'allocated', 'paid', 'shipped', 'completed', 'cancelled'))
         """
     )
 
@@ -833,7 +833,7 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     protected_overdelivery = {r['size_code'] for r in cur.fetchall()}
     if protected_overdelivery - next_size_codes:
         raise ValueError('有累计到货或超量记录的尺码不可删除或改名：' + ', '.join(sorted(protected_overdelivery-next_size_codes)))
-    cur.execute("SELECT DISTINCT i.size_code FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.product_id=%s AND o.status IN ('pending_payment','allocated','paid')", (product_id,))
+    cur.execute("SELECT DISTINCT i.size_code FROM order_items i JOIN orders o ON o.id=i.order_id WHERE i.product_id=%s AND o.status IN ('pending_payment','partially_allocated','allocated','paid')", (product_id,))
     protected = {r['size_code'] for r in cur.fetchall()} | {r['size_code'] for r in existing_size_rows if r['stock'] < 0}
     if protected - next_size_codes:
         raise ValueError('不能删除或改掉仍有欠货或未履约订单引用的尺码：' + ', '.join(sorted(protected-next_size_codes)))

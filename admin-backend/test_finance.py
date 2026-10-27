@@ -71,6 +71,23 @@ class FinanceTest(unittest.TestCase):
         self.assertEqual(len(first['items']),25)
         self.assertEqual(self.query(page=99)['items'],[])
 
+    def test_partial_allocation_remains_in_finance_and_export(self):
+        self.save_cost(cost='12.00')
+        before = self.query()['summary']
+        db._fetch_one("UPDATE orders SET status='partially_allocated' WHERE id=1 RETURNING id")
+        self.assertEqual(self.query()['summary'], before)
+        partial = self.query(statuses=['partially_allocated'])
+        self.assertEqual(partial['summary']['quantity'], 3)
+        self.assertEqual(partial['summary']['totalCostCny'], '36.00')
+        result = self.post('reports/export', {
+            'dateFrom': '2026-09-01', 'dateTo': '2026-09-30',
+            'exchangeRate': '7.123456', 'statuses': ['partially_allocated'],
+        })
+        self.assertEqual(result.status_code, 200, result.json)
+        book = load_workbook(BytesIO(result.data))
+        self.assertTrue(any('部分配货' in str(cell.value)
+                            for sheet in book for row in sheet for cell in row))
+
     def query(self,**kwargs):
         body={'dateFrom':'2026-09-01','dateTo':'2026-09-30','exchangeRate':'7.123456',**kwargs}
         response=self.post('reports/query',body)

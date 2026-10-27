@@ -132,7 +132,7 @@ def save_order(payload, order_id=None):
         order_reorder.validate_attachment_uploads(inherited, payload.get('labelImageUrls', []), payload.get('labelPdfUrl', ''))
         image_urls = list(dict.fromkeys(inherited + (image_urls or [])))
     next_status = payload.get('status', old['status'] if old else 'pending_payment')
-    if not isinstance(next_status, str) or next_status not in {'pending_payment', 'allocated', 'paid', 'shipped', 'completed', 'cancelled'}:
+    if not isinstance(next_status, str) or next_status not in db.ORDER_STATUSES:
         raise ValueError('订单状态无效')
     if not old and next_status != 'pending_payment':
         raise ValueError('新增订单必须为待付款状态')

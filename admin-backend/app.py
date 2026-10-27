@@ -127,9 +127,10 @@ if os.environ.get("INTERNAL_COMPAT_ENABLED") == "1" and len(SERVICE_TOKEN) < 32:
 PASSWORD_HASH_METHOD = "pbkdf2:sha256:600000"
 SUPPORTED_LANGS = {"zh", "en"}
 DEFAULT_LANG = "zh"
-ORDER_STATUSES = {"pending_payment", "allocated", "paid", "shipped", "completed", "cancelled"}
+ORDER_STATUSES = {"pending_payment", "partially_allocated", "allocated", "paid", "shipped", "completed", "cancelled"}
 ORDER_STATUS_LABELS = {
     "pending_payment": "待付款",
+    "partially_allocated": "部分配货",
     "allocated": "已配货",
     "paid": "已付款",
     "shipped": "已发货",
