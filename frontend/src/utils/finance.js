@@ -9,7 +9,7 @@ export function financeCostKey(query) {
   const filters=financeCostFilters(query);
   return JSON.stringify({...filters,styleCodes:financeCodes(filters.styleCodes).map(v=>v.toLowerCase()).sort()});
 }
-export const financeActiveStates = ['pending_payment','allocated','paid','shipped','completed'];
+export const financeActiveStates = ['pending_payment','partially_allocated','allocated','paid','shipped','completed'];
 export function financeReportDates(today=financeToday()) {
   const start=new Date(today+'T00:00:00Z');start.setUTCDate(start.getUTCDate()-29);
   return {dateFrom:start.toISOString().slice(0,10),dateTo:today};

@@ -97,7 +97,7 @@ class ReorderTest(unittest.TestCase):
 
     def test_all_source_statuses_supported(self):
         oid = self.create()['id']
-        for status in ['pending_payment','allocated','paid','shipped','completed','cancelled']:
+        for status in ['pending_payment','partially_allocated','allocated','paid','shipped','completed','cancelled']:
             db._fetch_one('UPDATE orders SET status=%s WHERE id=%s RETURNING id',(status,oid))
             response = self.call('orders','POST',self.body(oid))
             self.assertEqual(response.status_code,200,response.json)

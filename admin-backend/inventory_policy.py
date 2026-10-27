@@ -4,7 +4,7 @@ from psycopg.sql import SQL, Identifier
 
 MIN_STOCK = -2147483648
 MAX_STOCK = 2147483647
-OPEN_STATUSES = {'pending_payment', 'allocated', 'paid'}
+OPEN_STATUSES = {'pending_payment', 'partially_allocated', 'allocated', 'paid'}
 
 
 def parse_stock(value, label='现货余额', *, allow_blank=False):
