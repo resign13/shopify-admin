@@ -52,6 +52,7 @@
       :storage-key="resource"
       :rows="list.rows"
       :columns="columns"
+      :sort-state="queryToSortState(list.query)"
       :total="list.total"
       :page="list.query.page"
       :page-size="list.query.pageSize"
@@ -225,11 +226,12 @@ import { Plus, Search } from "@element-plus/icons-vue";
 import ResponsiveFilters from "./ResponsiveFilters.vue";
 import { moduleGroups, roleModules, defaultRoleModules, editableRolePermissions } from "../permissions";
 import { useRouter } from "vue-router";
-import { reactive, ref, onMounted } from "vue";
+import { computed, reactive, ref, onMounted } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "./PageHeader.vue";
 import DataTable from "./DataTable.vue";
 import { useAdminAuthStore } from "../stores/auth";
+import { queryToSortState } from "../utils/tableSort";
 import {
   save,
   api,
@@ -241,14 +243,17 @@ import {
   roleNames,
 } from "../composables/workbench";
 const { isPhone } = useResponsive();
-function applyMobileFilters(){const [prop,order]=mobileSort.value.split(":");list.apply({...filters,sort:prop,direction:order==='ascending'?'asc':'desc'});}
+function applyMobileFilters(){list.apply(filters);}
 function removeInlineAccountFilter(key){if(key in filters && String(filters[key]??'')===String(list.query[key]??''))filters[key]='';list.apply({[key]:''});}
 const props = defineProps({ admin: Boolean }),
   auth = useAdminAuthStore(),
   router = useRouter(),
   resource = props.admin ? "admin-users" : "store-users",
   list = useList(resource);
-const mobileSort=ref(`${list.query.sort || "createdAt"}:${list.query.direction==="asc"?"ascending":"descending"}`);
+const mobileSort=computed({
+  get:()=>`${list.query.sort || "createdAt"}:${list.query.direction==="asc"?"ascending":"descending"}`,
+  set:value=>{const [prop,order]=value.split(":");list.sort({prop,order});},
+});
 const salespeople = ref([]);
 onMounted(async () => { if (!props.admin) { try { salespeople.value = (await api('salespeople')).items; } catch (e) { notifyError(e); } } });
 const filters = reactive({

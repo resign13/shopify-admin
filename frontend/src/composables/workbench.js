@@ -1,4 +1,5 @@
 import { authenticatedFetch, csrfHeaders } from '../authTransport';
+import { sortStateToQuery } from '../utils/tableSort';
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -193,8 +194,7 @@ export function useList(resource, defaults = {}, ignoredKeys = []) {
   state.sort = ({ prop, order }) => {
     state.query = {
       ...state.query,
-      sort: prop || "",
-      direction: order === "ascending" ? "asc" : "desc",
+      ...sortStateToQuery({ prop, order }, defaults),
       page: 1,
     };
   };

@@ -117,13 +117,14 @@ import MobileActionMenu from "../components/MobileActionMenu.vue";
 import {Key,Plus,Clock,Document,ArrowRight,Box,Collection,Search} from "@element-plus/icons-vue";
 const {isPhone}=useResponsive();
 import AdaptiveTable from "../components/AdaptiveTable";
-import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, reactive, ref, toRef, watch } from 'vue';
 import { ElMessage, ElMessageBox, ElTableColumn, ElPagination } from 'element-plus';
 import 'element-plus/es/components/table/style/css';
 import 'element-plus/es/components/pagination/style/css';
 import 'element-plus/es/components/message/style/css';
 import 'element-plus/es/components/message-box/style/css';
 import { request } from '../api';
+import { createApiReadTask, createApiAccountQuery } from '../utils/apiIntegrationReads';
 import { useAdminAuthStore } from '../stores/auth';
 import { apiStates, beijingTime, expiryISO, apiExamples, apiCommonHeaders, apiReadEndpoints } from '../utils/apiIntegration';
 
@@ -145,22 +146,35 @@ async function manageMobileAccount(action){const id=mobileAccount.value.id;await
 const auth=useAdminAuthStore(), tab=ref('mine'), meta=ref(null), canManage=ref(false), error=ref('');
 const initialLoading=ref(false),busy=ref(false),baseUrl=ref(''),secret=ref(''),secretOpen=ref(false),generateOpen=ref(false),resetting=ref(false),expiresInput=ref('');
 const logs=ref({items:[],total:0}),logPage=ref(1),logsLoading=ref(false);
-const accounts=ref({items:[],total:0}),accountPage=ref(1),accountKeyword=ref(''),accountsLoading=ref(false);
+const accountQuery=reactive(createApiAccountQuery());
+const accounts=ref({items:[],total:0}),accountPage=toRef(accountQuery,'page'),accountKeyword=toRef(accountQuery,'keyword'),accountsLoading=ref(false);
 const managerLogsOpen=ref(false),logAccount=ref(null),managerLogPage=ref(1),managerLogs=ref({items:[],total:0}),managerLogsLoading=ref(false);
 const roles={admin:'管理员',sales:'外贸部',warehouse:'仓库部',finance:'财务部'};
 const tabs=computed(()=>[{key:'mine',label:'我的 Key'},{key:'docs',label:'接口说明'},...(canManage.value?[{key:'accounts',label:'账号管理'}]:[])]);
 const examples=computed(()=>apiExamples(baseUrl.value));
 const root='/api/admin/api-integrations';
 let alive=true;
+function readTask(target, pending) {
+  return createApiReadTask(request, {
+    active: () => alive,
+    loading: value => { pending.value=value;if(value)error.value=''; },
+    receive: data => { target.value=data; },
+    fail: failure => { error.value=failure.message; },
+  });
+}
+const accountsRead=readTask(accounts,accountsLoading),ownLogsRead=readTask(logs,logsLoading),managerLogsRead=readTask(managerLogs,managerLogsLoading);
+function cancelReads(){accountsRead.cancel();ownLogsRead.cancel();managerLogsRead.cancel();}
+watch(mobileCallsOpen, open=>{if(open)loadLogs();else ownLogsRead.cancel();},{flush:'sync'});
+watch(managerLogsOpen, open=>{if(!open)managerLogsRead.cancel();},{flush:'sync'});
 async function load() {
   initialLoading.value=!meta.value;error.value='';
   try { const data=await request(root+'/me');if(!alive)return;meta.value=data.item;canManage.value=data.canManage && auth.can('admin-users');baseUrl.value=data.baseUrl;await loadLogs(); }
   catch(e){if(alive)error.value=e.message;} finally{if(alive)initialLoading.value=false;}
 }
-async function loadLogs(){logsLoading.value=true;try{const data=await request(root+'/logs?page='+logPage.value);if(alive)logs.value=data;}catch(e){if(alive)error.value=e.message;}finally{if(alive)logsLoading.value=false;}}
-async function changeTab(value){tab.value=value;if(value==='accounts')await loadAccounts();}
-async function searchAccounts(){accountPage.value=1;await loadAccounts();}
-async function loadAccounts(){accountsLoading.value=true;try{const data=await request(root+'/accounts?'+new URLSearchParams({keyword:accountKeyword.value,page:accountPage.value}));if(alive)accounts.value=data;}catch(e){if(alive)error.value=e.message;}finally{if(alive)accountsLoading.value=false;}}
+async function loadLogs(){if(tab.value!=='mine')return;await ownLogsRead.run(root+'/logs?page='+logPage.value);}
+async function changeTab(value){if(value!==tab.value){cancelReads();managerLogsOpen.value=false;mobileCallsOpen.value=false;mobileAccountOpen.value=false;error.value='';tab.value=value;}if(value==='accounts')await loadAccounts();else if(value==='mine')await loadLogs();}
+async function searchAccounts(){accountQuery.submit();await loadAccounts();}
+async function loadAccounts(){if(tab.value!=='accounts')return;await accountsRead.run(root+'/accounts?'+accountQuery.params());}
 function openGenerate(reset){resetting.value=reset;expiresInput.value='';generateOpen.value=true;}
 async function generate(){
   if(busy.value)return;
@@ -192,12 +206,12 @@ async function manage(row,action){
   }catch(e){await loadAccounts();if(alive)error.value=e.message;}finally{if(alive)busy.value=false;}
 }
 async function showAccountLogs(row){logAccount.value=row;managerLogPage.value=1;managerLogs.value={items:[],total:0};managerLogsOpen.value=true;await loadManagerLogs();}
-async function loadManagerLogs(){managerLogsLoading.value=true;try{const data=await request(root+'/logs?userId='+logAccount.value.id+'&page='+managerLogPage.value);if(alive)managerLogs.value=data;}catch(e){if(alive)error.value=e.message;}finally{if(alive)managerLogsLoading.value=false;}}
+async function loadManagerLogs(){if(tab.value!=='accounts'||!managerLogsOpen.value||!logAccount.value)return;await managerLogsRead.run(root+'/logs?'+new URLSearchParams({userId:logAccount.value.id,page:managerLogPage.value}));}
 async function copySecret(){try{await navigator.clipboard.writeText(secret.value);ElMessage.success('已复制');}catch{ElMessage.info('请选中密钥后手动复制');}}
 function clearSecret(){secret.value='';}
-function identityCleared(){alive=false;secretOpen.value=false;clearSecret();meta.value=null;accounts.value={items:[],total:0};logs.value={items:[],total:0};}
+function identityCleared(){alive=false;cancelReads();secretOpen.value=false;managerLogsOpen.value=false;mobileCallsOpen.value=false;clearSecret();meta.value=null;accounts.value={items:[],total:0};logs.value={items:[],total:0};managerLogs.value={items:[],total:0};logAccount.value=null;}
 onMounted(()=>{window.addEventListener('auth-identity-cleared',identityCleared);load();});
-onBeforeUnmount(()=>{alive=false;clearSecret();window.removeEventListener('auth-identity-cleared',identityCleared);});
+onBeforeUnmount(()=>{alive=false;cancelReads();clearSecret();window.removeEventListener('auth-identity-cleared',identityCleared);});
 </script>
 
 <style scoped>

@@ -49,6 +49,7 @@
       storage-key="products"
       :rows="orderedRows"
       :columns="columns"
+      :sort-state="queryToSortState(list.query)"
       :total="list.total"
       :page="list.query.page"
       :page-size="list.query.pageSize"
@@ -200,6 +201,7 @@ import DataTable from "../components/DataTable.vue";
 import ProductImage from "../components/ProductImage.vue";
 import { imageUrl } from "../utils/imageUrl";
 import { sortProductsByCategory } from "../utils/catalogOrder";
+import { queryToSortState } from "../utils/tableSort";
 import {
   api,
   save,

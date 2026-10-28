@@ -22,6 +22,7 @@
       :mobile-tools="mobileListTools"
       :rows="filtered.slice((page - 1) * pageSize, page * pageSize)"
       :columns="columns"
+      :sort-state="sort"
       :total="filtered.length"
       :page="page"
       :page-size="pageSize"
