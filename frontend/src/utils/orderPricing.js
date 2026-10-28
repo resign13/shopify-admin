@@ -32,6 +32,15 @@ export function convertAmount(value, from, to, rate) {
 export function catalogQuote(usd, currency = 'USD', rate = null) {
   return { unitPrice: convertAmount(usd, 'USD', currency, rate), priceSource: 'catalog', referencePriceUsd: Number(usd), preserveQuote: false };
 }
+// Calculate every size before the caller updates its editable row. A missing
+// historical size or invalid quote must not leave a partially restored price.
+export function prepareCatalogPriceRestore(lines, products, currency = 'USD', rate = null) {
+  return lines.map(line => {
+    const usd = products[line.productId]?.sizePrices?.find(size => size.sizeCode === line.sizeCode)?.price;
+    if (usd == null) throw new Error('原尺码已移除，保留成交价或手工调整');
+    return { ...line, ...catalogQuote(usd, currency, rate), conversionBase: undefined, catalogPriceChanged: false };
+  });
+}
 export function quoteTotal(items, shippingFee = 0) {
   return Number(items.reduce((n, row) => n + scaled(row.unitPrice) * BigInt(row.quantity || 0), scaled(shippingFee))) / 100;
 }

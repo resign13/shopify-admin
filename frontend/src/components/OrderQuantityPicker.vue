@@ -43,6 +43,7 @@
       layout="total,prev,pager,next" class="picker-pagination" :disabled="busy || loading" @current-change="load" />
     <template #footer>
       <div class="picker-footer">
+        <p v-if="isPhone && error" ref="mobileErrorFeedback" class="picker-footer-error" role="alert" tabindex="-1"><strong>操作未完成，填写已保留</strong><span>{{ error }}</span></p>
         <span class="pending-count" role="status">待处理 {{ pendingRecords.length }} 个颜色 SKU</span>
         <ElButton link :disabled="busy || (!pendingOnly && !pendingRecords.length)" @click="togglePending">{{ pendingOnly ? '返回查询结果' : '查看待处理' }}</ElButton>
         <span class="footer-spacer" />
@@ -72,11 +73,14 @@ import { computed, nextTick, onBeforeUnmount, reactive, ref, useId, watch } from
 import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { api, confirm } from '../composables/workbench';
+import { useResponsive } from '../composables/responsive';
 import { MAX_ORDER_QUANTITY, createSelectionRecord, selectionChanged, selectionQuantity, selectionSizes, prepareSelectionApplication } from '../utils/orderSelection';
 
 const props = defineProps({ visible: Boolean, items: { type: Array, default: () => [] }, categories: Array,
   disabled: Boolean, currency: { type: String, default: 'USD' }, exchangeRate: [Number, String], applyQuantities: { type: Function, required: true } });
 const emit = defineEmits(['update:visible']);
+const { isPhone } = useResponsive();
+const mobileErrorFeedback = ref();
 const query = reactive({ page: 1, pageSize: 25, keyword: '', category: '' });
 const records = reactive({}), rows = ref([]), total = ref(0), error = ref(''), loading = ref(false), busy = ref(false), pendingOnly = ref(false);
 const pendingViewIds = ref([]);
@@ -171,7 +175,15 @@ async function apply(selected, finish) {
     }
     ElMessage.success({ message: '已同步到订单页面，尚未保存订单', grouping: true, duration: 1500 });
     if (finish) emit('update:visible', false);
-  } catch (failure) { if (session === epoch) error.value = failure.message || '应用失败，请重试'; }
+  } catch (failure) {
+    if (session === epoch) {
+      error.value = failure.message || '应用失败，请重试';
+      if (isPhone.value) {
+        await nextTick();
+        if (session === epoch && props.visible) mobileErrorFeedback.value?.focus({ preventScroll: true });
+      }
+    }
+  }
   finally { if (session === epoch) busy.value = false; }
 }
 watch(() => props.visible, visible => {
@@ -225,6 +237,11 @@ onBeforeUnmount(() => { ++epoch; ++serial; resolveConfirmation(false); window.re
 .footer-spacer { flex:1; }
 .pending-caption { display:flex; align-items:center; gap:12px; margin-bottom:8px; font-size:12px; }
 .clear-note { color:var(--el-color-danger); font-weight:normal; }
+@media(max-width:767px) {
+  .picker-footer-error { display:flex; flex-direction:column; gap:3px; width:100%; margin:0; padding:9px 11px; box-sizing:border-box; border:1px solid var(--el-color-danger-light-7,#fbc4c4); border-radius:8px; color:var(--el-color-danger,#f56c6c); background:var(--el-color-danger-light-9,#fef0f0); font-size:12px; line-height:1.5; overflow-wrap:anywhere; text-align:left; }
+  .picker-footer-error strong { font-weight:600; }
+  .picker-footer-error:focus-visible { outline:2px solid var(--el-color-danger,#f56c6c); outline-offset:2px; }
+}
 @media(max-width:600px) {
   .picker-filters { flex-wrap:wrap; }
   .picker-filters > .el-input { flex-basis:100%; }

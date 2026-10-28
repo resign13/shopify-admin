@@ -1,0 +1,172 @@
+// Use only the authenticated, independently seeded 5380 *_test fixture.
+// Business writes below create/cancel only this test's own order and draft.
+async (page) => {
+  const base = 'http://127.0.0.1:5380';
+  if (!page.url().startsWith(base + '/')) throw new Error('Isolated local *_test fixture required');
+  const checks = [], errors = [];
+  const check = (value, message) => { if (!value) throw new Error(message); checks.push(message); };
+  const api = (path) => page.evaluate(async path => {
+    const response = await fetch('/api/admin/' + path);
+    if (!response.ok) throw new Error('Fixture read failed ' + response.status);
+    return response.json();
+  }, path);
+  const drawer = name => page.getByRole('dialog', {name, exact:true});
+  const editor = () => page.locator('[data-testid="mobile-order-editor"]:visible');
+  const step = index => editor().locator('.m-editor-steps button').nth(index-1).click();
+  const confirm = async () => {
+    const dialog = page.getByRole('dialog').filter({has:page.getByRole('button',{name:'确认',exact:true})});
+    await dialog.getByRole('button',{name:'确认',exact:true}).click();
+    await dialog.waitFor({state:'hidden'});
+  };
+  const settle = async () => page.evaluate(() => Promise.all(document.getAnimations().map(a=>a.finished.catch(()=>{}))));
+  const onError = error => errors.push(error.message);
+  const onDialog = dialog => dialog.type()==='beforeunload' ? dialog.accept() : dialog.dismiss();
+  page.on('pageerror',onError);
+  page.on('dialog',onDialog);
+  let createdId, draftId;
+  const original = (await api('inventory/1')).product;
+  check(original.sku==='GT-2026-1','independent synthetic fixture verified');
+  const size = original.sizePrices[0].sizeCode;
+  const baselineStock = original.sizePrices.find(s=>s.sizeCode===size).stock;
+  const marker = 'Order mobile polish '+Date.now();
+  const catalogPattern=base+'/api/admin/catalog-options';
+  const failCatalog=route=>route.fulfill({status:503,json:{message:'验收：初始化暂不可用'}});
+  try {
+    await page.setViewportSize({width:393,height:852});
+    await page.goto(base+'/orders');await page.getByTestId('mobile-order-create').waitFor();
+    await page.route(catalogPattern,failCatalog);
+    await page.getByTestId('mobile-order-create').click();
+    await drawer('新增订单').getByRole('button',{name:'重新加载',exact:true}).waitFor();
+    check(await editor().count()===0,'failed initialization does not expose a half-ready form');
+    await page.unroute(catalogPattern,failCatalog);
+    await drawer('新增订单').getByRole('button',{name:'重新加载',exact:true}).click();
+    await editor().waitFor();check(true,'initialization retry restores the same editor without closing');
+    await page.getByTestId('mobile-order-recipient').click();
+    const recipient=drawer('编辑收货资料');await recipient.waitFor();
+    const customers=(await api('orders/customers?page=1&pageSize=100')).items;
+    await recipient.getByRole('combobox').first().click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({hasText:customers[0].name}).first().click();
+    for(const [label,value] of [['收货人',marker],['联系电话','+44 7700 900123'],['国家','United Kingdom'],['详细地址','18 Mobile Road']])
+      await recipient.getByRole('textbox',{name:label,exact:false}).fill(value);
+    await recipient.getByRole('button',{name:'应用收货资料',exact:true}).click();await recipient.waitFor({state:'hidden'});
+    await step(2);await editor().getByRole('button',{name:'＋ 添加商品',exact:true}).click();
+    const picker=page.getByTestId('order-quantity-picker');const row=picker.getByTestId('picker-row-1');await row.waitFor();
+    await row.getByRole('button',{name:'加入',exact:true}).click();
+    await picker.getByRole('button',{name:'完成',exact:true}).click();await picker.waitFor({state:'hidden'});
+    check(await editor().getByRole('spinbutton',{name:original.sku+' '+size+' 数量',exact:true}).inputValue()==='0','zero-quantity join preserves a draft SKU');
+    await editor().getByRole('button',{name:'＋ 添加商品',exact:true}).click();await row.waitFor();
+    await row.getByRole('spinbutton',{name:original.sku+' '+size+' 数量',exact:true}).fill('3');
+    const failSelection=async route=>{
+      if(new URL(route.request().url()).searchParams.has('ids')) await route.fulfill({status:503,json:{message:'验收：商品复核失败'}});
+      else await route.continue();
+    };
+    await page.route(base+'/api/admin/products?**',failSelection);
+    await picker.locator('.el-drawer__body').evaluate(el=>el.scrollTop=el.scrollHeight);
+    await picker.getByRole('button',{name:'完成',exact:true}).click();
+    const footerError=picker.locator('.picker-footer-error');await footerError.waitFor();
+    check(await footerError.evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&document.activeElement===el;}),'picker failure is visible and focused beside the bottom action');
+    check(await row.getByRole('spinbutton',{name:original.sku+' '+size+' 数量',exact:true}).inputValue()==='3','failed selection preserves unsubmitted quantities');
+    await page.unroute(base+'/api/admin/products?**',failSelection);
+    await picker.getByRole('button',{name:'完成',exact:true}).click();
+    const overwrite=drawer('确认商品调整');await overwrite.getByRole('button',{name:'确认应用',exact:true}).click();await picker.waitFor({state:'hidden'});
+    await editor().getByTestId('order-unified-pricing').click();
+    await drawer('统一改价 · USD').getByRole('spinbutton',{name:original.sku+' 统一单价',exact:true}).fill('22.00');
+    await drawer('统一改价 · USD').getByRole('button',{name:'确认应用',exact:true}).click();
+    await step(3);await editor().getByRole('spinbutton').first().fill('5.00');
+    await editor().getByRole('textbox',{name:'备注',exact:true}).fill(marker);
+    await editor().getByRole('textbox',{name:'备注',exact:true}).press('Tab');
+    const amount=editor().locator('.order-amount-values h3');
+    check(await amount.evaluate(el=>getComputedStyle(el).fontSize)==='14px'&&await amount.locator('strong').evaluate(el=>getComputedStyle(el).fontSize)==='18px','phone total uses a 14px label and 18px amount');
+    check(!(await editor().innerText()).includes('草稿报价已恢复')&&!(await editor().innerText()).includes('商品按本单成交价计算'),'normal mobile quote tutorials are removed');
+    await settle();await page.screenshot({path:'output/playwright/order-mobile-polish-finish.png',animations:'disabled'});
+    await drawer('新增订单').getByRole('button',{name:'更多',exact:true}).click();
+    const draftSaved=page.waitForResponse(r=>r.url().includes('/orders/drafts')&&r.request().method()==='POST');
+    await page.getByRole('button',{name:'保存草稿',exact:true}).click();const draftResponse=await draftSaved;check(draftResponse.ok(),'same mobile form saves a server draft');draftId=(await draftResponse.json()).id;
+    await drawer('更多操作').waitFor({state:'hidden'});
+    const created=page.waitForResponse(r=>r.url().endsWith('/api/admin/orders')&&r.request().method()==='POST');
+    await drawer('新增订单').getByRole('button',{name:'创建待付款订单',exact:true}).click();await confirm();
+    const response=await created;check(response.ok(),'mobile order commits through the existing create endpoint');createdId=(await response.json()).order.id;draftId=null;
+    await page.getByTestId('mobile-order-detail').waitFor();
+    const order=(await api('orders/'+createdId)).order;
+    check(order.itemCount===3&&Number(order.totalAmount)===71,'negotiated amount and shipping are saved correctly');
+    check((await api('inventory/1')).product.sizePrices.find(s=>s.sizeCode===size).stock===baselineStock-3,'creating the order deducts only actual positive quantities');
+    const inventoryPattern=base+'/api/admin/inventory/1';
+    const failProduct=route=>route.fulfill({status:503,json:{message:'验收：商品资料读取失败'}});
+    await page.route(inventoryPattern,failProduct);
+    await page.getByRole('button',{name:'修改订单资料',exact:true}).click();await editor().waitFor();
+    await page.getByTestId('order-product-load-error').waitFor();await step(2);
+    check(await editor().getByTestId('order-unified-pricing').isDisabled(),'missing catalog data is visible and cannot be mistaken for a usable current quote');
+    await editor().getByRole('spinbutton',{name:original.sku+' '+size+' 数量',exact:true}).fill('4');
+    await page.unroute(inventoryPattern,failProduct);
+    await page.getByRole('button',{name:'重新加载商品',exact:true}).click();await page.getByTestId('order-product-load-error').waitFor({state:'hidden'});
+    check(await editor().getByRole('spinbutton',{name:original.sku+' '+size+' 数量',exact:true}).inputValue()==='4','catalog retry preserves page quantities');
+    check(await editor().locator('.order-size-unit').count()===original.sizePrices.length,'retry restores all actual catalog sizes');
+    await editor().getByTestId('order-unified-pricing').click();
+    await drawer('统一改价 · USD').getByRole('button',{name:'按尺码设置',exact:true}).click();
+    check(Number(await drawer('统一改价 · USD').getByRole('spinbutton',{name:original.sku+' '+size+' 单价',exact:true}).inputValue())===22,'catalog retry does not overwrite a saved manual deal');
+    await drawer('统一改价 · USD').getByRole('button',{name:'取消',exact:true}).click();
+    await step(3);await editor().getByRole('textbox',{name:'备注',exact:true}).fill(marker+'\n'.repeat(50)+'long note');
+    const savePattern=base+'/api/admin/orders/'+createdId+'/details';
+    const failSave=route=>route.fulfill({status:503,json:{message:'验收：保存暂不可用，内容保留'}});
+    await page.route(savePattern,failSave);
+    await drawer('订单详情').locator('.el-drawer__body').evaluate(el=>el.scrollTop=el.scrollHeight);
+    await page.getByRole('button',{name:'保存修改',exact:true}).click();await confirm();
+    const alert=drawer('订单详情').locator('.el-alert--error').filter({hasText:'验收：保存暂不可用'});await alert.waitFor();
+    check(await alert.evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight&&document.activeElement===el;}),'failed final submit scrolls and focuses the real error into view');
+    check((await api('orders/'+createdId)).order.itemCount===3,'failed save did not partially write the order');
+    await page.unroute(savePattern,failSave);await step(2);
+    check(await editor().getByRole('spinbutton',{name:original.sku+' '+size+' 数量',exact:true}).inputValue()==='4','failed save preserves the editable quantities');
+    await step(3);const saved=page.waitForResponse(r=>r.url()===savePattern&&r.request().method()==='PUT');
+    await page.getByRole('button',{name:'保存修改',exact:true}).click();await confirm();check((await saved).ok(),'retry saves the preserved edit once');
+    await page.getByTestId('mobile-order-detail').waitFor();
+    const after=(await api('orders/'+createdId)).order;
+    check(after.itemCount===4&&Number(after.totalAmount)===93,'quantity edit retains the manual price and exact total');
+    check((await api('inventory/1')).product.sizePrices.find(s=>s.sizeCode===size).stock===baselineStock-4,'editing inventory uses only the quantity delta');
+    await page.getByRole('button',{name:'修改订单资料',exact:true}).click();await editor().waitFor();await step(3);
+    await editor().locator('.m-editor-fold').filter({hasText:'订单状态与物流'}).locator('summary').click();
+    await editor().locator('.m-editor-fold').filter({hasText:'订单状态与物流'}).locator('.el-select__wrapper').click();await page.getByRole('option',{name:'已取消',exact:true}).click();
+    await editor().getByRole('textbox',{name:'取消备注（选填）',exact:true}).fill(marker+' cleanup');
+    const canceled=page.waitForResponse(r=>r.url()===savePattern&&r.request().method()==='PUT');
+    await page.getByRole('button',{name:'保存修改',exact:true}).click();await confirm();check((await canceled).ok(),'cancellation note uses the unchanged save transaction');
+    await page.getByTestId('mobile-order-detail').waitFor();
+    check((await api('orders/'+createdId)).order.cancelNote===marker+' cleanup','cancellation note is retained');
+    check((await api('inventory/1')).product.sizePrices.find(s=>s.sizeCode===size).stock===baselineStock,'canceling only the test order restores the original stock');
+    const reorderPattern=base+'/api/admin/orders/'+createdId+'/reorder-draft';
+    const pendingOwner=async route=>{const response=await route.fetch();const data=await response.json();data.ownerNeedsConfirmation=true;await route.fulfill({response,json:data});};
+    await page.route(reorderPattern,pendingOwner);
+    await drawer('订单详情').getByRole('button',{name:'更多',exact:true}).click();await page.getByRole('button',{name:'再来一单',exact:true}).click();await editor().waitFor();await step(3);
+    await page.getByTestId('order-submit-blockers').waitFor();check(await editor().innerText().then(t=>t.includes('请先确认归属业务员')),'final step explains why submission is blocked');
+    await page.getByTestId('order-submit-blockers').getByRole('button',{name:'去处理',exact:true}).click();
+    check(await editor().locator('.m-editor-steps button').first().getAttribute('aria-current')==='step','blocker action returns to the relevant step');
+    await page.unroute(reorderPattern,pendingOwner);
+    await page.getByRole('button',{name:'取消',exact:true}).last().click();await confirm();
+    await page.goto(base+'/orders?orderId=2');await page.getByTestId('mobile-order-detail').waitFor();
+    const missingProduct=route=>route.fulfill({status:404,json:{message:'商品不存在'}});
+    await page.route(inventoryPattern,missingProduct);
+    await page.getByRole('button',{name:'修改订单资料',exact:true}).click();await editor().waitFor();await step(2);await page.waitForLoadState('networkidle');
+    check(await page.getByTestId('order-product-load-error').count()===0,'removed historical product is not mislabeled as a transient load failure');
+    check(await editor().getByTestId('order-unified-pricing').isEnabled(),'historical product retains the existing manual-price entry');
+    await editor().getByTestId('order-unified-pricing').click();
+    check(Number(await drawer('统一改价 · USD').getByRole('spinbutton',{name:original.sku+' 统一单价',exact:true}).inputValue())===29.9,'missing historical catalog preserves its saved deal');
+    await drawer('统一改价 · USD').getByRole('button',{name:'取消',exact:true}).click();
+    await step(1);await drawer('订单详情').getByRole('button',{name:'取消修改',exact:true}).click();
+    await drawer('订单详情').getByRole('button',{name:'关闭',exact:true}).click();await page.unroute(inventoryPattern,missingProduct);
+    check(errors.length===0,'no JavaScript exceptions in the order flows');
+    return {passed:true,checkCount:checks.length,checks,testOrderId:createdId,fixtureOnly:true,productionChanged:false,errors};
+  } finally {
+    await page.unroute(catalogPattern,failCatalog);
+    await page.unroute(base+'/api/admin/inventory/1');
+    await page.unroute(base+'/api/admin/products?**');
+    if(createdId){await page.unroute(base+'/api/admin/orders/'+createdId+'/details');await page.unroute(base+'/api/admin/orders/'+createdId+'/reorder-draft');}
+    page.off('pageerror',onError);
+    if(createdId||draftId)await page.evaluate(async({createdId,draftId,marker})=>{
+      const csrf=await fetch('/api/auth/csrf').then(r=>r.json());
+      const headers={'Content-Type':'application/json','X-CSRF-Token':csrf.csrfToken};
+      if(createdId){const {order}=await fetch('/api/admin/orders/'+createdId).then(r=>r.json());if(order.status!=='cancelled'){
+        const response=await fetch('/api/admin/orders/'+createdId,{method:'PUT',headers,body:JSON.stringify({version:order.version,status:'cancelled',cancelNote:marker+' cleanup'})});if(!response.ok)throw Error('Test order cleanup failed');
+      }}
+      if(draftId){const draft=await fetch('/api/admin/orders/drafts/'+draftId).then(r=>r.json());const response=await fetch('/api/admin/orders/drafts/'+draftId,{method:'DELETE',headers,body:JSON.stringify({version:draft.version})});if(!response.ok)throw Error('Test draft cleanup failed');}
+    },{createdId,draftId,marker});
+    page.off('dialog',onDialog);
+  }
+}

@@ -24,7 +24,7 @@
 <script setup>
 import AdaptiveTable from "./AdaptiveTable";
 import { computed, ref, watch } from 'vue';
-import { catalogQuote, validAmount } from '../utils/orderPricing';
+import { catalogQuote, prepareCatalogPriceRestore, validAmount } from '../utils/orderPricing';
 import { money } from '../composables/workbench';
 const props = defineProps({ open:Boolean, items:Array, products:Object, currency:String, exchangeRate:[Number,String] });
 const emit = defineEmits(['update:open','apply']);
@@ -47,7 +47,7 @@ function setPrice(line,value){Object.assign(line,{unitPrice:value,priceSource:'m
 function current(line){return props.products[line.productId]?.sizePrices?.find(size=>size.sizeCode===line.sizeCode)?.price;}
 function reference(line){const usd=current(line);return usd==null?'—':money(usd,'USD');}
 function referenceRange(row){const values=row.lines.map(current).filter(value=>value!=null);if(!values.length)return '—';const lo=Math.min(...values),hi=Math.max(...values);return lo===hi?money(lo,'USD'):`${money(lo,'USD')} – ${money(hi,'USD')}`;}
-function restore(row){try{for(const line of row.lines){const usd=current(line);if(usd==null)throw new Error('原尺码已移除，保留成交价或手工调整');Object.assign(line,catalogQuote(usd,props.currency,props.exchangeRate),{conversionBase:undefined,catalogPriceChanged:false});}error.value='';}catch(e){error.value=e.message;}}
+function restore(row){try{const restored=prepareCatalogPriceRestore(row.lines,props.products,props.currency,props.exchangeRate);row.lines.forEach((line,index)=>Object.assign(line,restored[index]));error.value='';}catch(e){error.value=e.message;}}
 function apply(){if(lines.value.some(line=>!validAmount(line.unitPrice))){error.value='请填写非负单价，最多两位小数；空白不是零价';return;}emit('apply',lines.value);visible.value=false;}
 </script>
 <style scoped>
