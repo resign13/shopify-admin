@@ -6,7 +6,12 @@
     <ElButton type="primary" @click="openImport">导入覆盖</ElButton></template>
   </PageHeader>
   <section class="panel goods-list-panel">
-    <MobileGoodsSearch v-if="isPhone" v-model="filters.keyword" placeholder="搜索款号或商品名称" filterable :active="Boolean(applied.category || applied.status)" @submit="query" @filter="mobileFilterOpen = true" />
+    <ResponsiveFilters v-if="isPhone" :active="{category:categories.find(c => c.key === applied.category)?.label || applied.category,status:statuses[applied.status] || ''}" @remove="key => { filters[key] = ''; query(); }" @submit="query">
+      <ElInput v-model="filters.keyword" clearable placeholder="搜索款号或商品名称" aria-label="搜索款号或商品名称" @clear="query" />
+      <ElSelect v-model="filters.category" clearable placeholder="全部分类" aria-label="商品分类"><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.label" /></ElSelect>
+      <ElSelect v-model="filters.status" clearable placeholder="全部填写状态" aria-label="填写状态"><ElOption v-for="(v,k) in statuses" :key="k" :value="k" :label="v" /></ElSelect>
+      <ElButton native-type="submit" type="primary">查询</ElButton><ElButton @click="reset">重置</ElButton>
+    </ResponsiveFilters>
     <div v-if="isPhone" class="mobile-goods-heading"><span>{{ mobileSelectionMode ? '选择要导出的款号' : '尺寸资料' }}</span><small>{{ total }} 款</small></div>
     <ResponsiveFilters v-if="!isPhone" :active="{category:categories.find(c => c.key === applied.category)?.label || applied.category,status:statuses[applied.status] || ''}" @remove="key => { filters[key] = ''; query(); }" @submit.prevent="query">
       <ElInput v-model="filters.keyword" placeholder="款号或商品标题" clearable />
@@ -28,7 +33,6 @@
     <ElPagination v-model:current-page="page" :page-size="25" :total="total" layout="total, prev, pager, next" @current-change="load" class="section-gap" />
     <div v-if="isPhone && mobileSelectionMode" class="mobile-goods-selection"><span>已选 {{ selected.length }} 款</span><MobileActionMenu label="导出"><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'maintenance')">完整维护表</ElButton><ElButton :disabled="!selected.length || exporting" @click="exportCharts(selected, 'english')">英文客户表</ElButton></MobileActionMenu><ElButton @click="toggleMobileSelection">完成</ElButton></div>
   </section>
-  <ElDrawer v-if="isPhone" v-model="mobileFilterOpen" title="筛选尺码表" size="100%"><ElForm class="mobile-goods-filter-form" label-position="top"><ElFormItem label="商品分类"><ElSelect v-model="filters.category" clearable placeholder="全部分类"><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.label" /></ElSelect></ElFormItem><ElFormItem label="填写状态"><ElSelect v-model="filters.status" clearable placeholder="全部填写状态"><ElOption v-for="(v,k) in statuses" :key="k" :value="k" :label="v" /></ElSelect></ElFormItem></ElForm><template #footer><ElButton @click="reset">重置</ElButton><ElButton type="primary" @click="query">应用筛选</ElButton></template></ElDrawer>
 
   <component :is="readonly ? ElDialog : ElDrawer" v-model="editorOpen" :class="{ 'chart-preview-window': readonly }" :title="(readonly ? '预览尺码表 · ' : '编辑尺码表 · ') + (form?.styleCode || '')" size="min(1280px, 94vw)" width="min(1040px, 94vw)" :align-center="readonly" :before-close="closeEditor" :close-on-click-modal="false">
     <template v-if="form">
@@ -115,7 +119,6 @@
 <script setup>
 import { useResponsive } from '../composables/responsive';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
-import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
 import AdaptiveTable from "../components/AdaptiveTable";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import MobileActionMenu from "../components/MobileActionMenu.vue";
@@ -128,7 +131,7 @@ import { api, save, download, confirm, notifyError, useDirty } from '../composab
 import { imageUrl } from '../utils/imageUrl';
 import { changeChartUnit, previewChartInUnit } from '../utils/sizeChartUnits';
 const { isPhone } = useResponsive();
-const mobileSelectionMode=ref(false),mobileListTools=ref(false),mobileFilterOpen=ref(false);
+const mobileSelectionMode=ref(false),mobileListTools=ref(false);
 function toggleMobileSelection(){mobileSelectionMode.value=!mobileSelectionMode.value;selected.value=[];table.value?.clearSelection();}
 const rows=ref([]), categories=ref([]), page=ref(1), total=ref(0), selected=ref([]), table=ref();
 const filters=reactive({keyword:'',category:'',status:''}); let applied={...filters};
@@ -138,7 +141,7 @@ const statuses={empty:'未填写',partial:'部分填写',complete:'已填完整'
 const {dirty,markClean,canLeave}=useDirty(()=>editorOpen.value ? form.value : null);
 let sequence=0, saveAttempt=null; const unitAnchors=new Map();
 async function load(){const seq=++sequence;loading.value=true;listError.value='';try{const r=await api('size-charts?'+new URLSearchParams({...applied,page:page.value,pageSize:25}));if(seq!==sequence)return;rows.value=r.items;total.value=r.total;categories.value=r.categories;selected.value=[];table.value?.clearSelection();}catch(e){if(seq===sequence)listError.value=e.message;}finally{if(seq===sequence)loading.value=false;}}
-function query(){applied={...filters};page.value=1;mobileFilterOpen.value=false;load();}
+function query(){applied={...filters};page.value=1;load();}
 function reset(){Object.assign(filters,{keyword:'',category:'',status:''});query();}
 async function open(code, preview=false){if(!(await canLeave()))return;try{const data=await api('size-charts/detail?'+new URLSearchParams({styleCode:code}));form.value=data;previewUnit.value=data.unit;unitAnchors.clear();readonly.value=preview;mode.value='zh';error.value='';editorOpen.value=true;saveAttempt=null;markClean();}catch(e){notifyError(e);}}
 async function closeEditor(done){if(saving.value)return;if(await canLeave()){editorOpen.value=false;markClean();if(typeof done==='function')done();}}

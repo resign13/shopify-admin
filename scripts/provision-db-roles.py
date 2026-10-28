@@ -54,6 +54,8 @@ with db._connect() as conn:
         # Identity sequence ownership follows its table.
         owner=conn.execute("SELECT 1 FROM pg_depend WHERE objid=%s::regclass AND deptype IN ('a','i')",('public.'+name,)).fetchone()
         if not owner: conn.execute(sql.SQL('ALTER SEQUENCE public.{} OWNER TO {}').format(sql.Identifier(name),sql.Identifier(roles['migrator'])))
+    if conn.execute("SELECT to_regclass('public.security_export_waiting') AS name").fetchone()['name']:
+        conn.execute(sql.SQL('ALTER VIEW public.security_export_waiting OWNER TO {}').format(sql.Identifier(roles['migrator'])))
     for name in ('capture_admin_audit','capture_order_created_notification'):
         conn.execute(sql.SQL('ALTER FUNCTION public.{}() OWNER TO {}').format(sql.Identifier(name),sql.Identifier(roles['migrator'])))
         conn.execute(sql.SQL('ALTER FUNCTION public.{}() SECURITY DEFINER').format(sql.Identifier(name)))
@@ -70,6 +72,8 @@ with db._connect() as conn:
     read=['security_schema_versions','security_media_migrations','products','product_categories','product_category_translations','product_translations','product_sizes','product_size_prices','product_images','banners','banner_translations','homepage_configs','presale_configs','store_users','orders','order_items','inventory_legacy_cancelled_orders','security_files','security_file_refs']
     for name in read:
         if name in tables: conn.execute(sql.SQL('GRANT SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
+    if conn.execute("SELECT to_regclass('public.security_export_waiting') AS name").fetchone()['name']:
+        conn.execute(sql.SQL('GRANT SELECT ON public.security_export_waiting TO {}').format(store))
     for name in ['orders','order_items','store_sessions','security_files','security_file_refs','security_audit_events','security_rate_buckets','security_request_metrics']:
         conn.execute(sql.SQL('GRANT INSERT ON public.{} TO {}').format(sql.Identifier(name),store))
     for name in ['store_sessions','security_rate_buckets','security_request_metrics']:

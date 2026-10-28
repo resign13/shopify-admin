@@ -7,7 +7,7 @@ async (page) => {
   const onError=e=>errors.push(e.message);page.on('pageerror',onError);
   const searchRows=[
     ['/orders','.responsive-filters'],['/inventory','.responsive-filters'],
-    ['/products','.goods-search'],['/size-charts','.goods-search'],
+    ['/products','.responsive-filters'],['/size-charts','.responsive-filters'],
     ['/categories','.goods-search'],['/contracts','.goods-search'],
     ['/admin-users','.mobile-system-search'],['/store-accounts','.mobile-system-search'],
     ['/audit-logs','.ma-search'],['/finance','.mf-cost-search'],

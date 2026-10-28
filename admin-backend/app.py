@@ -5,6 +5,7 @@ import order_printing
 import order_cancellation
 import export_resources
 import order_export_service
+import order_export_process
 
 import module_permissions
 import sales_ownership
@@ -16,7 +17,7 @@ import hashlib
 import hmac
 import zipfile
 from copy import copy
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 import secrets
 import sys
 import mimetypes
@@ -427,108 +428,188 @@ def _export_image_source(value: str, attachment: bool):
 
 
 def _read_export_image(value, source):
-    from safe_images import fetch_image, check_image
-    raw = media.read_legacy_source(source) if source and source.get('legacy_channel') else media.read(source) if source else fetch_image(value)
-    check_image(raw)
-    return raw
+    from safe_images import fetch_image, check_image, validate_url
+    from export_image_cache import ImageBytes, shared_cache, source_identity, source_ttl, export_source_url
+    # Authorization is resolved by _export_image_source before reaching here.
+    # A cache hit must still honor this request's allowed origins and public DNS.
+    download_url = value
+    if source is None:
+        validate_url(value)
+        download_url = export_source_url(value)
+        if download_url != value:
+            validate_url(download_url)
+    def read():
+        raw = media.read_legacy_source(source) if source and source.get('legacy_channel') else media.read(source) if source else fetch_image(download_url)
+        check_image(raw)
+        return raw
+    entry = shared_cache().get(source_identity(download_url, source), read, ttl_seconds=source_ttl(source))
+    return ImageBytes(entry.data, entry.token)
+
+
+def _remember_export_image(cache, key, raw):
+    cache[key] = raw
+    tokens = getattr(cache, 'source_tokens', None)
+    if tokens is None:
+        tokens = cache.source_tokens = {}
+    if getattr(raw, 'cache_token', None):
+        tokens[key] = raw.cache_token
 
 
 def fetch_image_bytes(url: str, *, attachment: bool = False):
     from flask import has_request_context
+    from export_image_cache import ExportImageError, image_variant
     value = str(url or '').strip()
     if not value: return None
-    cache = export_resources.cache() if has_request_context() else {}
+    cache = export_resources.cache() if has_request_context() else None
     key = (value, attachment)
-    if key in cache: return cache[key]
     try:
-        raw = _read_export_image(value, _export_image_source(value, attachment))
-        cache[key] = raw
+        source = _export_image_source(value, attachment)
+        if cache is not None and key in cache:
+            raw = cache[key]
+            if raw is None:
+                raise ExportImageError()
+            return raw
+        with image_variant(1600 if attachment else 640):
+            raw = _read_export_image(value, source)
+        if cache is not None:
+            _remember_export_image(cache, key, raw)
         return raw
     except Exception:
-        cache[key] = None
         app.logger.warning('export_image_missing')
-        return None
+        raise ExportImageError() from None
 
 
 def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
-    """Fetch each URL at the highest required quality, with bounded concurrency."""
+    """Fetch authorized unique images with bounded, dynamically refilled workers."""
     from flask import has_request_context
+    from safe_images import ImageTransport
+    from export_image_cache import ExportImageError, image_variant
     if not has_request_context():
         return
     wanted = set()
     for order in orders:
         for item in order.get('items', []):
             if item.get('image'):
-                wanted.add((str(item['image']), False))
+                wanted.add((str(item['image']).strip(), False))
         for url in split_order_attachments(order)[0]:
-            wanted.add((str(url), True))
+            wanted.add((str(url).strip(), True))
     cache = export_resources.cache()
     pending = []
     for key in sorted(wanted):
-        if key in cache: continue
         try:
-            pending.append((key, _export_image_source(*key)))
+            source = _export_image_source(*key)
+            if key in cache:
+                if cache[key] is None:
+                    raise ExportImageError()
+            else:
+                pending.append((key, source))
         except Exception:
-            cache[key] = None
             app.logger.warning('export_image_missing')
+            raise ExportImageError() from None
     def read(pair):
         key, source = pair
         try:
-            return _read_export_image(key[0], source)
+            with transport.use(), image_variant(1600 if key[1] else 640):
+                return _read_export_image(key[0], source)
         except Exception:
             app.logger.warning('export_image_missing')
-            return None
-    # Bounded batches prevent completed futures retaining an entire export's
-    # original images. Workers receive only already-authorized storage rows;
-    # they never manufacture an anonymous Flask request context.
-    with export_resources.stage('images'), ThreadPoolExecutor(max_workers=2) as pool:
-        for offset in range(0, len(pending), 2):
-            batch = pending[offset:offset + 2]
-            for (key, _), data in zip(batch, pool.map(read, batch)):
-                cache[key] = data
+            raise ExportImageError() from None
+    workers = int(os.environ.get('ORDER_EXPORT_IMAGE_WORKERS', '2'))
+    if not 1 <= workers <= 4:
+        raise ValueError('Invalid export image worker count')
+    progress = getattr(g, 'export_progress', None)
+    completed = sum(key in cache for key in wanted)
+    if progress:
+        progress('images', completed, len(wanted))
+    with export_resources.stage('images'), ImageTransport() as transport, ThreadPoolExecutor(max_workers=workers) as pool:
+        pairs = iter(pending)
+        active = {}
+        def submit_next():
+            pair = next(pairs, None)
+            if pair is not None:
+                active[pool.submit(read, pair)] = pair[0]
+        for _ in range(workers):
+            submit_next()
+        failed = False
+        while active:
+            done, _ = wait(active, return_when=FIRST_COMPLETED)
+            for future in done:
+                key = active.pop(future)
+                try:
+                    raw = future.result()
+                except ExportImageError:
+                    # Keep filling the shared cache with other authorized
+                    # images, but never turn an incomplete export into success.
+                    cache[key] = None
+                    failed = True
+                else:
+                    _remember_export_image(cache, key, raw)
+                completed += 1
+                if progress:
+                    progress('images', completed, len(wanted))
+                submit_next()
+        if failed:
+            raise ExportImageError()
 
 
 def prepare_export_images(orders):
-    """Resolve storage authorization inside the same snapshot as the order data."""
+    """Resolve authorization inside the same snapshot as the order data."""
+    from export_image_cache import ExportImageError
     sources = {}
     for order in orders:
-        wanted = [(str(item['image']), False) for item in order.get('items', []) if item.get('image')]
-        wanted += [(url, True) for url in split_order_attachments(order)[0]]
+        wanted = [(str(item['image']).strip(), False) for item in order.get('items', []) if item.get('image')]
+        wanted += [(url.strip(), True) for url in split_order_attachments(order)[0]]
         for key in wanted:
             if key not in sources:
                 try:
                     sources[key] = _export_image_source(*key)
-                except ValueError:
-                    # An inaccessible source remains an explicit missing image.
-                    export_resources.cache()[key] = None
+                except Exception:
+                    app.logger.warning('export_image_missing')
+                    raise ExportImageError() from None
     g.export_sources = sources
 
 
-def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640) -> OpenpyxlImage | None:
+def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640, source_key=None) -> OpenpyxlImage | None:
+    from export_image_cache import ExportImageError, shared_cache
     try:
+        from flask import has_request_context
         from PIL import ImageOps
-        with PILImage.open(BytesIO(image_bytes)) as img:
-            converted = ImageOps.exif_transpose(img).convert("RGBA")
-            converted.thumbnail((pixels, pixels), PILImage.Resampling.LANCZOS)
-            output = BytesIO()
-            if converted.getextrema()[3][0] == 255:
-                converted.convert("RGB").save(output, format="JPEG", quality=94, subsampling=0)
+        cache = export_resources.cache() if has_request_context() else None
+        key = (source_key, pixels) if source_key is not None and cache is not None else None
+        if key is not None and key in cache.converted:
+            path, image_width, image_height = cache.converted[key]
+        else:
+            def convert():
+                with PILImage.open(BytesIO(image_bytes)) as img:
+                    converted = ImageOps.exif_transpose(img).convert("RGBA")
+                    converted.thumbnail((pixels, pixels), PILImage.Resampling.LANCZOS)
+                    output = BytesIO()
+                    if converted.getextrema()[3][0] == 255:
+                        converted.convert("RGB").save(output, format="JPEG", quality=94, subsampling=0)
+                    else:
+                        converted.save(output, format="PNG")
+                    return output.getvalue()
+            token = getattr(cache, 'source_tokens', {}).get(source_key) if cache is not None else None
+            # The raw entry's random generation ID changes whenever its source
+            # version/TTL changes. No new digest is needed for converted reuse.
+            converted_bytes = shared_cache().get(['converted-v1', token, pixels, 'jpeg94-rgba'], convert, kind='converted').data if token else convert()
+            with PILImage.open(BytesIO(converted_bytes)) as image:
+                image_width, image_height = image.size
+            if cache is not None:
+                path = cache.new_path()
+                path.write_bytes(converted_bytes)
+                if key is not None:
+                    cache.converted[key] = (path, image_width, image_height)
             else:
-                converted.save(output, format="PNG")
-            output.seek(0)
-            from flask import has_request_context
-            if has_request_context():
-                path = export_resources.cache().new_path()
-                path.write_bytes(output.getvalue())
-                excel_image = OpenpyxlImage(str(path))
-            else:
-                excel_image = OpenpyxlImage(output)
-            ratio = min(1, width / converted.width, height / converted.height)
-            excel_image.width = converted.width * ratio
-            excel_image.height = converted.height * ratio
-            return excel_image
+                path = BytesIO(converted_bytes)
+        excel_image = OpenpyxlImage(str(path) if isinstance(path, Path) else path)
+        ratio = min(1, width / image_width, height / image_height)
+        excel_image.width = image_width * ratio
+        excel_image.height = image_height * ratio
+        return excel_image
     except Exception:
-        return None
+        app.logger.warning('export_image_missing')
+        raise ExportImageError() from None
 
 
 def autosize_columns(worksheet: Any) -> None:
@@ -1036,7 +1117,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         image_bytes = fetch_image_bytes(str(item.get("image") or ""))
         excel_image = None
         if image_bytes:
-            excel_image = build_excel_image(image_bytes, width=140, height=160)
+            excel_image = build_excel_image(image_bytes, width=140, height=160, source_key=(str(item.get('image') or '').strip(), False))
             if excel_image:
                 worksheet.add_image(excel_image, f"B{row}")
         if item.get('image') and not excel_image:
@@ -1112,7 +1193,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         missing_images = 0
         for attachment_url in attachment_images:
             attachment_bytes = fetch_image_bytes(attachment_url, attachment=True)
-            attachment_image = build_excel_image(attachment_bytes, width=480, height=480, pixels=1600) if attachment_bytes else None
+            attachment_image = build_excel_image(attachment_bytes, width=480, height=480, pixels=1600, source_key=(str(attachment_url).strip(), True)) if attachment_bytes else None
             if attachment_image:
                 pictures.append(attachment_image)
             else:
@@ -2792,6 +2873,23 @@ def load_export_orders(time_range, selected_order_ids, include_images):
     return order_export_service.snapshot(load)
 
 
+from export_image_cache import ExportImageError
+
+
+@app.errorhandler(ExportImageError)
+@app.errorhandler(order_export_process.ImageUnavailable)
+def export_image_unavailable(error):
+    g.security_export_image_failure = True
+    return jsonify({'code': 'export_image_unavailable', 'message': '图片读取失败，请重试导出。'}), 502
+
+
+@app.errorhandler(order_export_process.ExportTimeout)
+def export_timeout(error):
+    g.security_export_timeout = True
+    return jsonify({'code': 'export_timeout', 'message': '导出超时，请减少订单数量后重试。',
+                    **error.progress}), 504
+
+
 @app.route("/api/admin/orders/export", methods=["GET", "POST"])
 @require_auth
 @require_roles("admin", "sales", "warehouse")
@@ -2808,15 +2906,11 @@ def export_orders() -> Any:
     }
     orders = load_export_orders(time_range, selected_order_ids, include_images)
     with export_resources.stage('workbook'):
-        file_stream = build_orders_export(orders, include_images=include_images)
+        file_stream = order_export_process.build('combined', orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    response = send_file(
-        file_stream,
-        as_attachment=True,
-        download_name=f"orders_export_{timestamp}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    return order_export_service.finish(response, orders, 'export' if request.method == 'POST' else None)
+    import order_export_results
+    return order_export_results.deliver(file_stream, orders, f"orders_export_{timestamp}.xlsx",
+                                        'export' if request.method == 'POST' else None)
 
 
 @app.route("/api/admin/orders/export-by-sheet", methods=["GET", "POST"])
@@ -2835,15 +2929,11 @@ def export_orders_by_sheet() -> Any:
     }
     orders = load_export_orders(time_range, selected_order_ids, include_images)
     with export_resources.stage('workbook'):
-        file_stream = build_orders_sheet_export(orders, include_images=include_images)
+        file_stream = order_export_process.build('split', orders, include_images=include_images)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    response = send_file(
-        file_stream,
-        as_attachment=True,
-        download_name=f"orders_by_sheet_{timestamp}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    return order_export_service.finish(response, orders, 'export-by-sheet' if request.method == 'POST' else None)
+    import order_export_results
+    return order_export_results.deliver(file_stream, orders, f"orders_by_sheet_{timestamp}.xlsx",
+                                        'export-by-sheet' if request.method == 'POST' else None)
 
 
 @app.get("/api/admin/orders/<int:order_id>/invoice")
@@ -2860,20 +2950,28 @@ def export_order_invoice(order_id: int) -> Any:
     if not order:
         return jsonify({"message": "Order not found"}), 404
     try:
-        file_stream = build_order_invoice_export(order)
-    except ValueError as error:
+        with export_resources.stage('workbook'):
+            file_stream = order_export_process.build('invoice', [order])
+    except order_export_process.InvoiceInvalid as error:
         return jsonify({"message": str(error)}), 400
-    except FileNotFoundError as error:
-        return jsonify({"message": str(error)}), 500
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     order_no = secure_filename(str(order.get("orderNo") or order_id)) or f"order_{order_id}"
-    response = send_file(
-        file_stream,
-        as_attachment=True,
-        download_name=f"proforma_{order_no}_{timestamp}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    return order_export_service.finish(response, [order])
+    import order_export_results
+    return order_export_results.deliver(file_stream, [order], f"proforma_{order_no}_{timestamp}.xlsx")
+
+
+@app.get('/api/admin/orders/export-results/<ticket>')
+@require_auth
+def order_export_result_status(ticket):
+    import order_export_results
+    return order_export_results.status(ticket)
+
+
+@app.get('/api/admin/orders/export-results/<ticket>/download')
+@require_auth
+def order_export_result_download(ticket):
+    import order_export_results
+    return order_export_results.status(ticket, download=True)
 
 
 def admin_order_snapshot(order_id):

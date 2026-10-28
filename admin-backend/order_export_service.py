@@ -13,7 +13,7 @@ def snapshot(load):
         return workbench.snapshot_admin_call(load, (), {})
 
 
-def finish(response, orders, export_kind=None):
+def finish(response, orders, export_kind=None, *, on_success=None):
     """Recheck current identity, ownership and order versions before releasing a file."""
     def commit():
         if g.current_user['role'] != g.export_actor_role:
@@ -27,6 +27,8 @@ def finish(response, orders, export_kind=None):
                 raise workbench.Conflict('导出期间订单已修改，请重新导出。')
         if export_kind:
             order_printing.record(db, orders, g.current_user, export_kind)
+        if on_success:
+            on_success()
         return response
     try:
         with stage('finalize'):

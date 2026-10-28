@@ -188,11 +188,11 @@ async (page) => {
   await page.locator('.mf-batch').getByRole('button',{name:'清空',exact:true}).click();await page.getByRole('button',{name:'取消',exact:true}).click();
   assert(await otherInput.inputValue()==='0.00','Explicit zero can be selected for clearing on mobile');
   await page.getByRole('button',{name:'成本统计',exact:true}).click();
-  const phoneFilters=page.getByRole('dialog',{name:'核算筛选',exact:true});
-  const openPhoneFilters=async()=>{await page.getByRole('button',{name:'筛选核算条件',exact:true}).click();await phoneFilters.waitFor();};
-  const phoneQuery=async()=>{const r=await response('/reports/query',()=>phoneFilters.getByRole('button',{name:'查询核算',exact:true}).click());assert(r.ok(),'Mobile report request');const result=await r.json();await phoneFilters.waitFor({state:'hidden'});return result;};
+  const phoneFilters=page.locator('.mf-report-search');
+  const openPhoneFilters=async()=>{await phoneFilters.waitFor();if(!await phoneFilters.evaluate(el=>el.classList.contains('is-expanded')))await phoneFilters.getByRole('button',{name:'更多筛选',exact:true}).click();await phoneFilters.getByPlaceholder('开始日期',{exact:true}).waitFor();};
+  const phoneQuery=async()=>{const r=await response('/reports/query',()=>phoneFilters.getByRole('button',{name:'查询核算',exact:true}).click());assert(r.ok(),'Mobile report request');const result=await r.json();assert(await phoneFilters.evaluate(el=>el.classList.contains('is-expanded')),'Mobile report query keeps inline filters expanded');return result;};
   await openPhoneFilters();await date('开始日期','2026-09-01');await date('结束日期','2026-09-30');data=await phoneQuery();
-  await openPhoneFilters();const codesInput=phoneFilters.getByRole('combobox',{name:'款号',exact:true});
+  await openPhoneFilters();const codesInput=phoneFilters.getByText('款号',{exact:true}).locator('..').getByRole('combobox');
   await codesInput.fill('GT-2026，GT-OTHER');await codesInput.press('Enter');await codesInput.press('Escape');data=await phoneQuery();
   assert(data.filters.styleCodes.length===2&&data.summary.quantity===9,'Multiple comma-separated style filters');
   await page.locator('.mf-filter-chips .el-tag').filter({hasText:'款号：'}).locator('.el-tag__close').click();await openPhoneFilters();await phoneQuery();
@@ -202,7 +202,7 @@ async (page) => {
   await page.locator('.finance-report-date-popper:visible .el-date-range-picker').waitFor();
   await page.waitForFunction(()=>{const r=document.querySelector('.finance-report-date-popper .el-date-range-picker').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth;});
   await page.keyboard.press('Escape');await phoneFilters.getByPlaceholder('开始日期',{exact:true}).press('Tab');
-  await phoneFilters.getByRole('button',{name:'关闭此对话框',exact:true}).click();await phoneFilters.waitFor({state:'hidden'});
+  await phoneFilters.getByRole('button',{name:'收起筛选',exact:true}).click();await phoneFilters.getByPlaceholder('开始日期',{exact:true}).waitFor({state:'hidden'});
   await page.setViewportSize({width:768,height:1000});await page.getByRole('button',{name:'商品成本',exact:true}).click();await firstInput.waitFor();
   await page.locator('.finance-panel .el-loading-mask').waitFor({state:'hidden'});await page.locator('.finance-panel .el-loading-mask').waitFor({state:'hidden'});await page.screenshot({path:'output/playwright/finance-style-costs-tablet.png',fullPage:true});
   assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),'Tablet page does not overflow');

@@ -1,6 +1,7 @@
 <template>
-  <form class="goods-search" @submit.prevent="$emit('submit')">
+  <form class="goods-search mobile-query-bar" @submit.prevent="$emit('submit')">
     <ElInput :model-value="modelValue" :placeholder="placeholder" :aria-label="placeholder" clearable @update:model-value="$emit('update:modelValue', $event)" @clear="$emit('submit')"><template #prefix><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10" cy="10" r="6"/><path d="m15 15 5 5"/></svg></template></ElInput>
+    <ElButton native-type="submit" type="primary">查询</ElButton>
     <ElButton v-if="filterable" class="goods-filter" aria-label="筛选" @click="$emit('filter')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg><span v-if="active" class="filter-dot"/></ElButton>
   </form>
 </template>

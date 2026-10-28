@@ -8,6 +8,7 @@ from openpyxl import load_workbook
 from werkzeug.security import generate_password_hash
 from test_workbench import application, db, seed
 import order_printing
+import order_export_results
 
 
 class OrderPrintingTest(unittest.TestCase):
@@ -108,14 +109,21 @@ class OrderPrintingTest(unittest.TestCase):
 
     def test_export_failure_and_batch_failure_leave_no_partial_marks(self):
         before = self.snapshot()
-        for kind, builder in (('export', 'build_orders_export'), ('export-by-sheet', 'build_orders_sheet_export')):
-            with patch.object(application, builder, side_effect=RuntimeError('Synthetic render failure')):
+        for kind, builder_kind in (('export', 'combined'), ('export-by-sheet', 'split')):
+            with patch.object(application.order_export_process, '_run_worker', side_effect=application.order_export_process.ExportFailed()) as mocked:
                 response = self.call('orders/' + kind + '?orderIds=1,2&includeImages=0', 'POST')
                 self.assertEqual(response.status_code, 500)
                 self.assertNotIn('Content-Disposition', response.headers)
+                mocked.assert_called_once()
+                payload = mocked.call_args.args[0]
+                self.assertEqual(payload['kind'], builder_kind)
+                self.assertEqual({order['id'] for order in payload['orders']}, {1, 2})
+                self.assertFalse(payload['include_images'])
             self.assertEqual(self.marks(), [])
-        with patch.object(application, 'send_file', side_effect=RuntimeError('Synthetic response failure')):
+        with patch.object(order_export_results, 'send_file', side_effect=RuntimeError('Synthetic response failure')) as mocked:
             self.assertEqual(self.call('orders/export?orderIds=1&includeImages=0', 'POST').status_code, 500)
+            mocked.assert_called_once()
+        self.assertEqual(self.marks(), [])
         with patch.object(order_printing, 'record', side_effect=RuntimeError('Synthetic mark failure')):
             response = self.call('orders/export?orderIds=1&includeImages=0', 'POST')
             self.assertEqual(response.status_code, 500)

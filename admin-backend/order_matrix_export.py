@@ -155,7 +155,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             ws.row_dimensions[row_no].height = 88 if include_images else 36
             if include_images and item['image']:
                 data = image_bytes(item['image'])
-                image = make_image(data, width=110, height=104) if data else None
+                image = make_image(data, width=110, height=104, source_key=(str(item['image']).strip(), False)) if data else None
                 if image:
                     ws.add_image(image, f'B{row_no}')
                 else:
@@ -183,7 +183,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             missing_images = 0
             for url in image_urls:
                 data = image_bytes(url, attachment=True)
-                image = make_image(data, width=480, height=480, pixels=1600) if data else None
+                image = make_image(data, width=480, height=480, pixels=1600, source_key=(str(url).strip(), True)) if data else None
                 if image:
                     attachment_images.append(image)
                 else:

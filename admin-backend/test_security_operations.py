@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, Mock, patch
 from flask import Flask
 from flask.testing import FlaskClient
 from test_workbench import application, db, seed
@@ -14,6 +14,7 @@ from security_core import Security
 class SecurityOperationsTest(unittest.TestCase):
     def setUp(self):
         self.tokens, self.products = seed()
+        db._fetch_one('DELETE FROM security_export_queue RETURNING seq')
 
     def get(self, path, role='admin'):
         with application.app.test_client() as client:
@@ -57,7 +58,7 @@ class SecurityOperationsTest(unittest.TestCase):
         with db._connect(autocommit=True) as conn:
             conn.execute("SELECT pg_advisory_lock(hashtextextended('export:admin:1',0))")
             try:
-                with patch.object(application, 'build_orders_export') as builder:
+                with patch.object(application.order_export_process, 'build') as builder:
                     r = self.get('/api/admin/orders/export')
                     self.assertEqual(r.status_code, 429, r.json)
                     self.assertEqual(r.json['code'], 'export_in_progress')
@@ -69,6 +70,87 @@ class SecurityOperationsTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.business(), before)
         r.close()
+
+    def test_busy_retries_do_not_consume_export_quota(self):
+        probe = Flask('export-quota')
+        Security(probe, db, 'admin')
+        builder = Mock(return_value={'ok': True})
+        def build():
+            return builder()
+        probe.add_url_rule('/api/admin/export', 'export', build)
+        client = FlaskClient(probe, probe.response_class)
+        client.set_cookie(application.security.cookie, self.tokens['admin'])
+        with patch.dict(os.environ, {'SECURITY_LIMIT_EXPORT': '5', 'SECURITY_LIMIT_EXPORT_POLL': '30', 'SECURITY_EXPORT_GLOBAL_CONCURRENT': '1'}):
+            with db._connect(autocommit=True, coordination=True) as lock:
+                for key, code in [('export:admin:1', 'export_in_progress'), ('export:global:0', 'export_capacity')]:
+                    lock.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))', (key,))
+                    try:
+                        for _ in range(6):
+                            response = client.get('/api/admin/export')
+                            self.assertEqual((response.status_code, response.json['code']), (429, code))
+                            self.assertEqual(response.headers['Retry-After'], '5')
+                    finally:
+                        lock.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (key,))
+            builder.assert_not_called()
+            for _ in range(5):
+                self.assertEqual(client.get('/api/admin/export').status_code, 200)
+            response = client.get('/api/admin/export')
+            self.assertEqual((response.status_code, response.json['code']), (429, 'rate_limited'))
+            self.assertEqual(builder.call_count, 5)
+            # A rate-limited request must release both locks for other requests.
+            with db._connect(autocommit=True, coordination=True) as lock:
+                for key in ['export:admin:1', 'export:global:0']:
+                    self.assertTrue(lock.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (key,)).fetchone()['locked'])
+                    lock.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (key,))
+
+    def test_first_export_lock_query_failure_closes_connection(self):
+        conn = MagicMock()
+        def execute(sql, *args):
+            if 'pg_try_advisory_lock' in sql:
+                raise RuntimeError('first lock query failed')
+            if 'SELECT has_waiting' in sql:
+                return MagicMock(fetchone=Mock(return_value={'has_waiting': False}))
+            return MagicMock(fetchall=Mock(return_value=[]))
+        conn.execute.side_effect = execute
+        original_connect = db._connect
+        def connect(*args, **kwargs):
+            return conn if kwargs.get('coordination') else original_connect(*args, **kwargs)
+        with patch.object(db, '_connect', side_effect=connect):
+            response = self.get('/api/admin/orders/export')
+        self.assertEqual(response.status_code, 500)
+        conn.close.assert_called_once_with()
+        response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 200)
+        response.close()
+
+    def test_export_builder_failure_releases_locks(self):
+        with patch.object(application.order_export_process, 'build', side_effect=RuntimeError('builder failed')):
+            response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 500)
+        response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 200)
+        response.close()
+
+    def test_invalid_global_export_configuration_releases_account_lock(self):
+        with patch.dict(os.environ, {'SECURITY_EXPORT_GLOBAL_CONCURRENT': '0'}):
+            response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 500)
+        response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 200)
+        response.close()
+
+    def test_export_quota_failure_releases_both_locks(self):
+        original_reserve = application.security.reserve
+        def reserve(label, *args):
+            if label == 'export':
+                raise RuntimeError('quota unavailable')
+            return original_reserve(label, *args)
+        with patch.object(application.security, 'reserve', side_effect=reserve):
+            response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 500)
+        response = self.get('/api/admin/orders/export?includeImages=0')
+        self.assertEqual(response.status_code, 200)
+        response.close()
 
     def test_unexpected_errors_do_not_expose_exception_text_or_query(self):
         probe = Flask('sanitized-errors')

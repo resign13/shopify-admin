@@ -1,4 +1,6 @@
+import { downloadFile } from '../utils/exportDownload';
 import { authenticatedFetch, csrfHeaders } from '../authTransport';
+import { sortStateToQuery } from '../utils/tableSort';
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -72,23 +74,8 @@ export async function copy(value) {
     ElMessage.info("请选中内容手动复制");
   }
 }
-export async function download(path, filename, options = {}) {
-  const response = await authenticatedFetch(`${API_BASE}/api/admin/${path}`, {
-    ...options,
-  });
-  if (!response.ok)
-    throw new Error(
-      (await response.json().catch(() => ({}))).message || "导出失败",
-    );
-  const url = URL.createObjectURL(await response.blob());
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  // Mobile browsers may start consuming a large download after the click returns.
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+export function download(path, filename, options = {}) {
+  return downloadFile(authenticatedFetch, `${API_BASE}/api/admin/${path}`, filename, options);
 }
 export function useList(resource, defaults = {}, ignoredKeys = []) {
   const route = useRoute(),
@@ -193,8 +180,7 @@ export function useList(resource, defaults = {}, ignoredKeys = []) {
   state.sort = ({ prop, order }) => {
     state.query = {
       ...state.query,
-      sort: prop || "",
-      direction: order === "ascending" ? "asc" : "desc",
+      ...sortStateToQuery({ prop, order }, defaults),
       page: 1,
     };
   };

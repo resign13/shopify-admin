@@ -1,5 +1,6 @@
 """Synthetic invoice export regression tests; no real order writes."""
 import unittest
+import os
 from copy import copy, deepcopy
 from io import BytesIO
 from pathlib import Path
@@ -17,6 +18,10 @@ class InvoiceExportTest(unittest.TestCase):
         # Registered/private storage tests remain for the later media phase.
         self.media_mode = patch.object(application.media, 'mode', 'private')
         self.media_mode.start(); self.addCleanup(self.media_mode.stop)
+        self.cache_directory = TemporaryDirectory(prefix='invoice-export-cache-test-')
+        self.addCleanup(self.cache_directory.cleanup)
+        self.cache_settings = patch.dict(os.environ, {'ORDER_EXPORT_IMAGE_CACHE_DIR': self.cache_directory.name})
+        self.cache_settings.start(); self.addCleanup(self.cache_settings.stop)
     def test_invoice_route_formats_file_without_changing_stock_or_access(self):
         tokens, _ = seed()
         owner_id = db.get_admin_user_by_email('sales@gingtto.test')['id']
@@ -72,12 +77,12 @@ class InvoiceExportTest(unittest.TestCase):
                  'sizeCode': size, 'quantity': 1, 'unitPrice': 20}
                 for size in ['S', 'M', 'L']
             ]}
-            for builder in (application.build_orders_export, application.build_orders_sheet_export):
+            for index, builder in enumerate((application.build_orders_export, application.build_orders_sheet_export)):
                 with self.subTest(export=builder.__name__), patch.object(application, 'UPLOAD_DIR', Path(directory)), \
                         application.app.test_request_context('/api/admin/orders/export'):
                     with patch.object(application.media, 'read', wraps=application.media.read) as read:
                         stream = builder([order])
-                        self.assertEqual(read.call_count, 1)
+                        self.assertEqual(read.call_count, 1 if index == 0 else 0)
                     with ZipFile(stream) as archive:
                         media = [name for name in archive.namelist() if name.startswith('xl/media/')]
                         self.assertEqual(len(media), 1)
@@ -165,13 +170,16 @@ class InvoiceExportTest(unittest.TestCase):
                     application.prefetch_export_images([order])
                     for url in urls:
                         self.assertEqual(application.fetch_image_bytes(url, attachment=True), photo.getvalue())
-            self.assertEqual(storage.call_count, 4)
+            self.assertEqual(storage.call_count, 2)
             network.assert_not_called()
         # A different sales account is denied before any worker reads a file.
         with application.app.test_request_context('/', headers={'Cookie': application.security.cookie + '=' + tokens['sales']}), \
                 patch.object(application.media, 'read') as denied:
-            application.prefetch_export_images([order])
-            self.assertIsNone(application.fetch_image_bytes(urls[0], attachment=True))
+            from export_image_cache import ExportImageError
+            with self.assertRaises(ExportImageError):
+                application.prefetch_export_images([order])
+            with self.assertRaises(ExportImageError):
+                application.fetch_image_bytes(urls[0], attachment=True)
             denied.assert_not_called()
 
     def test_invoice_with_few_and_many_product_rows(self):

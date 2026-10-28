@@ -99,12 +99,14 @@ class SalesOwnershipTest(unittest.TestCase):
         self.assertEqual(self.call('orders/1', role='sales').status_code, 200)
         self.assertEqual(self.call('orders/2', role='warehouse').status_code, 200)
         self.assertEqual(self.call('orders/2', role='admin').status_code, 200)
-        for route, builder in [('export', 'build_orders_export'), ('export-by-sheet', 'build_orders_sheet_export')]:
+        for route, kind in [('export', 'combined'), ('export-by-sheet', 'split')]:
             for query in ['', 'view=workbench&', f'view=workbench&salespersonId={self.b}&']:
-                with patch.object(application, builder, return_value=io.BytesIO(b'fixture')) as mocked:
+                with patch.object(application.order_export_process, 'build', return_value=io.BytesIO(b'fixture')) as mocked:
                     response = self.call(f'orders/{route}?{query}orderIds=1,2,3,4', role='sales')
                     self.assertEqual(response.status_code, 200, response.json)
-                    self.assertEqual({r['id'] for r in mocked.call_args.args[0]}, {1, 3, 4})
+                    mocked.assert_called_once()
+                    self.assertEqual(mocked.call_args.args[0], kind)
+                    self.assertEqual({r['id'] for r in mocked.call_args.args[1]}, {1, 3, 4})
         for selected in [str(self.b), 'unassigned', 'invalid', '999999']:
             response = self.call('orders?page=1&salespersonId=' + selected)
             self.assertEqual(response.status_code, 200 if selected in [str(self.b), 'unassigned'] else 400)

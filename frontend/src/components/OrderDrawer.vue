@@ -214,7 +214,7 @@
         :disabled="loading || !order || busy" type="primary" plain @click="emit('reorder', order.id)">再来一单</ElButton>
       <ElButton
         v-if="!warehouseStatusOnly"
-        :loading="invoiceLoading"
+        :loading="exportState.busy"
         :disabled="busy || !order || (fullEditing ? editor?.dirty : dirty)"
         :title="order?.currency === 'CNY' ? '人民币订单按本单汇率换算为 USD 导出 PI' : '导出 USD PI'"
         @click="exportInvoice"
@@ -277,14 +277,13 @@ import {
   dateTime,
   confirm,
 } from "../composables/workbench";
-const props = defineProps({ open: Boolean, id: [Number, String] }),
+const props = defineProps({ open: Boolean, id: [Number, String], exportState: { type: Object, required: true }, runExport: { type: Function, required: true } }),
   emit = defineEmits(["update:open", "saved", "reorder"]),
   auth = useAdminAuthStore();
 const { isPhone } = useResponsive();
 const mobileHistoryOpen = ref(false);
 const mobileGroups = computed(()=>{const groups=new Map();for(const item of order.value?.items || []){const key=String(item.productId)+':'+item.sku;if(!groups.has(key))groups.set(key,{key,sku:item.sku,quantity:0,items:[]});const group=groups.get(key);group.quantity+=Number(item.quantity||0);group.items.push(item);}return [...groups.values()];});
 const mobileImageAttachments = computed(() => (order.value?.labelImageUrls || []).filter(url => !/\.pdf(?:[?#]|$)/i.test(url)));
-const invoiceLoading = ref(false);
 const editing = ref(false),
   editor = ref();
 const cancelNoteOpen = ref(false);
@@ -450,17 +449,19 @@ function detailsSaved(_id, snapshot) {
   cancelNoteSaved(snapshot);
 }
 async function exportInvoice() {
-  if (invoiceLoading.value) return;
-  invoiceLoading.value = true;
   try {
-    await download(
-      `orders/${props.id}/invoice`,
-      `订单详情-${order.value.orderNo}.xlsx`,
-    );
+    await props.runExport(async (retryOptions) => {
+      await download(
+        `orders/${props.id}/invoice`,
+        `订单详情-${order.value.orderNo}.xlsx`,
+        retryOptions,
+      );
+    });
   } catch (e) {
     notifyError(e);
-  } finally { invoiceLoading.value = false; }
+  }
 }
+
 </script>
 <style scoped>
 .order-drawer-heading { min-width:0; margin-bottom:16px; }

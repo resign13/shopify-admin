@@ -11,7 +11,7 @@ async (page) => {
     await page.screenshot({path:'output/playwright/mobile-real-'+name+'-final.png',fullPage:false,animations:'disabled'});
   }
   await page.getByRole('button',{name:'商品成本',exact:true}).click();
-  await page.locator('.mf-cost-search input').fill('GT-2026');
+  await page.locator('.mf-cost-search > .el-input input').fill('GT-2026');
   await page.locator('.mf-cost-search').getByRole('button',{name:'查询',exact:true}).click();
   await page.waitForLoadState('networkidle');
   await page.screenshot({path:'output/playwright/mobile-real-costs-final.png',fullPage:false,animations:'disabled'});

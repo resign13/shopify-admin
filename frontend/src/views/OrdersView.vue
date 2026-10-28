@@ -11,8 +11,8 @@
         <ElButton @click="mobileSelection = !mobileSelection; clear()">{{ mobileSelection ? '退出选择模式' : '选择订单' }}</ElButton>
         <ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton>
         <ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton>
-        <ElButton v-if="canExportOrders" :loading="exporting" @click="exportOrders('export')">{{ selected.length ? `已选 ${selected.length} 笔` : '当前筛选订单' }} · 合并导出</ElButton>
-        <ElButton v-if="canExportOrders" :loading="exporting" @click="exportOrders('export-by-sheet')">分 Sheet 导出</ElButton>
+        <ElButton v-if="canExportOrders" :disabled="!canExportPage" :loading="exporting" @click="exportOrders('export')">{{ exportScopeLabel }} · 合并导出</ElButton>
+        <ElButton v-if="canExportOrders" :disabled="!canExportPage" :loading="exporting" @click="exportOrders('export-by-sheet')">{{ exportScopeLabel }} · 分 Sheet 导出</ElButton>
         <ElButton @click="list.sort({prop:'createdAt',order:'descending'})">按下单时间降序</ElButton><ElButton @click="list.sort({prop:'createdAt',order:'ascending'})">按下单时间升序</ElButton>
         <ElButton v-if="!auth.isWarehouse" @click="list.sort({prop:'totalAmount',order:'descending'})">按应付金额降序</ElButton><ElButton v-if="!auth.isWarehouse" @click="list.sort({prop:'totalAmount',order:'ascending'})">按应付金额升序</ElButton><ElButton @click="list.sort({prop:'',order:null})">默认排序</ElButton>
       </MobileActionMenu>
@@ -20,25 +20,21 @@
       >＋ 新增订单</ElButton
     ><MobileActionMenu v-if="canEditDetails || canExportOrders"><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
     ><ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton
-    ><ElDropdown v-if="canExportOrders" @command="exportOrders"
-      ><ElButton :loading="exporting">导出订单 ▾</ElButton
+    ><ElDropdown v-if="canExportOrders" :disabled="!canExportPage || exporting" @command="exportOrders"
+      ><ElButton :disabled="!canExportPage" :loading="exporting">导出订单 ▾</ElButton
       ><template #dropdown
         ><ElDropdownMenu
           ><ElDropdownItem command="export"
-            >{{
-              selected.length
-                ? "已选 " + selected.length + " 个订单"
-                : "当前筛选全部订单"
-            }}
-            · 合并表格</ElDropdownItem
+            >{{ exportScopeLabel }} · 合并表格</ElDropdownItem
           ><ElDropdownItem command="export-by-sheet"
-            >{{ selected.length ? "已选订单" : "当前筛选全部订单" }} · 分
-            Sheet</ElDropdownItem
+            >{{ exportScopeLabel }} · 分 Sheet</ElDropdownItem
           ></ElDropdownMenu
         ></template
       ></ElDropdown
     ></MobileActionMenu></template></PageHeader
   >
+  <div v-if="exportState.busy" class="order-export-progress" role="status" aria-live="polite" data-testid="order-export-progress">{{ exportState.phase === 'waiting' ? (exportState.position ? `导出排队中，队列位置：第 ${exportState.position} 位，请稍候…` : '导出繁忙，正在等待，请勿重复操作…') : exportState.phase === 'downloading' ? '正在下载导出文件，请稍候…' : exportState.phase === 'checking' ? '正在检查导出状态…' : '正在生成导出文件，请稍候…' }}</div>
+  <div v-if="!exportState.busy && exportState.recovery" data-testid="order-export-recovery"><ElButton text type="primary" @click="recoverExport">{{ exportState.recovery === 'download' ? '重新下载上次文件' : '检查上次导出状态' }}</ElButton></div>
   <section class="panel">
     <div v-if="isPhone" class="m-order-tabs" data-testid="mobile-order-tabs">
       <div ref="mobileStatusStrip" class="m-order-tab-list" role="group" aria-label="订单状态"><button v-for="tab in mobileStatusTabs" :key="tab.value" :class="{active:(list.query.status || 'all') === tab.value}" :aria-pressed="(list.query.status || 'all') === tab.value" @click="changeStatus(tab.value)">{{ tab.label }}<small v-if="tab.value !== 'all'">{{ list.statusCounts[tab.value] || 0 }}</small></button></div>
@@ -95,7 +91,7 @@
       ><ElButton text @click="clear">清空选择</ElButton
       >
     </div>
-    <div v-if="isPhone && mobileSelection" class="m-order-batch" data-testid="mobile-order-selection"><strong>已选 {{ selected.length }} 笔</strong><ElButton text @click="table?.selectCurrentPage()">选择本页</ElButton><ElButton text @click="clear">清空</ElButton><ElButton text @click="mobileSelection=false; clear()">完成</ElButton><ElButton type="primary" :disabled="!selected.length" :loading="exporting" @click="exportOrders('export')">导出</ElButton></div>
+    <div v-if="isPhone && mobileSelection" class="m-order-batch" data-testid="mobile-order-selection"><strong>已选 {{ selected.length }} 笔</strong><ElButton text @click="table?.selectCurrentPage()">选择本页</ElButton><ElButton text @click="clear">清空</ElButton><ElButton text @click="mobileSelection=false; clear()">完成</ElButton><ElButton type="primary" :disabled="!canExportPage || !selected.length" :loading="exporting" @click="exportOrders('export')">导出</ElButton></div>
     <DataTable
       :mobile-selection="false" :mobile-actions="false" :mobile-tools="false"
       ref="table"
@@ -103,6 +99,7 @@
       storage-key="orders"
       :rows="list.rows"
       :columns="columns"
+      :sort-state="queryToSortState(list.query)"
       :total="list.total"
       :page="list.query.page"
       :page-size="list.query.pageSize"
@@ -188,7 +185,7 @@
       ></DataTable
     >
   </section>
-  <OrderDrawer v-model:open="detailOpen" :id="detailId" @saved="list.load" @reorder="reorder" />
+  <OrderDrawer v-model:open="detailOpen" :id="detailId" :export-state="exportState" :run-export="orderExport.run" @saved="list.load" @reorder="reorder" />
   <OrderCancellationDialog v-model:open="cancelOpen" :order="cancelOrder" @saved="cancelSaved" />
   <OrderEditor v-model:open="editorOpen" :source-order-id="reorderSourceId" :draft-id="selectedDraftId" @saved="orderSaved" />
   <OrderDrafts v-if="canEditDetails" v-model:open="draftsOpen" @select="openDraft" />
@@ -196,6 +193,8 @@
 </template>
 <script setup>
 import { useResponsive } from "../composables/responsive";
+import { createOrderExportController } from "../utils/exportDownload";
+import { orderExportIds } from "../utils/orderExportScope";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
@@ -209,6 +208,7 @@ import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderCancellationDialog from "../components/OrderCancellationDialog.vue";
 import OrderCancelNoteMark from "../components/OrderCancelNoteMark.vue";
 import { removeAppliedOrderFilter } from "../utils/orderFilters";
+import { queryToSortState } from "../utils/tableSort";
 import OrderEditor from "../components/OrderEditor.vue";
 import OrderDrafts from "../components/OrderDrafts.vue";
 import CustomerTemplates from "../components/CustomerTemplates.vue";
@@ -235,8 +235,16 @@ const auth = useAdminAuthStore(),
   categories = ref([]),
   salespeople = ref([]),
   detailOpen = ref(false),
-  detailId = ref(),
-  exporting = ref(false);
+  detailId = ref();
+const exportState = reactive({ busy: false, phase: "", position: null });
+const exporting = computed(() => exportState.busy);
+const exportScopeLabel = computed(() => selected.value.length ? `已选 ${selected.value.length} 笔订单` : `本页 ${list.rows.length} 笔订单`);
+const canExportPage = computed(() => !list.loading && !list.error && list.rows.length > 0 && orderExportIds(selected.value, list.rows).length > 0);
+const orderExport = createOrderExportController(exportState);
+async function recoverExport() {
+  try { await orderExport.recover(); }
+  catch (error) { ElMessage.error(error.message || '下载失败，请重试'); }
+}
 watch(() => [isPhone.value, list.query.status, ...mobileStatusTabs.value.map(tab => list.statusCounts[tab.value])], async () => {
   await nextTick();
   const strip = mobileStatusStrip.value;
@@ -395,25 +403,25 @@ function open(id) {
   detailOpen.value = true;
 }
 async function exportOrders(type) {
-  if (exporting.value) return;
-  exporting.value = true;
+  if (!canExportPage.value) return;
+  const orderIds = orderExportIds(selected.value, list.rows);
+  if (!orderIds.length) return;
   try {
-    const params = new URLSearchParams({
-      ...list.query,
-      view: "workbench",
-      includeImages: "1",
-      ...(selected.value.length
-        ? { orderIds: selected.value.map((o) => o.id).join(",") }
-        : {}),
+    await orderExport.run(async (retryOptions) => {
+      const params = new URLSearchParams({
+        ...list.query,
+        view: "workbench",
+        includeImages: "1",
+        orderIds: orderIds.join(","),
+      });
+      await download(`orders/${type}?${params}`, `订单-${type}.xlsx`, { method: 'POST', ...retryOptions });
+      if (auth.isWarehouse) await list.load();
     });
-    await download(`orders/${type}?${params}`, `订单-${type}.xlsx`, { method: 'POST' });
-    if (auth.isWarehouse) await list.load();
   } catch (e) {
     notifyError(e);
-  } finally {
-    exporting.value = false;
   }
 }
+
 onMounted(async () => {
   if (route.query.orderId) open(Number(route.query.orderId));
   try {
@@ -426,6 +434,7 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+.order-export-progress { margin: 0 0 12px; color: #516783; font-size: 14px; }
 @media(max-width:767px){
 .m-order-tabs :deep(.m-order-status-select .el-select__selected-item){font-size:12px!important;font-weight:400;color:#516783}
 :global(.m-order-status-popper.el-popper){max-width:calc(100vw - 24px)}

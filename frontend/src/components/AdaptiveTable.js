@@ -6,6 +6,7 @@ import 'element-plus/es/components/button/style/css';
 import 'element-plus/es/components/select/style/css';
 import 'element-plus/es/components/empty/style/css';
 import { useResponsive } from '../composables/responsive';
+import { createTableSort, normalizeSortState } from '../utils/tableSort';
 
 // Keep the existing declarative ElTableColumn slots as the single source of
 // cells and permissions. Only the presentation changes on phones.
@@ -27,6 +28,7 @@ export default defineComponent({
     mobileSelection: { type: Boolean, default: true },
     mobileActions: { type: Boolean, default: true },
     mobileTools: { type: Boolean, default: true },
+    sortState: { type: Object, default: undefined },
   },
   emits: ['selection-change', 'expand-change', 'sort-change'],
   setup(props, { attrs, slots, emit, expose }) {
@@ -34,7 +36,11 @@ export default defineComponent({
     const table = shallowRef();
     const selected = shallowRef(new Map());
     const expanded = ref([]);
-    const sort = ref({ prop: '', order: null });
+    const sort = ref(normalizeSortState(props.sortState ?? attrs['default-sort']));
+    const sorting = createTableSort(sort.value, value => {
+      sort.value = value;
+      emit('sort-change', value);
+    });
     let columns = [], restoring = false;
     const key = (row, index = props.data.indexOf(row)) => typeof props.rowKey === 'function'
       ? props.rowKey(row) : props.rowKey ? row[props.rowKey] : row.id ?? index;
@@ -72,6 +78,21 @@ export default defineComponent({
       restoring = false;
     }
     watch(table, restoreSelection);
+    async function restoreSort(instance = table.value) {
+      await nextTick();
+      if (!instance || instance !== table.value || (isPhone.value && props.mobileCards)) return;
+      sorting.sync(sort.value, instance);
+    }
+    watch(table, restoreSort);
+    watch([
+      () => props.sortState?.prop,
+      () => props.sortState?.order,
+      () => props.sortState !== undefined,
+    ], ([prop, order, controlled]) => {
+      if (!controlled) return;
+      sort.value = sorting.sync({ prop, order });
+      restoreSort();
+    });
     watch(() => props.data, rows => {
       const reserve = selectionColumn()?.props?.['reserve-selection'] ?? selectionColumn()?.props?.reserveSelection;
       const visible = new Map(rows.map((r, i) => [key(r, i), r]));
@@ -81,9 +102,7 @@ export default defineComponent({
       }
     });
     function changeSort(value) {
-      if (sort.value.prop === value.prop && sort.value.order === value.order) return;
-      sort.value = { prop: value.prop || '', order: value.order || null };
-      emit('sort-change', sort.value);
+      sorting.change(value);
     }
     expose({ clearSelection, toggleRowSelection, toggleRowExpansion,
       getSelectionRows: () => [...selected.value.values()], doLayout: () => table.value?.doLayout() });
@@ -97,7 +116,7 @@ export default defineComponent({
       if (!isPhone.value || !props.mobileCards) return h(ElTable, {
         ...attrs, ref: table, data: props.data, rowKey: props.rowKey || key,
         expandRowKeys: columns.some(c => c.props?.type === 'expand') ? props.expandRowKeys || expanded.value : undefined,
-        defaultSort: sort.value.prop ? sort.value : attrs['default-sort'],
+        defaultSort: sort.value,
         onSelectionChange: selectionChanged,
         onSortChange: changeSort,
         onExpandChange: (row, rows) => { expanded.value = rows.map(r => key(r)); emit('expand-change', row, rows); },

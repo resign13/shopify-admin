@@ -1,5 +1,5 @@
 <template>
-  <form class="filters responsive-filters" :class="{'is-expanded': expanded}" @submit.prevent="$emit('submit', $event)">
+  <form class="responsive-filters" :class="{'filters': !bare, 'is-expanded': expanded}" @submit.prevent="$emit('submit', $event)">
     <slot />
     <ElButton v-if="hasAdvanced" native-type="button" class="mobile-filter-toggle" :aria-label="expanded ? '收起筛选' : '更多筛选'" :aria-expanded="expanded" @click="expanded = !expanded"><ElIcon v-if="isPhone"><Filter/></ElIcon><template v-else>{{ expanded ? '收起筛选' : '更多筛选' }}{{ chips.length ? ` (${chips.length})` : '' }}</template></ElButton>
     <div v-if="chips.length" class="mobile-filter-chips">
@@ -12,7 +12,7 @@ import { computed, ref } from 'vue';
 import { Filter } from '@element-plus/icons-vue';
 import { useResponsive } from '../composables/responsive';
 const { isPhone } = useResponsive();
-const props = defineProps({ active: { type: Object, default: () => ({}) }, labels: { type: Object, default: () => ({}) }, hasAdvanced: { type: Boolean, default: true } });
+const props = defineProps({ active: { type: Object, default: () => ({}) }, labels: { type: Object, default: () => ({}) }, hasAdvanced: { type: Boolean, default: true }, bare: Boolean });
 defineEmits(['submit', 'remove']);
 const expanded = ref(false);
 const defaults = {category:'分类',categoryId:'分类',status:'状态',role:'角色',stock:'库存',country:'国家',salespersonId:'业务员',styleCode:'款号',style:'款号',dateFrom:'开始日期',dateTo:'结束日期',startDate:'开始日期',endDate:'结束日期',module:'模块',action:'操作',resource:'模块',actorId:'操作人'};

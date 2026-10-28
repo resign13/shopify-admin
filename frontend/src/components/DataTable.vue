@@ -28,6 +28,7 @@
     :mobile-selection="mobileSelection"
     :mobile-actions="mobileActions"
     :mobile-tools="mobileTools"
+    :sort-state="sortState"
     @expand-change="(row, rows) => $emit('expand-change', row, rows)"
     size="small"
     empty-text="暂无符合条件的数据"
@@ -99,6 +100,7 @@ const props = defineProps({
   mobileSelection: { type: Boolean, default: true },
   mobileActions: { type: Boolean, default: true },
   mobileTools: { type: Boolean, default: true },
+  sortState: { type: Object, default: undefined },
 });
 defineEmits(["expand-change", "retry", "sort-change", "selection-change", "page", "page-size"]);
 const key = `gingtto-table:${useAdminAuthStore().user?.id}:${props.storageKey}`;
@@ -123,15 +125,29 @@ const visible = ref([
   table = ref();
 const container = ref(),
   available = ref(1200);
-let observer;
+let observer, resizeFrame = null, measuredWidth = available.value;
 onMounted(() => {
   persistSettings();
-  observer = new ResizeObserver(
-    (entries) => (available.value = entries[0].contentRect.width),
-  );
+  const width = container.value.getBoundingClientRect().width;
+  if (width > 0) available.value = measuredWidth = width;
+  observer = new ResizeObserver((entries) => {
+    const width = entries[0].contentRect.width;
+    // Phone toolbars are display:none. Keep the last real column width until
+    // the desktop table returns, and write outside the observer delivery cycle.
+    if (!(width > 0)) return;
+    measuredWidth = width;
+    if (width === available.value || resizeFrame !== null) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null;
+      if (measuredWidth !== available.value) available.value = measuredWidth;
+    });
+  });
   observer.observe(container.value);
 });
-onBeforeUnmount(() => observer?.disconnect());
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  if (resizeFrame !== null) cancelAnimationFrame(resizeFrame);
+});
 function columnWidth(column) {
   const base = shown.value.reduce((sum, c) => sum + (c.width || 100), 0);
   const width =
