@@ -62,6 +62,8 @@ def _sizes(size, purpose):
 
 
 def _encode(image, fmt, **options):
+    if image.info.get('icc_profile'):
+        options.setdefault('icc_profile', image.info['icc_profile'])
     if fmt == 'JPEG' and options.get('optimize'):
         # Pillow 11's Q90/92 optimized 4:4:4 buffer is only one byte/pixel,
         # insufficient for detailed photos. Explicit, identical quality tables
