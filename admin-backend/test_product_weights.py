@@ -295,19 +295,27 @@ class ProductWeightTest(unittest.TestCase):
 
     def test_exports_use_one_current_weight_snapshot(self):
         self.save({'M':380},pid=2)
+        run_worker = application.order_export_process._run_worker
         for path in ('orders/export','orders/export-by-sheet','orders/1/invoice'):
             self.save({'M':350})
-            # A product save during image preparation must not mix weights
-            # inside the file already being generated from a single query.
-            def change_during_images(_orders):
-                # Simulate a concurrent writer, outside the read-only export snapshot.
+            # The child receives one completed snapshot. A concurrent product
+            # save before it starts must not alter any weight in that payload.
+            def change_before_worker(payload, **kwargs):
+                self.assertIsNone(db.REQUEST_CONNECTION.get())
+                self.assertTrue(payload['orders'])
+                self.assertTrue(all(order['totalWeightGrams'] == '1080' for order in payload['orders']))
                 with db._connect() as conn:
                     conn.execute("UPDATE product_size_prices SET weight_grams=500 WHERE product_id=1 AND size_code='M'")
-            with patch.object(application,'prefetch_export_images',side_effect=change_during_images),patch.object(application,'fetch_image_bytes',return_value=None):
+                output, metadata = run_worker(payload, **kwargs)
+                self.assertGreater(metadata['pid'], 0)
+                return output, metadata
+            with patch.object(application.order_export_process, '_run_worker', side_effect=change_before_worker) as worker:
                 response=self.call(path)
+                worker.assert_called_once()
             self.assertEqual(response.status_code,200,response.json)
             book=load_workbook(BytesIO(response.data))
             self.assertTrue(any('1.080' in str(c.value) for ws in book for row in ws for c in row))
+            self.assertFalse(any('1.380' in str(c.value) for ws in book for row in ws for c in row))
             self.assertEqual(self.detail()['totalWeightGrams'],'1380')
         with patch.object(db,'_fetch_all',wraps=db._fetch_all) as queries:
             values=db.list_orders(include_weight=True)

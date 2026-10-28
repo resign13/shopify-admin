@@ -28,7 +28,7 @@ class ExportQueueTest(unittest.TestCase):
         self.sales = FlaskClient(self.probe, self.probe.response_class)
         self.admin.set_cookie(application.security.cookie, self.tokens['admin'])
         self.sales.set_cookie(application.security.cookie, self.tokens['sales'])
-        self.settings = patch.dict(os.environ, {'SECURITY_EXPORT_GLOBAL_CONCURRENT': '2', 'SECURITY_LIMIT_EXPORT': '5',
+        self.settings = patch.dict(os.environ, {'SECURITY_EXPORT_GLOBAL_CONCURRENT': '2', 'DB_COORDINATION_POOL_MAX': '3', 'SECURITY_LIMIT_EXPORT': '5',
                                                  'SECURITY_LIMIT_EXPORT_POLL': '30'})
         self.settings.start()
         self.addCleanup(self.settings.stop)

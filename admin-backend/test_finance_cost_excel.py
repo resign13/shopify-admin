@@ -202,7 +202,9 @@ class CostExcelTest(unittest.TestCase):
             self.assertEqual(rejected.status_code, 429)
             self.assertEqual(rejected.headers['Retry-After'], '7')
             self.assertEqual(reserve.call_args.args[0], 'upload')
-        with patch.object(security, 'reserve', return_value=7) as reserve:
+        # Admission polls have their own budget; reject the actual generation
+        # budget to keep verifying finance exports still use the export quota.
+        with patch.object(security, 'reserve', side_effect=lambda category, *_: 7 if category == 'export' else None) as reserve:
             self.assertEqual(self.post('costs/export', {}).status_code, 429)
             self.assertEqual(reserve.call_args.args[0], 'export')
 
