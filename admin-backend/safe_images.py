@@ -11,12 +11,16 @@ import os
 import socket
 import ssl
 import time
+import threading
 import warnings
+from contextlib import contextmanager
 from urllib.parse import urlsplit, urljoin, unquote
 from PIL import Image
 
 MAX_BYTES = 32 * 1024 * 1024
 MAX_PIXELS = 40_000_000
+_TLS_CONTEXT = ssl.create_default_context()
+_ACTIVE_TRANSPORT = threading.local()
 
 
 def allowed_origins():
@@ -52,7 +56,7 @@ def public_address(value):
 
 class PinnedHTTPS(http.client.HTTPSConnection):
     def __init__(self, host, address, timeout, *, proxy_url=None):
-        super().__init__(host, port=443, timeout=timeout, context=ssl.create_default_context())
+        super().__init__(host, port=443, timeout=timeout, context=_TLS_CONTEXT)
         self.address = address
         self.proxy_url = proxy_url
 
@@ -86,6 +90,68 @@ class PinnedHTTPS(http.client.HTTPSConnection):
             raise
 
 
+class ImageTransport:
+    """Request-scoped, one idle pinned HTTPS connection per worker thread."""
+    def __init__(self):
+        self.local = threading.local()
+        self.idle = set()
+        self.lock = threading.Lock()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+    @contextmanager
+    def use(self):
+        previous = getattr(_ACTIVE_TRANSPORT, 'value', None)
+        _ACTIVE_TRANSPORT.value = self
+        try:
+            yield
+        finally:
+            _ACTIVE_TRANSPORT.value = previous
+
+    def acquire(self, host, address, timeout, proxy_url):
+        key = (host, address, proxy_url)
+        cached = getattr(self.local, 'connection', None)
+        if cached is not None:
+            old_key, connection = cached
+            self.local.connection = None
+            with self.lock:
+                self.idle.discard(connection)
+            if old_key == key and connection.sock is not None:
+                connection.timeout = timeout
+                try:
+                    connection.sock.settimeout(timeout)
+                    return connection, True
+                except OSError:
+                    pass
+            connection.close()
+        options = {'proxy_url': proxy_url} if proxy_url else {}
+        return PinnedHTTPS(host, address, timeout, **options), False
+
+    def release(self, host, address, proxy_url, connection):
+        self.local.connection = ((host, address, proxy_url), connection)
+        with self.lock:
+            self.idle.add(connection)
+
+    def discard(self):
+        cached = getattr(self.local, 'connection', None)
+        if cached is not None:
+            self.local.connection = None
+            connection = cached[1]
+            with self.lock:
+                self.idle.discard(connection)
+            connection.close()
+
+    def close(self):
+        with self.lock:
+            connections, self.idle = self.idle, set()
+        for connection in connections:
+            connection.close()
+
+
 def check_image(data, suffix=None):
     if not data or len(data) > MAX_BYTES: raise ValueError('Invalid image size')
     with warnings.catch_warnings():
@@ -103,40 +169,86 @@ def check_image(data, suffix=None):
             return Image.MIME.get(detected, 'application/octet-stream')
 
 
-def fetch_file(url, image_only=True, *, timeout_seconds=25, request_timeout_seconds=8, proxy_url=None):
+def fetch_file(url, image_only=True, *, timeout_seconds=25, request_timeout_seconds=8, proxy_url=None, client=None):
     if not 1 <= timeout_seconds <= 90 or not 1 <= request_timeout_seconds <= min(timeout_seconds, 30):
         raise ValueError('Invalid image retrieval timeout')
     deadline = time.monotonic() + timeout_seconds
+    client = client if client is not None else getattr(_ACTIVE_TRANSPORT, 'value', None)
+    retry_used = False
     for hop in range(4):
-        parts, address = validate_url(url)
-        options = {'proxy_url': proxy_url} if proxy_url else {}
-        connection = PinnedHTTPS(parts.hostname, address, min(request_timeout_seconds, max(0.1, deadline - time.monotonic())), **options)
-        try:
-            path = parts.path or '/'
-            if parts.query: path += '?' + parts.query
-            connection.request('GET', path, headers={'Accept': 'image/*', 'Accept-Encoding': 'identity', 'User-Agent': 'GINGTTO-Image-Export/1.0'})
-            response = connection.getresponse()
-            if response.status in {301, 302, 303, 307, 308}:
-                if hop == 3: raise ValueError('Too many image redirects')
-                url = urljoin(url, response.getheader('Location', ''))
-                continue
-            if response.status != 200 or (image_only and not response.getheader('Content-Type', '').lower().startswith('image/')):
-                raise ValueError('Image retrieval failed')
-            if int(response.getheader('Content-Length', '0')) > MAX_BYTES or response.getheader('Content-Encoding', 'identity') != 'identity':
-                raise ValueError('Image is too large')
-            chunks, size = [], 0
-            while True:
-                if time.monotonic() > deadline: raise TimeoutError('Image retrieval timed out')
-                chunk = response.read(min(65536, MAX_BYTES + 1 - size))
-                if not chunk: break
-                size += len(chunk)
-                if size > MAX_BYTES: raise ValueError('Image is too large')
-                chunks.append(chunk)
-            data = b''.join(chunks)
-            if image_only: check_image(data)
-            return data
-        finally:
-            connection.close()
+        for attempt in range(2):
+            try:
+                parts, address = validate_url(url)
+            except Exception:
+                if client is not None:
+                    client.discard()
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                if client is not None:
+                    client.discard()
+                raise TimeoutError('Image retrieval timed out')
+            timeout = min(request_timeout_seconds, remaining)
+            if client is None:
+                options = {'proxy_url': proxy_url} if proxy_url else {}
+                connection, reused = PinnedHTTPS(parts.hostname, address, timeout, **options), False
+            else:
+                connection, reused = client.acquire(parts.hostname, address, timeout, proxy_url)
+            retained = False
+            try:
+                path = parts.path or '/'
+                if parts.query: path += '?' + parts.query
+                try:
+                    connection.request('GET', path, headers={'Accept': 'image/*', 'Accept-Encoding': 'identity', 'User-Agent': 'GINGTTO-Image-Export/1.0'})
+                    response = connection.getresponse()
+                    if response.status in {301, 302, 303, 307, 308}:
+                        if hop == 3: raise ValueError('Too many image redirects')
+                        url = urljoin(url, response.getheader('Location', ''))
+                        break
+                    if response.status != 200 or (image_only and not response.getheader('Content-Type', '').lower().startswith('image/')):
+                        raise ValueError('Image retrieval failed')
+                    if int(response.getheader('Content-Length', '0')) > MAX_BYTES or response.getheader('Content-Encoding', 'identity') != 'identity':
+                        raise ValueError('Image is too large')
+                    chunks, size = [], 0
+                    while True:
+                        length = getattr(response, 'length', None)
+                        if getattr(response, 'isclosed', lambda: False)() is True or length == 0:
+                            if type(length) is int and length > 0:
+                                raise http.client.IncompleteRead(b'', length)
+                            break
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0: raise TimeoutError('Image retrieval timed out')
+                        response_socket = connection.sock
+                        if response_socket is None:
+                            response_socket = getattr(getattr(getattr(response, 'fp', None), 'raw', None), '_sock', None)
+                        if response_socket is not None:
+                            response_socket.settimeout(min(request_timeout_seconds, remaining))
+                        chunk = response.read(min(65536, MAX_BYTES + 1 - size))
+                        if not chunk:
+                            length = getattr(response, 'length', None)
+                            if type(length) is int and length > 0:
+                                raise http.client.IncompleteRead(b'', length)
+                            break
+                        size += len(chunk)
+                        if size > MAX_BYTES: raise ValueError('Image is too large')
+                        chunks.append(chunk)
+                    data = b''.join(chunks)
+                except (OSError, http.client.HTTPException) as error:
+                    # One shared retry budget covers fresh GET idle timeouts
+                    # and stale keep-alive sockets, including across redirects.
+                    if ((reused or isinstance(error, TimeoutError)) and not retry_used
+                            and not isinstance(error, (ssl.SSLError, PermissionError)) and time.monotonic() < deadline):
+                        retry_used = True
+                        continue
+                    raise
+                if image_only: check_image(data)
+                if client is not None and not response.will_close and connection.sock is not None:
+                    client.release(parts.hostname, address, proxy_url, connection)
+                    retained = True
+                return data
+            finally:
+                if not retained:
+                    connection.close()
     raise ValueError('Image retrieval failed')
 
 

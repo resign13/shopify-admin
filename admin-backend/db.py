@@ -360,6 +360,9 @@ def ensure_database_ready() -> None:
         import security_core
         if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (security_core.VERSION,)).fetchone():
             raise RuntimeError('Database security schema version is not ready')
+        import export_queue
+        if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (export_queue.VERSION,)).fetchone():
+            raise RuntimeError('Database export queue schema version is not ready')
     if os.environ.get('APP_ENV','production') == 'production':
         with _connect() as conn:
             role = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()

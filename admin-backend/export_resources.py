@@ -11,6 +11,7 @@ class ImageCache:
     def __init__(self):
         self.directory = TemporaryDirectory(prefix='gingtto-export-')
         self.entries = {}
+        self.converted = {}
 
     def __contains__(self, key):
         return key in self.entries

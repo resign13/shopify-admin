@@ -42,10 +42,13 @@ for kind in ['admin','store']:
                 try: conn.execute('UPDATE orders SET '+column+'='+column+' WHERE FALSE')
                 except psycopg.errors.InsufficientPrivilege: pass
                 else: raise AssertionError('Store runtime can modify a restricted order column')
-            for table in ['finance_cost_history','finance_style_costs','finance_style_cost_audit','admin_users','admin_sessions','admin_audit_logs']:
+            for table in ['finance_cost_history','finance_style_costs','finance_style_cost_audit','admin_users','admin_sessions','admin_audit_logs','security_export_queue']:
                 try: conn.execute('SELECT 1 FROM '+table+' LIMIT 1')
                 except psycopg.errors.InsufficientPrivilege: pass
                 else: raise AssertionError('Store runtime accessed a forbidden table')
+            waiting=conn.execute('SELECT * FROM security_export_waiting')
+            assert [column.name for column in waiting.description] == ['has_waiting']
+            assert isinstance(waiting.fetchone()[0], bool)
 
 code=r'''
 import io,json,uuid

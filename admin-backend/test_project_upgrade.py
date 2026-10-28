@@ -20,22 +20,22 @@ class UpgradeTest(unittest.TestCase):
                 headers={'Authorization':'Bearer '+self.tokens[role]})
 
     def test_detached_build_and_stale_order_rejected_without_print_mark(self):
-        original = application.build_orders_export
+        original = application.order_export_process.build
         def build(*args, **kwargs):
             self.assertIsNone(db.REQUEST_CONNECTION.get())
             db._fetch_one('UPDATE orders SET updated_at=clock_timestamp() WHERE id=1 RETURNING id')
             return original(*args, **kwargs)
-        with patch.object(application,'build_orders_export',side_effect=build):
+        with patch.object(application.order_export_process,'build',side_effect=build):
             response=self.call('orders/export?view=workbench&orderIds=1&includeImages=0','warehouse','POST')
         self.assertEqual(response.status_code,409,response.json)
         self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM order_warehouse_prints')['n'],0)
 
     def test_changed_role_blocks_old_sensitive_file(self):
-        original = application.build_orders_export
+        original = application.order_export_process.build
         def build(*args, **kwargs):
             db._fetch_one("UPDATE admin_users SET role='warehouse' WHERE id=1 RETURNING id")
             return original(*args, **kwargs)
-        with patch.object(application,'build_orders_export',side_effect=build):
+        with patch.object(application.order_export_process,'build',side_effect=build):
             response=self.call('orders/export?view=workbench&orderIds=1&includeImages=0')
         self.assertEqual(response.status_code,409,response.json)
 

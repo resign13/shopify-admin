@@ -108,11 +108,13 @@ class OrderPrintingTest(unittest.TestCase):
 
     def test_export_failure_and_batch_failure_leave_no_partial_marks(self):
         before = self.snapshot()
-        for kind, builder in (('export', 'build_orders_export'), ('export-by-sheet', 'build_orders_sheet_export')):
-            with patch.object(application, builder, side_effect=RuntimeError('Synthetic render failure')):
+        for kind, builder_kind in (('export', 'combined'), ('export-by-sheet', 'split')):
+            with patch.object(application.order_export_process, 'build', side_effect=RuntimeError('Synthetic render failure')) as mocked:
                 response = self.call('orders/' + kind + '?orderIds=1,2&includeImages=0', 'POST')
                 self.assertEqual(response.status_code, 500)
                 self.assertNotIn('Content-Disposition', response.headers)
+                mocked.assert_called_once()
+                self.assertEqual(mocked.call_args.args[0], builder_kind)
             self.assertEqual(self.marks(), [])
         with patch.object(application, 'send_file', side_effect=RuntimeError('Synthetic response failure')):
             self.assertEqual(self.call('orders/export?orderIds=1&includeImages=0', 'POST').status_code, 500)

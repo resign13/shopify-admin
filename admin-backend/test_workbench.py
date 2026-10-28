@@ -22,7 +22,7 @@ import workbench
 def _seed():
     with db.get_connection() as conn:
         conn.execute('TRUNCATE finance_style_costs,finance_style_cost_audit,finance_cost_receipts RESTART IDENTITY')
-        conn.execute('TRUNCATE security_file_refs,security_files,security_rate_buckets,security_audit_events,security_request_metrics')
+        conn.execute('TRUNCATE security_export_queue,security_file_refs,security_files,security_rate_buckets,security_audit_events,security_request_metrics')
         conn.execute('TRUNCATE inventory_registration_logs,purchase_contracts,admin_order_requests,admin_audit_logs,inventory_receipts,inventory_import_receipts,admin_users,store_users,products,product_categories,orders,homepage_configs,banners RESTART IDENTITY CASCADE')
     tokens={}
     for role,name in [('admin','陈管理员'),('sales','林外贸'),('warehouse','王仓管'),('customer','测试客户')]:

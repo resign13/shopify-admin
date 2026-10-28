@@ -195,13 +195,19 @@ class Media:
         if not raw or len(raw)>max_bytes: raise ValueError('Attachment size exceeds the limit')
         try: mime = validate_content(raw, suffix)
         except Exception as exc: raise ValueError('File content is invalid or unsupported') from exc
+        filename = storage.filename
+        if mime.startswith('image/'):
+            from image_normalization import normalize_image
+            image = normalize_image(raw, purpose='product' if purpose == 'product' else 'document')
+            raw, suffix, mime = image.data, image.suffix, image.mime
+            filename = (Path(filename or 'image').stem or 'image') + suffix
         if self.mode == 'legacy':
             # Validate new uploads without changing their storage provider,
             # legacy URLs, historical references or anonymous-access policy.
             uploader = self.app.extensions.get('legacy_media_uploader')
             if uploader:
                 from werkzeug.datastructures import FileStorage
-                return uploader(FileStorage(stream=io.BytesIO(raw), filename=storage.filename, content_type=mime))
+                return uploader(FileStorage(stream=io.BytesIO(raw), filename=filename, content_type=mime))
             root = self.uploads[self.channel]
             root.mkdir(parents=True, exist_ok=True)
             name = secrets.token_hex(16) + suffix
@@ -211,7 +217,7 @@ class Media:
             target.chmod(0o640)
             return request.url_root.rstrip('/') + '/uploads/' + name
         identity_id = uuid.uuid4()
-        name = (secure_filename(Path(storage.filename).stem) or 'attachment')[:80] + suffix
+        name = (secure_filename(Path(filename).stem) or 'attachment')[:80] + suffix
         key = str(identity_id) + suffix
         root = self.roots[self.channel]; root.mkdir(parents=True,exist_ok=True)
         target = root / key

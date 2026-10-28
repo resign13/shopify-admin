@@ -72,6 +72,8 @@ def migrate(cur):
               (token_hash(row['token']), 'retired:' + str(row['id']), row['id']))
     from private_media import migrate as migrate_media
     migrate_media(cur)
+    import export_queue
+    export_queue.migrate(cur)
     cur.execute('INSERT INTO security_schema_versions(version) VALUES(%s) ON CONFLICT DO NOTHING', ('browser-security-structure-v1' if prepared_only else VERSION,))
 
 
@@ -370,6 +372,13 @@ class Security:
             response.headers['Retry-After'] = str(retry)
         return response
 
+    def queued_export(self, ticket, position):
+        import export_queue
+        response = self.error(429, 'export_queued', 'Export is queued.', export_queue.RETRY_SECONDS)
+        response.set_data(self.app.json.dumps({'code': 'export_queued', 'message': 'Export is queued.',
+            'ticketId': ticket, 'position': position, 'retryAfter': export_queue.RETRY_SECONDS}))
+        return response
+
     def before(self):
         g.security_database_busy=False
         # g belongs to an application context, not necessarily one HTTP request
@@ -377,7 +386,7 @@ class Security:
         # a previous identity, export cache or audit actor into another request.
         for key in ('_security_request_identity', '_security_session', 'current_user',
                     'current_token', 'current_session', 'security_session_revoked',
-                    'security_event', 'security_exporting', 'export_image_cache', 'export_sources',
+                    'security_event', 'security_exporting', 'security_export_ticket', 'security_export_timeout', 'security_export_image_failure', 'export_image_cache', 'export_sources',
                     'external_identity', 'external_request_id'):
             g.pop(key, None)
         g.security_started = time.perf_counter()
@@ -427,6 +436,8 @@ class Security:
             if self.channel == 'admin' and path == '/api/auth/admin/captcha': category = 'captcha'
             if '/order-notifications/' in path:
                 category = 'voice'
+            elif path.startswith('/api/admin/orders/export-results/'):
+                category = 'read'
             elif 'export' in path or path.endswith('/invoice'):
                 category = 'export'
             elif path.endswith(('/uploads', '/order-attachments', '/attachments')) or '/inventory/import/' in path or '/finance/costs/import/' in path or '/size-charts/import/' in path:
@@ -438,35 +449,94 @@ class Security:
             limit = int(os.environ.get('SECURITY_LIMIT_' + category.upper(), limit))
             if not 1 <= limit <= 10000: raise RuntimeError('Invalid security quota configuration')
             subject = str(row['id']) if category == 'export' and row else str(row['public_id']) if row else 'ip:' + (request.remote_addr or '')
-            retry = self.reserve(category, subject, limit, 60)
-            if retry:
-                return self.error(429, 'rate_limited', 'Too many requests. Try again later.', retry)
             if category == 'export' and row:
+                import export_queue
+                ticket = None
+                if self.channel == 'admin' and export_queue.is_order_route(path):
+                    try:
+                        ticket = export_queue.parse_ticket(request.headers.get('X-Export-Ticket'))
+                    except ValueError:
+                        return self.error(400, 'export_ticket_invalid', '导出排队编号无效，请重新发起。')
+                    if ticket:
+                        import module_permissions
+                        roles = {'admin', 'sales'} if export_queue.is_invoice(path) else {'admin', 'sales', 'warehouse'}
+                        if not module_permissions.allows_operation(row, path, request.method, roles):
+                            return self.error(403, 'permission_denied', 'Forbidden')
+                        if not export_queue.is_invoice(path) and row['role'] == 'warehouse' and request.method != 'POST':
+                            response = self.error(405, 'warehouse_export_requires_post', '请使用订单页面的导出按钮进行仓库打单')
+                            response.headers['Allow'] = 'POST'
+                            return response
+                poll_limit = int(os.environ.get('SECURITY_LIMIT_EXPORT_POLL', '30'))
+                if not 1 <= poll_limit <= 10000:
+                    raise RuntimeError('Invalid security quota configuration')
+                retry = self.reserve('export-poll', subject, poll_limit, 60)
+                if retry:
+                    return self.error(429, 'export_poll_limited', '导出请求过于频繁，请稍后重试。', retry)
                 conn = self.db._connect(autocommit=True, coordination=True)
                 key = f'export:{self.channel}:{row["id"]}'
-                if not conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (key,)).fetchone()['locked']:
-                    conn.close()
-                    return self.error(429, 'export_in_progress', 'Another export is in progress. Try again later.', 5)
+                account_locked = False
+                global_key = None
+                admitted = False
                 try:
-                    slots = int(os.environ.get('SECURITY_EXPORT_GLOBAL_CONCURRENT', '1'))
-                    if not 1 <= slots <= 4:
-                        raise RuntimeError('Invalid global export budget')
-                    global_key = None
-                    for slot in range(slots):
-                        candidate = f'export:global:{slot}'
-                        if conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (candidate,)).fetchone()['locked']:
-                            global_key = candidate
-                            break
-                    if global_key is None:
-                        conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (key,))
-                        conn.close()
-                        return self.error(429, 'export_capacity', 'Export service is busy. Try again shortly.', 5)
-                except BaseException:
-                    conn.close()  # Pool reset discards any held advisory locks.
-                    raise
-                g.security_export_global_key = global_key
-                g.security_export_connection, g.security_export_key = conn, key
-                g.security_exporting = True
+                    with conn.transaction():
+                        export_queue.lock(conn)
+                        if self.channel == 'admin':
+                            export_queue.expire(conn)
+                        position = None
+                        if ticket:
+                            error, position = export_queue.enter(conn, ticket, self.channel, row['id'], row['public_id'], export_queue.identity(request))
+                            if error:
+                                status = 429 if error == 'export_queue_full' else 409
+                                messages = {
+                                    'export_queue_full': '导出排队已满，请稍后重新发起。',
+                                    'export_ticket_started': '该导出已开始，请等待结果，勿重复提交。',
+                                    'export_ticket_finished': '该导出请求已结束，请重新发起。',
+                                    'export_ticket_expired': '排队已过期，请重新发起导出。',
+                                    'export_ticket_mismatch': '导出请求与排队信息不匹配，请重新发起。',
+                                }
+                                return self.error(status, error, messages[error])
+                            if export_queue.first_runnable(conn) != ticket:
+                                return self.queued_export(ticket, position)
+                        elif export_queue.has_waiting(conn):
+                            return self.error(429, 'export_capacity', 'Export service is busy. Try again shortly.', 5)
+                        account_locked = conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (key,)).fetchone()['locked']
+                        if not account_locked:
+                            return self.queued_export(ticket, position) if ticket else self.error(429, 'export_in_progress', 'Another export is in progress. Try again later.', 5)
+                        slots = int(os.environ.get('SECURITY_EXPORT_GLOBAL_CONCURRENT', '1'))
+                        if not 1 <= slots <= 4:
+                            raise RuntimeError('Invalid global export budget')
+                        for slot in range(slots):
+                            candidate = f'export:global:{slot}'
+                            if conn.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0)) AS locked', (candidate,)).fetchone()['locked']:
+                                global_key = candidate
+                                break
+                        if global_key is None:
+                            return self.queued_export(ticket, position) if ticket else self.error(429, 'export_capacity', 'Export service is busy. Try again shortly.', 5)
+                        retry = self.reserve(category, subject, limit, 60)
+                        if retry:
+                            if ticket:
+                                export_queue.mark(conn, ticket, 'finished')
+                            return self.error(429, 'rate_limited', 'Too many requests. Try again later.', retry)
+                        if ticket:
+                            export_queue.mark(conn, ticket, 'started')
+                    g.security_export_global_key = global_key
+                    g.security_export_connection, g.security_export_key = conn, key
+                    g.security_export_ticket = ticket
+                    g.security_exporting = True
+                    admitted = True
+                finally:
+                    if not admitted:
+                        try:
+                            if account_locked:
+                                conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (key,))
+                            if global_key:
+                                conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (global_key,))
+                        finally:
+                            conn.close()  # Pool reset also discards any remaining advisory locks.
+            else:
+                retry = self.reserve(category, subject, limit, 60)
+                if retry:
+                    return self.error(429, 'rate_limited', 'Too many requests. Try again later.', retry)
         return None
 
     def after(self, response):
@@ -477,7 +547,9 @@ class Security:
             response.headers['Strict-Transport-Security'] = 'max-age=' + os.environ.get('SECURITY_HSTS_MAX_AGE', '300')
         if request.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
-            if response.status_code >= 500 and not request.path.startswith('/api/external/') and not getattr(g,'security_database_busy',False):
+            known_export_timeout = response.status_code == 504 and getattr(g, 'security_export_timeout', False)
+            known_image_failure = response.status_code == 502 and getattr(g, 'security_export_image_failure', False)
+            if response.status_code >= 500 and not known_export_timeout and not known_image_failure and not request.path.startswith('/api/external/') and not getattr(g,'security_database_busy',False):
                 response.set_data(self.app.json.dumps({'code':'service_error','message':'The service is temporarily unavailable. Try again later.'}))
                 response.content_type = 'application/json'
             if getattr(g, 'security_session_revoked', False):
@@ -486,6 +558,13 @@ class Security:
             row = getattr(g, '_security_session', None)
             if row:
                 response.headers['X-Auth-Session'] = str(row['public_id'])
+        ticket = getattr(g, 'security_export_ticket', None)
+        if ticket and response.status_code >= 400 and not getattr(g, 'security_database_busy', False):
+            data = response.get_json(silent=True) or {}
+            with self.db._connect() as conn:
+                conn.execute('''UPDATE security_export_queue SET result_code=%s,result_message=%s
+                    WHERE ticket=%s AND result_name IS NULL''',
+                    (data.get('code', 'export_failed'), data.get('message', '导出失败，请重新发起。'), ticket))
         if response.mimetype == 'text/html':
             response.headers['Cache-Control'] = 'no-store'
             images = os.environ.get('PUBLIC_IMAGE_ORIGINS', '').split(',')
@@ -510,6 +589,13 @@ class Security:
         if conn:
             g.security_export_connection = None
             try:
+                ticket = getattr(g, 'security_export_ticket', None)
+                if ticket:
+                    import export_queue
+                    try:
+                        export_queue.mark(conn, ticket, 'finished')
+                    finally:
+                        g.security_export_ticket = None
                 conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (g.security_export_key,))
                 if getattr(g, 'security_export_global_key', None):
                     conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (g.security_export_global_key,))

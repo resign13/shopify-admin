@@ -79,21 +79,25 @@ class OrderSearchTest(unittest.TestCase):
         self.assertEqual(self.call(query, 'customer').status_code, 403)
 
     def test_both_exports_and_compatibility_routes_share_keyword_filters(self):
-        for route, builder in [('orders/export', 'build_orders_export'), ('orders/export-by-sheet', 'build_orders_sheet_export')]:
+        for route, kind in [('orders/export', 'combined'), ('orders/export-by-sheet', 'split')]:
             for view in ['', 'workbench']:
                 for role, expected in [('admin', {1, 2, 3}), ('sales', {1, 3}), ('b', {2}), ('warehouse', {1, 2, 3})]:
                     query = {'keyword': 'zm4757', 'view': view, 'orderIds': '1,2,3,4', 'includeImages': '0'}
-                    with patch.object(application, builder, return_value=io.BytesIO(b'fixture')) as mocked:
+                    with patch.object(application.order_export_process, 'build', return_value=io.BytesIO(b'fixture')) as mocked:
                         response = self.call(query, role, route, method='POST' if role == 'warehouse' else 'GET')
                         self.assertEqual(response.status_code, 200, response.json)
-                        orders = mocked.call_args.args[0]
+                        mocked.assert_called_once()
+                        self.assertEqual(mocked.call_args.args[0], kind)
+                        orders = mocked.call_args.args[1]
                         self.assertEqual({row['id'] for row in orders}, expected)
                         self.assertEqual(len(orders), len(expected))
                         if role == 'warehouse': self.assertTrue(all('totalAmount' not in row for row in orders))
-                with patch.object(application, builder, return_value=io.BytesIO(b'fixture')) as mocked:
+                with patch.object(application.order_export_process, 'build', return_value=io.BytesIO(b'fixture')) as mocked:
                     self.call({'keyword': 'ZM4757', 'view': view, 'status': 'paid', 'category': 'denim',
                                'dateFrom': '2026-09-18', 'dateTo': '2026-09-18'}, route=route)
-                    self.assertEqual([row['id'] for row in mocked.call_args.args[0]], [1])
+                    mocked.assert_called_once()
+                    self.assertEqual(mocked.call_args.args[0], kind)
+                    self.assertEqual([row['id'] for row in mocked.call_args.args[1]], [1])
 
     def test_existing_keywords_and_empty_or_invalid_matches_do_not_mutate_inventory(self):
         before = db._fetch_all('SELECT * FROM product_size_prices ORDER BY id')
@@ -103,9 +107,11 @@ class OrderSearchTest(unittest.TestCase):
                                   ('   ', {1, 2, 3, 4})]:
             self.assertEqual(self.ids({'keyword': keyword}), expected)
             self.assertEqual(self.ids({'keyword': keyword, 'page': 1}), expected)
-            with patch.object(application, 'build_orders_export', return_value=io.BytesIO(b'fixture')) as mocked:
+            with patch.object(application.order_export_process, 'build', return_value=io.BytesIO(b'fixture')) as mocked:
                 self.assertEqual(self.call({'keyword': keyword}, route='orders/export').status_code, 200)
-                self.assertEqual({row['id'] for row in mocked.call_args.args[0]}, expected)
+                mocked.assert_called_once()
+                self.assertEqual(mocked.call_args.args[0], 'combined')
+                self.assertEqual({row['id'] for row in mocked.call_args.args[1]}, expected)
         self.assertEqual(db._fetch_all('SELECT * FROM product_size_prices ORDER BY id'), before)
         self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM inventory_receipts')['n'], 0)
         self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM admin_audit_logs')['n'], 0)
@@ -136,16 +142,18 @@ class OrderSearchTest(unittest.TestCase):
 
     def test_contact_name_exports_compatibility_and_legacy_filter_agree(self):
         db._fetch_one("UPDATE orders SET contact_name='Unique Buyer Contact' WHERE id IN (1,2) RETURNING id")
-        for route, builder in [('orders/export', 'build_orders_export'), ('orders/export-by-sheet', 'build_orders_sheet_export')]:
+        for route, kind in [('orders/export', 'combined'), ('orders/export-by-sheet', 'split')]:
             for view in ['', 'workbench']:
                 for role, expected in [('admin', {1, 2}), ('sales', {1}), ('b', {2}), ('warehouse', {1, 2})]:
                     with self.subTest(route=route, view=view, role=role), patch.object(
-                        application, builder, return_value=io.BytesIO(b'fixture')
+                        application.order_export_process, 'build', return_value=io.BytesIO(b'fixture')
                     ) as mocked:
                         response = self.call({'keyword': '  BUYER CONTACT ', 'view': view, 'includeImages': '0'}, role, route,
                                              method='POST' if role == 'warehouse' else 'GET')
                         self.assertEqual(response.status_code, 200, response.json)
-                        orders = mocked.call_args.args[0]
+                        mocked.assert_called_once()
+                        self.assertEqual(mocked.call_args.args[0], kind)
+                        orders = mocked.call_args.args[1]
                         self.assertEqual({row['id'] for row in orders}, expected)
                         if role == 'warehouse':
                             self.assertTrue(all('totalAmount' not in row for row in orders))

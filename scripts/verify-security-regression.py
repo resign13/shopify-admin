@@ -31,7 +31,7 @@ if args.suite in {'all', 'security'}:
     result = subprocess.run([sys.executable, '-m', 'unittest', '-v', 'test_security_phase1', 'test_security'], cwd=backend, env=env)
     if result.returncode: raise SystemExit(result.returncode)
 if args.suite in {'all', 'business'}:
-    for category in ('READ', 'VOICE', 'WRITE', 'UPLOAD', 'EXPORT', 'INVENTORY'):
+    for category in ('READ', 'VOICE', 'WRITE', 'UPLOAD', 'EXPORT', 'EXPORT_POLL', 'INVENTORY'):
         env['SECURITY_LIMIT_' + category] = '10000'
     result = subprocess.run([sys.executable, '-m', 'unittest', '-v', *(args.modules or sorted(available))], cwd=backend, env=env)
     raise SystemExit(result.returncode)
