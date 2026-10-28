@@ -7,7 +7,7 @@
     ><MobileActionMenu v-if="isPhone" icon-only label="分类操作"><ElButton :disabled="reordering || loading" @click="edit()">新建分类</ElButton><ElButton @click="mobileListTools = !mobileListTools">{{ mobileListTools ? '收起列表设置' : '排序与列表设置' }}</ElButton></MobileActionMenu><ElButton v-else type="primary" :disabled="reordering || loading" @click="edit()">＋ 新建分类</ElButton></PageHeader
   >
   <section class="panel goods-list-panel">
-    <MobileGoodsSearch v-if="isPhone" v-model="keyword" placeholder="搜索分类名称或编码" @update:model-value="page = 1" />
+    <MobileGoodsSearch v-if="isPhone" v-model="keyword" placeholder="搜索分类名称或编码" @update:model-value="page = 1" @submit="page = 1" />
     <div v-else class="filters">
       <ElInput
         v-model="keyword"

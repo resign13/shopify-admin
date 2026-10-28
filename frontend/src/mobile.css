@@ -1,4 +1,8 @@
 .mobile-filter-toggle, .mobile-filter-chips { display:none; }
+@media (min-width:768px) {
+  .responsive-filters > .mobile-filter-toggle,
+  .responsive-filters > .mobile-filter-chips { display:none; }
+}
 .mobile-table { min-width:0 !important; width:100%; }
 .mobile-table-tools { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin:12px 0; }
 .mobile-table-tools .el-select { width:150px; max-width:100%; }

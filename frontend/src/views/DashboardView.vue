@@ -11,8 +11,8 @@
     ></PageHeader
   >
   <div v-if="isPhone" class="mobile-dashboard-range">
-    <div><button v-for="item in [['1','今天'],['7','近7天'],['30','近30天']]" :key="item[0]" :class="{active: preset === item[0]}" @click="setPreset(item[0])">{{ item[1] }}</button><button :class="{active:preset === 'custom'}" @click="mobileFilterOpen = true">自定义</button></div>
-    <button class="mobile-dashboard-filter" aria-label="经营筛选" @click="mobileFilterOpen = true"><ElIcon><Filter /></ElIcon></button>
+    <div><button v-for="item in [['1','今天'],['7','近7天'],['30','近30天']]" :key="item[0]" :class="{active: preset === item[0]}" @click="setPreset(item[0])">{{ item[1] }}</button><button :class="{active:preset === 'custom'}" :aria-expanded="mobileFilterOpen" aria-controls="mobile-dashboard-filters" @click="mobileFilterOpen = true">自定义</button></div>
+    <button class="mobile-dashboard-filter" aria-label="经营筛选" :aria-expanded="mobileFilterOpen" aria-controls="mobile-dashboard-filters" @click="mobileFilterOpen = !mobileFilterOpen"><ElIcon><Filter /></ElIcon></button>
   </div>
   <section v-if="!isPhone" class="panel">
     <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
@@ -57,15 +57,15 @@
       }}<span v-if="hasDraftGlobal">；筛选已更改，点击查询应用</span>
     </p>
   </section>
-  <ElDrawer v-if="isPhone" v-model="mobileFilterOpen" title="经营筛选" class="mobile-dashboard-filter-drawer">
+  <section v-if="isPhone" v-show="mobileFilterOpen" id="mobile-dashboard-filters" class="mobile-dashboard-inline-filters" aria-label="经营筛选">
     <ElForm label-position="top" @submit.prevent="applyMobileFilters">
       <ElFormItem label="统计日期"><ElDatePicker v-model="dates" type="daterange" value-format="YYYY-MM-DD" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @change="preset = 'custom'" /></ElFormItem>
       <ElFormItem label="国家"><ElSelect v-model="country" clearable filterable placeholder="全部国家"><ElOption v-for="item in data?.filters.countries" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem label="款号"><ElSelect v-model="style" clearable filterable placeholder="全部款号"><ElOption v-for="item in data?.filters.styles" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem v-if="auth.isSuperAdmin" label="业务员"><ElSelect v-model="salespersonId" clearable filterable placeholder="全公司业务员"><ElOption label="未分配订单" value="unassigned"/><ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name"/></ElSelect></ElFormItem>
+      <div class="mobile-dashboard-filter-actions"><ElButton @click="mobileFilterOpen=false">收起筛选</ElButton><ElButton native-type="submit" type="primary" :loading="loading">查询</ElButton></div>
     </ElForm>
-    <template #footer><ElButton @click="mobileFilterOpen=false">取消</ElButton><ElButton type="primary" :loading="loading" @click="applyMobileFilters">应用筛选</ElButton></template>
-  </ElDrawer>
+  </section>
   <ElAlert v-if="error" :title="error" type="error" :closable="false" show-icon
     ><ElButton link type="primary" @click="load(false, false)"
       >重新加载</ElButton
@@ -178,7 +178,6 @@
           <small>{{ stylePersonalScope ? '按款号汇总对应业务员的订单，展开查看颜色 SKU 和真实尺码销量。' : '按款号汇总颜色 SKU，展开查看每个真实尺码的销量与库存。' }}</small>
         </div>
         <div class="inline-actions">
-          <ElButton v-if="isPhone" link @click="mobileStyleFilters = !mobileStyleFilters">筛选与排序</ElButton>
           <ElRadioGroup
             v-model="velocityWindow"
             size="small"
@@ -195,12 +194,11 @@
           >
         </div>
       </div>
-      <ResponsiveFilters v-show="!isPhone || mobileStyleFilters" class="style-performance-filters" @submit="loadStylePerformance(true)">
+      <ResponsiveFilters class="style-performance-filters" @submit="loadStylePerformance(true)">
         <ElInput
           v-model="styleKeyword"
           clearable
           placeholder="搜索款号、颜色 SKU 或商品名称"
-          @keyup.enter="loadStylePerformance(true)"
           @clear="loadStylePerformance(true)"
         />
         <ElSelect
@@ -264,9 +262,9 @@
           <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
         </ElSelect>
         <ElButton
+          native-type="submit"
           type="primary"
           :loading="stylePerformanceLoading"
-          @click="loadStylePerformance(true)"
           >查询</ElButton
         >
         <ElButton @click="resetStyleFilters">重置</ElButton>
@@ -711,8 +709,8 @@ import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import { Filter, ArrowRight } from '@element-plus/icons-vue';
 import { useResponsive } from '../composables/responsive';
 const { isPhone } = useResponsive();
-const mobileFilterOpen = ref(false), mobileStyleFilters = ref(false), mobileStyleSummary = ref(false), mobileCountries = ref(false), mobileSnapshot = ref(false);
-function applyMobileFilters() { mobileFilterOpen.value = false; load(true); }
+const mobileFilterOpen = ref(false), mobileStyleSummary = ref(false), mobileCountries = ref(false), mobileSnapshot = ref(false);
+function applyMobileFilters() { load(true); }
 import AdaptiveTable from "../components/AdaptiveTable";
 import {
   computed,
@@ -849,6 +847,7 @@ function presetDates(value) {
 }
 function setPreset(value) {
   if (value === "custom") return;
+  preset.value = value;
   dates.value = presetDates(value);
   load(true);
 }
@@ -1245,6 +1244,19 @@ onBeforeUnmount(() => {
 }
 .snapshot-grid > div {
   padding: 12px 8px;
+}
+@media (max-width: 767px) {
+  .mobile-dashboard-range > div { min-width:0; }
+  .mobile-dashboard-range > div > button { min-width:0; min-height:44px; }
+  .mobile-dashboard-range > .mobile-dashboard-filter { flex:0 0 44px; width:44px; min-width:44px; height:44px; min-height:44px; }
+  .mobile-dashboard-inline-filters { min-width:0; margin:0 0 20px; padding:16px; border:1px solid #e6edf6; border-radius:16px; background:#fff; }
+  .mobile-dashboard-inline-filters :deep(.el-form-item) { min-width:0; }
+  .mobile-dashboard-inline-filters :deep(.el-form-item__label) { font-size:12px; color:#64748b; }
+  .mobile-dashboard-inline-filters :deep(.el-form-item__content) { min-width:0; }
+  .mobile-dashboard-inline-filters :deep(.el-select), .mobile-dashboard-inline-filters :deep(.el-date-editor) { width:100%!important; min-width:0; max-width:100%; box-sizing:border-box; }
+  .mobile-dashboard-inline-filters :deep(.el-range-input) { min-width:0; }
+  .mobile-dashboard-filter-actions { display:flex; justify-content:flex-end; gap:8px; }
+  .mobile-dashboard-filter-actions :deep(.el-button) { min-height:44px; margin:0; }
 }
 @media (max-width: 1023px) {
   .style-performance-title {

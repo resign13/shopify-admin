@@ -10,7 +10,13 @@
     ></PageHeader
   >
   <section class="panel goods-list-panel">
-    <MobileGoodsSearch v-if="isPhone" v-model="filters.keyword" placeholder="搜索商品、款号或 SKU" filterable :active="Boolean(filters.category || filters.stock || filters.status !== 'active')" @submit="apply" @filter="mobileFilterOpen = true" />
+    <ResponsiveFilters v-if="isPhone" :active="list.query" @remove="key => { filters[key] = key === 'status' ? 'all' : ''; apply(); }" @submit="apply">
+      <ElInput v-model="filters.keyword" clearable placeholder="搜索商品、款号或 SKU" aria-label="搜索商品、款号或 SKU" @clear="apply" />
+      <ElSelect v-model="filters.category" clearable placeholder="全部分类" aria-label="商品分类"><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.labels?.zh || c.key" /></ElSelect>
+      <ElSelect v-model="filters.stock" clearable placeholder="全部库存" aria-label="库存状态"><ElOption value="backordered" label="欠货"/><ElOption value="available" label="有可用现货"/><ElOption value="empty" label="无库存"/></ElSelect>
+      <ElSelect v-model="filters.status" placeholder="商品状态" aria-label="商品状态"><ElOption value="active" label="启用商品"/><ElOption value="inactive" label="停用商品"/><ElOption value="all" label="全部商品"/></ElSelect>
+      <ElButton native-type="submit" type="primary">查询</ElButton><ElButton @click="reset">重置</ElButton>
+    </ResponsiveFilters>
     <div v-if="isPhone" class="mobile-goods-heading"><span>{{ mobileSelectionMode ? '选择要调整的商品' : '商品目录' }}</span><small>按分类排列</small></div>
     <ResponsiveFilters v-if="!isPhone" :active="list.query" @remove="key => { filters[key] = key === 'status' ? 'all' : ''; apply(); }" @submit.prevent="apply">
       <ElInput
@@ -118,7 +124,6 @@
     >
     <div v-if="isPhone && mobileSelectionMode" class="mobile-goods-selection"><span>已选 {{ selected.length }} 项</span><ElButton :disabled="!selected.length" type="primary" @click="batchOpen = true">调整分类</ElButton><ElButton @click="mobileSelectionMode = false; clearSelection()">完成</ElButton></div>
   </section>
-  <ElDrawer v-if="isPhone" v-model="mobileFilterOpen" title="筛选商品" size="100%"><ElForm class="mobile-goods-filter-form" label-position="top" @submit.prevent="apply"><ElFormItem label="商品分类"><ElSelect v-model="filters.category" clearable placeholder="全部分类"><ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.labels?.zh || c.key" /></ElSelect></ElFormItem><ElFormItem label="库存状态"><ElSelect v-model="filters.stock" clearable placeholder="全部库存"><ElOption value="backordered" label="欠货"/><ElOption value="available" label="有可用现货"/><ElOption value="empty" label="无库存"/></ElSelect></ElFormItem><ElFormItem label="商品状态"><ElSelect v-model="filters.status"><ElOption value="active" label="启用商品"/><ElOption value="inactive" label="停用商品"/><ElOption value="all" label="全部商品"/></ElSelect></ElFormItem></ElForm><template #footer><ElButton @click="reset">重置</ElButton><ElButton type="primary" @click="apply">应用筛选</ElButton></template></ElDrawer>
   <ElDrawer v-model="previewOpen" title="商品资料" size="580px"
     ><template v-if="item"
       ><h2>{{ productName(item) }}</h2>
@@ -185,7 +190,6 @@
 import { useResponsive } from '../composables/responsive';
 import MobileActionMenu from '../components/MobileActionMenu.vue';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
-import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -209,7 +213,7 @@ import {
   dateTime,
 } from "../composables/workbench";
 const { isPhone } = useResponsive();
-const mobileSelectionMode = ref(false), mobileListTools = ref(false), mobileFilterOpen = ref(false);
+const mobileSelectionMode = ref(false), mobileListTools = ref(false);
 const router = useRouter(),
   list = useList("products", { sort: "category" }, ["featured"]),
   categories = ref([]),
@@ -252,7 +256,6 @@ function apply() {
   if (selected.value.length) ElMessage.info("筛选已改变，已清空选择");
   clearSelection();
   list.apply(filters);
-  mobileFilterOpen.value = false;
 }
 function reset() {
   Object.assign(filters, {

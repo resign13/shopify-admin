@@ -255,8 +255,6 @@
   :root .mapi-account-search > .el-button:active { background:#dce9fc; }
   :root .responsive-filters > .mobile-filter-toggle,
   :root .goods-search > .goods-filter,
-  :root .mobile-system-search > .el-button,
-  :root .ma-search > .el-button,
   :root .mf-cost-search > .el-button[aria-label='筛选商品成本'] {
     height:48px;
     min-height:48px;
@@ -275,4 +273,37 @@
   :root .mf-cost-search > .el-input { order:0; }
   :root .mf-cost-search > .el-button.is-text { order:1; }
   :root .mf-cost-search > .el-button[aria-label='筛选商品成本'] { order:2; }
+}
+
+/* Phone search actions stay in the same row when criteria are expanded. */
+@media (max-width:767px) {
+  :root .responsive-filters:has(> .el-input:first-child),
+  :root .responsive-filters:has(> .mobile-filter-keyword),
+  :root form.mobile-query-bar { display:flex; flex-flow:row wrap; align-items:center; gap:8px; min-width:0; }
+  :root .responsive-filters > .el-input:first-child,
+  :root .responsive-filters > .mobile-filter-keyword,
+  :root .mobile-query-bar > .el-input { order:0; flex:1 1 calc(100% - 60px); width:0!important; min-width:0; }
+  :root .responsive-filters:has(> .mobile-filter-toggle) > .el-input:first-child,
+  :root .responsive-filters:has(> .mobile-filter-toggle) > .mobile-filter-keyword,
+  :root .mobile-query-bar:has(> .goods-filter) > .el-input { flex-basis:calc(100% - 116px); }
+  :root :is(.responsive-filters,.mobile-query-bar) > .el-button[type=submit] {
+    order:1; flex:0 0 52px; width:52px; min-width:52px; height:48px; min-height:48px;
+    margin:0; padding:0; border:0; border-radius:16px; background:#eaf1fd; color:#477bc7; font-size:13px; font-weight:550;
+  }
+  :root :is(.responsive-filters,.mobile-query-bar) > :is(.mobile-filter-toggle,.goods-filter) {
+    order:2; flex:0 0 48px; width:48px; min-width:48px; height:48px; min-height:48px; margin:0;
+  }
+  :root .responsive-filters > .el-date-editor { order:3; flex:1 0 100%; width:100%!important; min-width:0; max-width:100%; }
+  :root .responsive-filters > .el-select { order:4; flex:1 1 calc(50% - 4px); width:auto!important; min-width:0; max-width:100%; }
+  :root .responsive-filters > :is(label,.mobile-filter-fields) { order:4; flex:1 0 100%; min-width:0; }
+  :root .responsive-filters > .el-button:not([type=submit]):not(.mobile-filter-toggle),
+  :root .mobile-query-bar > .el-button:not([type=submit]):not(.goods-filter) { order:5; margin-left:auto; }
+  :root .template-manager-search.mobile-query-bar > .el-button:not([type=submit]) { order:5; flex:1 0 100%; margin:0; }
+  :root .responsive-filters > .el-button:not([type=submit]):not(.mobile-filter-toggle) { width:auto; min-width:52px; min-height:44px; font-size:12px; padding:0 12px; }
+  :root .responsive-filters > :is(.el-tag,.mobile-filter-chips,.small-note) { order:6; flex-basis:100%; min-width:0; }
+  :root .responsive-filters:not(.is-expanded) > :is(.mobile-filter-field,.mobile-filter-fields) { display:none; }
+  :root .responsive-filters .mobile-filter-fields { display:grid; grid-template-columns:minmax(0,1fr); gap:12px; }
+  :root .responsive-filters .mobile-filter-field { display:flex; flex-direction:column; gap:7px; color:#64748b; font-size:12px; }
+  :root .responsive-filters .mobile-filter-field :is(.el-input,.el-select,.el-date-editor) { width:100%!important; min-width:0; max-width:100%; }
+  :root .responsive-filters .mobile-filter-field .el-range-input { min-width:0; }
 }
