@@ -143,4 +143,3 @@ async (page) => {
     page.off('request', onRequest);
   }
 }
-
