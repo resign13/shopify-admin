@@ -8,11 +8,15 @@
     :close-on-click-modal="false"
   >
     <ElSkeleton v-if="loading" :rows="12" animated />
-    <ElAlert v-if="error" :title="error" type="error" :closable="false"
+    <ElAlert v-if="error" ref="errorAlert" tabindex="-1" :title="error" type="error" :closable="false"
       ><ElButton v-if="conflict" text @click="readLatest"
         >查看线上最新订单</ElButton
-      ></ElAlert
+      ><ElButton v-if="!ready && !loading" text @click="loadEditor">重新加载</ElButton></ElAlert
     >
+    <ElAlert v-if="productLoadErrors.length" type="warning" :closable="false" title="部分商品资料未加载，尺码、库存及参考价暂不可用。" data-testid="order-product-load-error">
+      <span>{{ productLoadErrors.map(id => matrixRows.find(row => String(row.productId) === String(id))?.sku || id).join('、') }}</span>
+      <ElButton text :loading="productRetrying" @click="retryProductDetails">重新加载商品</ElButton>
+    </ElAlert>
     <section v-if="latest" class="panel">
       <h3>线上最新订单（草稿已保留）</h3>
       <p>
@@ -35,24 +39,20 @@
       <nav class="m-editor-steps" aria-label="订单填写进度"><button v-for="(label,index) in ['客户','商品','完成']" :key="label" type="button" :class="{active:mobileStep===index+1,done:mobileStep>index+1}" :aria-current="mobileStep===index+1 ? 'step' : undefined" @click="mobileStep=index+1"><span>{{ mobileStep>index+1 ? '✓' : index+1 }}</span>{{ label }}</button></nav>
       <section v-show="mobileStep===1" class="m-editor-section">
         <div class="m-editor-card"><header><h3>客户与收货</h3><ElButton text type="primary" :disabled="readOnly" @click="openMobileRecipient" data-testid="mobile-order-recipient">{{ form.userId ? '编辑收货资料' : '选择客户' }}</ElButton></header><div class="m-editor-customer"><span>{{ (form.contactName || selectedCustomer?.name || '客').slice(0,1) }}</span><div><strong>{{ form.contactName || selectedCustomer?.name || '选择商城客户' }}</strong><small>{{ [selectedCustomer?.companyName || selectedCustomer?.name, form.country].filter(Boolean).join(' · ') || '填写本单的客户与收货资料' }}</small></div></div><p v-if="form.address" class="m-editor-address">{{ [form.address,form.apartment,form.city,form.state,form.zip].filter(Boolean).join(', ') }}</p></div>
-        <details v-if="!id && !readOnly" class="m-editor-card m-editor-fold"><summary>客户模板 <small>填入常用资料</small></summary><CustomerTemplates :profile="form" :customer="selectedCustomer" @apply="applyTemplate" @busy="templateBusy = $event"/></details>
+        <details v-if="!id && !readOnly" class="m-editor-card m-editor-fold"><summary>客户模板</summary><CustomerTemplates :profile="form" :customer="selectedCustomer" @apply="applyTemplate" @busy="templateBusy = $event"/></details>
         <p class="m-editor-caption">{{ form.secondaryOrderNo ? `副单号 ${form.secondaryOrderNo} · ` : '' }}归属业务员 {{ salespeople.find(p=>p.id===form.ownerAdminId)?.name || (auth.canAssignOrderOwner ? '未分配' : auth.user?.name) }}</p>
         <ElAlert v-if="customerUnavailable && !form.userId" title="原商城客户已停用，请选择有效客户；原收货资料已保留。" type="warning" :closable="false"/>
         <ElAlert v-if="!form.ownerConfirmed" title="原业务员已停用，请重新确认归属。" type="warning" :closable="false"/>
       </section>
       <section v-show="mobileStep===2" class="m-editor-section">      <div class="panel-title section-gap">
         <h3>商品明细</h3>
-        <div class="order-product-actions"><ElButton size="small" :disabled="readOnly || saving || loading || lockedLines || !matrixRows.length" @click="pricingOpen=true" data-testid="order-unified-pricing">统一改价</ElButton>
+        <div class="order-product-actions"><ElButton size="small" :disabled="readOnly || saving || loading || productRetrying || !!productLoadErrors.length || lockedLines || !matrixRows.length" @click="pricingOpen=true" data-testid="order-unified-pricing">统一改价</ElButton>
         <ElButton :disabled="lockedLines || readOnly || saving || loading" @click="picker = true"
           >＋ 添加商品</ElButton
         ></div>
       </div>
-      <ElAlert
-        :title="
-          lockedLines
-            ? '已取消订单保留原商品明细；可修改客户与收货资料。'
-            : '后台允许欠货下单。新增扣减现货余额，修改仅按数量差额调整；实际余额以保存时为准。'
-        "
+      <ElAlert v-if="lockedLines"
+        title="已取消订单的商品明细不可修改。"
         type="info"
         :closable="false"
       />
@@ -106,13 +106,12 @@
           </div>
           <div class="order-amount-values">
             <div><span>商品金额</span><strong>{{ money(subtotal) }}</strong></div>
-            <h3>订单总额 {{ money(subtotal + Number(form.shippingFee || 0)) }}</h3>
+            <h3><span>订单总额</span><strong>{{ money(subtotal + Number(form.shippingFee || 0)) }}</strong></h3>
           </div>
         </div>
         <p v-if="willClearPayment" class="quote-notice" role="status">金额已调整，保存后将清空旧付款链接，请按新报价重新填写。</p>
         <p v-if="form.items.some(row=>row.catalogPriceChanged)" class="quote-notice">目录售价已变化，请在“统一改价”中恢复当前售价，或填写确认的成交价。</p>
-        <div v-if="sourceOrderId || activeDraftId" class="reorder-pricing">
-          <span>{{ sourceOrderId || form.sourceOrderId ? '运费沿用原单，请在创建前核对。' : '草稿报价已恢复，请在创建前核对金额及运费。' }}</span>
+        <div v-if="(sourceOrderId || activeDraftId) && priceChanges.length" class="reorder-pricing">
           <ElPopover v-if="priceChanges.length" trigger="click" placement="bottom" :width="380" :popper-style="{maxWidth:'calc(100vw - 32px)'}">
             <template #reference><ElButton link type="primary">{{ priceChanges.length }} 项与来源报价不同</ElButton></template>
             <div class="reorder-price-details" data-testid="reorder-price-details">
@@ -120,7 +119,6 @@
               <p v-for="row in priceChanges" :key="`${row.productId}:${row.sizeCode}`">{{ row.sku }} · {{ row.sizeCode }}：{{ row.oldUnitPrices.map(value=>formatMoney(value,row.oldPriceCurrency||form.currency)).join(' / ') }} → {{ money(row.unitPrice) }}</p>
             </div>
           </ElPopover>
-          <span v-else>商品按本单成交价计算，可通过统一改价调整。</span>
         </div>
         <div class="order-draft-weight" data-testid="order-draft-weight">
           <div class="order-weight-heading">
@@ -201,7 +199,6 @@
             <span v-else>附件 {{ index + 1 }}（地址暂不支持打开）</span>
             <ElButton link type="danger" @click="form.inheritedAttachmentUrls.splice(index, 1)">移除附件</ElButton>
           </div>
-          <small>仅修改本订单附件清单，不删除原文件或影响来源订单。</small>
         </div>
       </ElFormItem>
       <ElFormItem label="PDF 附件"><small v-if="hasInheritedPdf">如需替换，请先移除上方保留的 PDF；历史附件可继续保留。</small><PdfAttachment v-else v-model="form.labelPdfUrl" @busy="pdfUploading = $event" /></ElFormItem>
@@ -211,7 +208,11 @@
         type="warning"
         :closable="false"
       />
-</div></section>
+</div>
+        <div v-if="mobileBlockers.length" class="m-editor-blockers" role="status" data-testid="order-submit-blockers">
+          <div v-for="blocker in mobileBlockers" :key="blocker.step"><span>{{ blocker.text }}</span><ElButton link type="primary" @click="mobileStep=blocker.step">去处理</ElButton></div>
+        </div>
+      </section>
     </ElForm>
     <ElForm v-else-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
       <ElFormItem label="副单号（选填）" prop="secondaryOrderNo">
@@ -592,6 +593,19 @@ const ready = ref(false),
   status = ref(""),
   originalCount = ref(0),
   originalTotal = ref(0);
+const errorAlert = ref();
+const productLoadErrors = ref([]), productRetrying = ref(false);
+const mobileBlockers = computed(() => [
+  ...(!form.ownerConfirmed ? [{step:1, text:'请先确认归属业务员'}] : []),
+  ...(form.pendingItems.length ? [{step:2, text:`请先处理 ${form.pendingItems.length} 项异常商品`}] : []),
+]);
+watch(error, async message => {
+  if (!message || !isPhone.value) return;
+  await nextTick();
+  const element = errorAlert.value?.$el;
+  element?.scrollIntoView({block:'nearest'});
+  element?.focus({preventScroll:true});
+});
 const { dirty, markClean, canLeave } = useDirty(() => form),
   lockedLines = computed(() =>
     status.value === "cancelled",
@@ -745,7 +759,30 @@ async function searchCustomers(keyword = "") {
     if (current === customerSerial) customerLoading.value = false;
   }
 }
-async function populate(item) {
+async function loadProductDetails(ids, expectedSerial = serial) {
+  const failures = [];
+  await Promise.all(ids.map(async id => {
+    try {
+      const result = await api(`inventory/${id}`);
+      if (expectedSerial === serial && props.open) products[id] = result.product;
+    } catch (failure) {
+      // A genuinely removed historical product remains manually priceable;
+      // distinguish it from a failed request that can be retried.
+      if (failure.status === 404) {
+        if (expectedSerial === serial && props.open) delete products[id];
+      } else failures.push(id);
+    }
+  }));
+  if (expectedSerial === serial && props.open) productLoadErrors.value = failures;
+}
+async function retryProductDetails() {
+  if (productRetrying.value || saving.value || !props.open) return;
+  const current = serial;
+  productRetrying.value = true;
+  try { await loadProductDetails([...productLoadErrors.value], current); }
+  finally { if (current === serial) productRetrying.value = false; }
+}
+async function populate(item, expectedSerial = serial) {
   originalItems.value = item.items.map(row => ({...row}));
   version.value = item.version;
   status.value = item.status;
@@ -778,17 +815,10 @@ async function populate(item) {
     });
   markClean();
   ready.value = true;
-  await Promise.all(
-    [...new Set(item.items.map((r) => r.productId))].map(async (id) => {
-      try {
-        products[id] = (await api(`inventory/${id}`)).product;
-      } catch {}
-    }),
-  );
+  await loadProductDetails([...new Set(item.items.map(row => row.productId))], expectedSerial);
 }
-watch(
-  () => [props.open, props.id, props.sourceOrderId, props.draftId],
-  async ([open, id, sourceId, savedId]) => {
+async function loadEditor() {
+    const {open, id, sourceOrderId:sourceId, draftId:savedId} = props;
     const current = ++serial;
     pricingOpen.value=false;
     mobileStep.value=1;mobileRecipientOpen.value=false;markMobileRecipientClean();
@@ -797,6 +827,7 @@ watch(
     ready.value = false;
     imageUploading.value = false; pdfUploading.value = false; templateBusy.value = false;
     error.value = "";
+    productLoadErrors.value = []; productRetrying.value = false;
     conflict.value = false;
     latest.value = null;
     sourceOrderNo.value = ''; customerUnavailable.value = false;
@@ -816,7 +847,8 @@ watch(
       if (id) {
         const item = (await api(`orders/${id}`)).order;
         if (current !== serial) return;
-        await populate(item);
+        await populate(item, current);
+        if (current !== serial) return;
       } else {
         Object.assign(form, {
           userId: null,
@@ -879,9 +911,8 @@ watch(
     } finally {
       if (current === serial) loading.value = false;
     }
-  },
-  { immediate: true },
-);
+}
+watch(() => [props.open, props.id, props.sourceOrderId, props.draftId], loadEditor, { immediate: true });
 function sizeOptions(row) {
   const sizes = products[row.productId]?.sizePrices || [];
   return sizes.some((s) => s.sizeCode === row.sizeCode)
@@ -1133,6 +1164,13 @@ async function adoptLatest() {
 
 <style scoped>
 @media(max-width:767px){
-.m-order-editor{color:#182b49}.m-editor-steps{display:flex;margin:2px 0 23px}.m-editor-steps button{border:0;border-bottom:2px solid #e6edf7;background:none;display:flex;align-items:center;justify-content:center;gap:7px;min-height:45px;flex:1;color:#9ca9bc;font-size:11px;padding:7px 3px 13px}.m-editor-steps button>span{width:21px;height:21px;display:grid;place-items:center;background:#eaf0f9;border-radius:50%;font-size:10px}.m-editor-steps button.active{color:#2f69eb;border-bottom-color:#2f69eb;font-weight:650}.m-editor-steps button.active>span{background:#2f69eb;color:white}.m-editor-card{background:white;border:1px solid #e6edf7;border-radius:18px;padding:17px;margin-bottom:15px}.m-editor-card>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:13px}.m-editor-card h3{font-size:13px;margin:0;color:#496386}.m-editor-card>header :deep(.el-button){font-size:11px;min-height:44px;padding:0 2px}.m-editor-customer{display:flex;gap:12px;align-items:center}.m-editor-customer>span{width:41px;height:44px;display:grid;place-items:center;background:#edf3ff;color:#7799ca;border-radius:13px;font-size:16px}.m-editor-customer strong{font-size:14px}.m-editor-customer small{display:block;color:#9eacbf;font-size:10px;margin-top:4px}.m-editor-address{font-size:11px;color:#8b9db7;margin:13px 0 0 53px;line-height:1.7;overflow-wrap:anywhere}.m-editor-caption{font-size:10px;color:#9baac0;line-height:1.7}.m-editor-fold>summary{display:flex;justify-content:space-between;gap:8px;min-height:35px;font-size:12px;color:#7088ab;cursor:pointer}.m-editor-fold>summary>small{font-size:10px;color:#a2afc3}.m-editor-section>.panel-title{margin:0 0 11px}.m-editor-section>.panel-title h3{font-size:13px}.m-editor-section .order-product-actions{gap:7px}.m-editor-section .order-product-actions :deep(.el-button){font-size:11px;min-height:39px;margin:0;padding:7px 10px}.m-editor-section>.el-alert{font-size:10px;margin-bottom:12px;background:#f0f5fc}.m-editor-section .order-product-list-header{display:none}.m-editor-section .order-product-row{display:grid;grid-template-columns:1fr auto;gap:15px 8px;padding:16px;background:white;border:1px solid #e7edf6;border-radius:18px;margin-bottom:12px}.m-editor-section .order-product-identity{grid-column:1;grid-row:1;display:flex;align-items:center;gap:8px}.m-editor-section .order-product-identity .product-name{font-size:12px;color:#314e76;font-weight:650}.m-editor-section .order-product-identity small{font-size:10px;color:#a1aec0;margin:0}.m-editor-section .order-product-remove{grid-column:2;grid-row:1;font-size:10px;min-height:35px}.m-editor-section .order-product-sizes{grid-column:1 / -1;grid-row:2;display:flex;gap:12px 8px}.m-editor-section .order-size-unit{flex:1;width:54px;min-width:48px;max-width:80px;gap:7px}.m-editor-section .order-size-label{font-size:10px;color:#9faec3}.m-editor-section .order-size-unit :deep(.el-input-number){width:100%;height:44px}.m-editor-section .order-size-unit :deep(.el-input__wrapper){height:44px;border-radius:10px;background:#f8fbff;box-shadow:0 0 0 1px #dfe8f6 inset}.m-editor-section .order-size-unit :deep(input){height:42px;font-size:16px}.m-editor-section .order-size-stock{font-size:9px;line-height:1.4;color:#9eaec5}.m-editor-running-total{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;background:white;padding:17px;border:1px solid #e6edf7;border-radius:18px;margin-top:17px}.m-editor-running-total span{font-size:11px;color:#9cabbe}.m-editor-running-total strong{font-size:23px;color:#182b49;letter-spacing:-.6px}.m-editor-running-total small{width:100%;text-align:right;color:#9caec7;font-size:10px}.m-editor-section .order-goods-summary{border:1px solid #e5ecf6;background:white;border-radius:18px;padding:17px;margin-bottom:14px}.m-editor-section .order-amount-summary{gap:14px}.m-editor-section .order-quote-controls{width:100%}.m-editor-section .order-quote-controls .el-form-item{width:100%}.m-editor-section .order-quote-controls :deep(.el-input-number){width:100%;height:46px}.m-editor-section .order-amount-values{width:100%}.m-editor-section .order-amount-values h3{font-size:23px;color:#182b49}.m-editor-section .order-amount-values>div{font-size:11px;color:#9baec7}.m-editor-section .order-weight-label,.m-editor-section .order-weight-value{font-size:11px}.m-editor-section .order-weight-refresh{font-size:10px}.m-order-editor :deep(.el-form-item__label),.m-order-recipient-form :deep(.el-form-item__label){font-size:11px;color:#8c9fba}.m-order-editor :deep(input),.m-order-editor :deep(textarea),.m-order-recipient-form :deep(input){font-size:16px}.m-recipient-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 13px}.m-recipient-fields>.el-form-item:nth-child(1),.m-recipient-fields>.el-form-item:nth-child(5){grid-column:1 / -1}.m-order-recipient-form :deep(.el-input__wrapper),.m-order-recipient-form :deep(.el-select__wrapper){min-height:45px;border-radius:11px;box-shadow:0 0 0 1px #dfe8f6 inset;background:white}
+.m-order-editor{color:#182b49}.m-editor-steps{display:flex;margin:2px 0 23px}.m-editor-steps button{border:0;border-bottom:2px solid #e6edf7;background:none;display:flex;align-items:center;justify-content:center;gap:7px;min-height:45px;flex:1;color:#9ca9bc;font-size:11px;padding:7px 3px 13px}.m-editor-steps button>span{width:21px;height:21px;display:grid;place-items:center;background:#eaf0f9;border-radius:50%;font-size:10px}.m-editor-steps button.active{color:#2f69eb;border-bottom-color:#2f69eb;font-weight:650}.m-editor-steps button.active>span{background:#2f69eb;color:white}.m-editor-card{background:white;border:1px solid #e6edf7;border-radius:18px;padding:17px;margin-bottom:15px}.m-editor-card>header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:13px}.m-editor-card h3{font-size:13px;margin:0;color:#496386}.m-editor-card>header :deep(.el-button){font-size:11px;min-height:44px;padding:0 2px}.m-editor-customer{display:flex;gap:12px;align-items:center}.m-editor-customer>span{width:41px;height:44px;display:grid;place-items:center;background:#edf3ff;color:#7799ca;border-radius:13px;font-size:16px}.m-editor-customer strong{font-size:14px}.m-editor-customer small{display:block;color:#64748b;font-size:12px;margin-top:4px}.m-editor-address{font-size:12px;color:#64748b;margin:13px 0 0 53px;line-height:1.7;overflow-wrap:anywhere}.m-editor-caption{font-size:12px;color:#64748b;line-height:1.7}.m-editor-fold>summary{display:flex;justify-content:space-between;gap:8px;min-height:35px;font-size:12px;color:#7088ab;cursor:pointer}.m-editor-fold>summary>small{font-size:10px;color:#a2afc3}.m-editor-section>.panel-title{margin:0 0 11px}.m-editor-section>.panel-title h3{font-size:13px}.m-editor-section .order-product-actions{gap:7px}.m-editor-section .order-product-actions :deep(.el-button){font-size:11px;min-height:39px;margin:0;padding:7px 10px}.m-editor-section>.el-alert{font-size:10px;margin-bottom:12px;background:#f0f5fc}.m-editor-section .order-product-list-header{display:none}.m-editor-section .order-product-row{display:grid;grid-template-columns:1fr auto;gap:15px 8px;padding:16px;background:white;border:1px solid #e7edf6;border-radius:18px;margin-bottom:12px}.m-editor-section .order-product-identity{grid-column:1;grid-row:1;display:flex;align-items:center;gap:8px}.m-editor-section .order-product-identity .product-name{font-size:12px;color:#314e76;font-weight:650}.m-editor-section .order-product-identity small{font-size:11px;color:#64748b;margin:0}.m-editor-section .order-product-remove{grid-column:2;grid-row:1;font-size:10px;min-height:35px}.m-editor-section .order-product-sizes{grid-column:1 / -1;grid-row:2;display:flex;gap:12px 8px}.m-editor-section .order-size-unit{flex:1;width:54px;min-width:48px;max-width:80px;gap:7px}.m-editor-section .order-size-label{font-size:12px;color:#61748f}.m-editor-section .order-size-unit :deep(.el-input-number){width:100%;height:44px}.m-editor-section .order-size-unit :deep(.el-input__wrapper){height:44px;border-radius:10px;background:#f8fbff;box-shadow:0 0 0 1px #dfe8f6 inset}.m-editor-section .order-size-unit :deep(input){height:42px;font-size:16px}.m-editor-section .order-size-stock{font-size:11px;line-height:1.4;color:#61748f}.m-editor-running-total{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;background:white;padding:17px;border:1px solid #e6edf7;border-radius:18px;margin-top:17px}.m-editor-running-total span{font-size:11px;color:#9cabbe}.m-editor-running-total strong{font-size:18px;color:#182b49;letter-spacing:-.6px}.m-editor-running-total small{width:100%;text-align:right;color:#64748b;font-size:11px}.m-editor-section .order-goods-summary{border:1px solid #e5ecf6;background:white;border-radius:18px;padding:17px;margin-bottom:14px}.m-editor-section .order-amount-summary{gap:14px}.m-editor-section .order-quote-controls{width:100%}.m-editor-section .order-quote-controls .el-form-item{width:100%}.m-editor-section .order-quote-controls :deep(.el-input-number){width:100%;height:46px}.m-editor-section .order-amount-values{width:100%}.m-editor-section .order-amount-values h3{display:flex;justify-content:flex-end;align-items:baseline;flex-wrap:wrap;gap:6px;font-size:14px;color:#182b49;font-weight:500}.m-editor-section .order-amount-values h3 strong{font-size:18px;font-weight:600;overflow-wrap:anywhere}.m-editor-section .order-amount-values>div{font-size:12px;color:#64748b}.m-editor-section .order-weight-label,.m-editor-section .order-weight-value{font-size:11px}.m-editor-section .order-weight-refresh{font-size:10px}.m-order-editor :deep(.el-form-item__label),.m-order-recipient-form :deep(.el-form-item__label){font-size:12px;color:#64748b}.m-order-editor :deep(input),.m-order-editor :deep(textarea),.m-order-recipient-form :deep(input){font-size:16px}.m-recipient-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 13px}.m-recipient-fields>.el-form-item:nth-child(1),.m-recipient-fields>.el-form-item:nth-child(5){grid-column:1 / -1}.m-order-recipient-form :deep(.el-input__wrapper),.m-order-recipient-form :deep(.el-select__wrapper){min-height:45px;border-radius:11px;box-shadow:0 0 0 1px #dfe8f6 inset;background:white}
+}
+</style>
+
+<style scoped>
+@media(max-width:767px){
+.m-editor-blockers{border:1px solid #f2d5aa;background:#fff8ed;color:#8a520c;border-radius:12px;padding:8px 12px;font-size:12px;margin-bottom:12px}
+.m-editor-blockers>div{display:flex;align-items:center;justify-content:space-between;gap:8px}
 }
 </style>
