@@ -29,9 +29,12 @@ async (page) => {
       const mobile=await menu.locator('a').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('href')).sort());
       await menu.getByRole('button',{name:'关闭此对话框',exact:true}).click();await menu.waitFor({state:'hidden'});
       await p.setViewportSize({width:1440,height:1000});
+      await p.locator('.workspace-sidebar').waitFor({state:'visible'});
+      await p.waitForFunction(expected => document.querySelectorAll('.workspace-sidebar nav a').length === expected, mobile.length);
       const desktop=await p.locator('.workspace-sidebar nav a').evaluateAll(nodes=>nodes.map(n=>n.getAttribute('href')).sort());
-      check(JSON.stringify(mobile)===JSON.stringify(desktop),account.role+' mobile/desktop modules differ');
+      check(JSON.stringify(mobile)===JSON.stringify(desktop),account.role+' mobile/desktop modules differ: '+JSON.stringify({mobile,desktop}));
       await p.setViewportSize({width:393,height:852});
+      await p.getByRole('navigation',{name:'快捷导航'}).waitFor({state:'visible'});
       if(account.role==='warehouse') {
         await p.goto(base+'/orders');await p.waitForLoadState('networkidle');
         check(await p.locator('.m-order-card').count()>0,'Warehouse orders missing');
