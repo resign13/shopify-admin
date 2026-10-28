@@ -2,7 +2,7 @@
   <PageHeader
     title="订单管理"
     mobile-title="订单"
-    :mobile-description="`${list.total} 笔订单 · 跟进每一步进展`"
+    :mobile-description="`${list.total} 笔订单`"
     description="跟进订单状态、付款与物流，保持业务进度清晰可见。"
     eyebrow="ORDERS / 订单业务"
     ><template v-if="isPhone">
@@ -41,8 +41,8 @@
   >
   <section class="panel">
     <div v-if="isPhone" class="m-order-tabs" data-testid="mobile-order-tabs">
-      <button v-for="tab in mobileStatusTabs" :key="tab.value" :class="{active:(list.query.status || 'all') === tab.value}" @click="changeStatus(tab.value)">{{ tab.label }}<small v-if="tab.value !== 'all'">{{ list.statusCounts[tab.value] || 0 }}</small></button>
-      <ElSelect :model-value="list.query.status || 'all'" aria-label="其他订单状态" @change="changeStatus"><ElOption label="全部状态" value="all"/><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value"/></ElSelect>
+      <div ref="mobileStatusStrip" class="m-order-tab-list" role="group" aria-label="订单状态"><button v-for="tab in mobileStatusTabs" :key="tab.value" :class="{active:(list.query.status || 'all') === tab.value}" :aria-pressed="(list.query.status || 'all') === tab.value" @click="changeStatus(tab.value)">{{ tab.label }}<small v-if="tab.value !== 'all'">{{ list.statusCounts[tab.value] || 0 }}</small></button></div>
+      <ElSelect class="m-order-status-select" :model-value="list.query.status || 'all'" aria-label="其他订单状态" placement="bottom-end" :fallback-placements="['bottom-start']" popper-class="m-order-status-popper" @change="changeStatus"><ElOption label="全部状态" value="all"/><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value"/></ElSelect>
     </div>
     <ElTabs v-else
       :model-value="list.query.status || 'all'"
@@ -53,7 +53,7 @@
         :name="status"
         :label="`${label} ${list.statusCounts[status] || 0}`"
     /></ElTabs>
-    <ResponsiveFilters :active="list.query" @remove="removeMobileFilter" @submit.prevent="apply">
+    <ResponsiveFilters class="order-responsive-filters" :active="list.query" @remove="removeMobileFilter" @submit.prevent="apply">
       <ElInput
         v-model="filters.keyword"
         clearable
@@ -76,8 +76,8 @@
       ><ElSelect v-if="auth.isSuperAdmin" v-model="filters.salespersonId" clearable placeholder="全部业务员">
         <ElOption label="未分配" value="unassigned" />
         <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
-      </ElSelect><ElButton native-type="submit" type="primary">查询</ElButton
-      ><ElButton @click="reset">重置</ElButton
+      </ElSelect><ElButton class="order-filter-submit" native-type="submit" type="primary">查询</ElButton
+      ><ElButton class="order-filter-reset" @click="reset">重置</ElButton
       ><ElTag
         v-if="list.query.country"
         closable
@@ -198,7 +198,7 @@
 import { useResponsive } from "../composables/responsive";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import MobileActionMenu from "../components/MobileActionMenu.vue";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
@@ -208,6 +208,7 @@ import OrderNumber from "../components/OrderNumber.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderCancellationDialog from "../components/OrderCancellationDialog.vue";
 import OrderCancelNoteMark from "../components/OrderCancelNoteMark.vue";
+import { removeAppliedOrderFilter } from "../utils/orderFilters";
 import OrderEditor from "../components/OrderEditor.vue";
 import OrderDrafts from "../components/OrderDrafts.vue";
 import CustomerTemplates from "../components/CustomerTemplates.vue";
@@ -224,6 +225,7 @@ import {
 } from "../composables/workbench";
 const { isPhone } = useResponsive();
 const mobileSelection = ref(false);
+const mobileStatusStrip = ref();
 const mobileStatusTabs = computed(() => [{value:"all",label:"全部"},{value:"pending_payment",label:"待付款"},{value:"allocated",label:"已配货"},...(!["all","pending_payment","allocated"].includes(list.query.status || "all") ? [{value:list.query.status,label:statusNames[list.query.status]}] : [])]);
 const auth = useAdminAuthStore(),
   route = useRoute(),
@@ -235,6 +237,15 @@ const auth = useAdminAuthStore(),
   detailOpen = ref(false),
   detailId = ref(),
   exporting = ref(false);
+watch(() => [isPhone.value, list.query.status, ...mobileStatusTabs.value.map(tab => list.statusCounts[tab.value])], async () => {
+  await nextTick();
+  const strip = mobileStatusStrip.value;
+  const active = strip?.querySelector('button.active');
+  if (!strip || !active) return;
+  const left = active.offsetLeft, right = left + active.offsetWidth;
+  if (left < strip.scrollLeft) strip.scrollLeft = left;
+  else if (right > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = right - strip.clientWidth;
+}, { immediate: true, flush: 'post' });
 const statusBusy = ref(false);
 const cancelOpen = ref(false), cancelOrder = ref();
 function cancelSaved() { clear(); list.load(); }
@@ -362,10 +373,11 @@ function apply() {
   });
 }
 function removeMobileFilter(key) {
-  if (key === 'dateFrom' || key === 'dateTo') dates.value = null;
-  if (key in filters) filters[key] = '';
+  const next = removeAppliedOrderFilter(list.query, key, filters, dates.value);
+  Object.assign(filters, next.filters);
+  dates.value = next.dates;
   clear();
-  list.apply({...filters,dateFrom:dates.value?.[0] || '',dateTo:dates.value?.[1] || '',[key]:''});
+  list.apply(next.query);
 }
 function reset() {
   Object.assign(filters, { keyword: "", category: "", salespersonId: "" });
@@ -415,7 +427,21 @@ onMounted(async () => {
 
 <style scoped>
 @media(max-width:767px){
-.m-order-tabs{display:flex;align-items:center;gap:19px;padding:2px 2px 12px}.m-order-tabs>button{border:0;background:none;color:#97a4b6;font-size:12px;min-height:44px;white-space:nowrap;position:relative;padding:8px 0}.m-order-tabs>button.active{color:#2f69eb;font-weight:650}.m-order-tabs>button.active:after{content:'';height:2px;position:absolute;bottom:0;left:0;right:0;background:#2f69eb}.m-order-tabs small{font-size:10px;margin-left:5px;opacity:.7}.m-order-tabs :deep(.el-select){margin-left:auto;width:86px}.m-order-tabs :deep(.el-select__wrapper){box-shadow:none;background:none;padding:0;font-size:11px}
-.m-order-status{display:flex;align-items:center;gap:7px;flex:none}.m-order-card{cursor:pointer;display:block;text-align:left;width:100%;padding:17px 16px 13px;background:white;border:1px solid #e9eef6;border-radius:18px;color:#182b49;box-sizing:border-box}.m-order-card.is-selected{border-color:#8dafef;background:#f7faff}.m-order-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:17px}.m-order-top>strong{font-size:12px;display:flex;align-items:center;gap:7px;min-width:0;overflow-wrap:anywhere}.m-order-top strong small{color:#83a894;font-size:9px;font-weight:400}.m-order-state{font-size:10px;padding:4px 8px;border-radius:7px;background:#edf3fd;color:#7192c0;white-space:nowrap}.m-order-state.pending_payment{background:#fcf2e3;color:#c49a62}.m-order-state.paid,.m-order-state.completed{background:#eaf6f1;color:#73a18e}.m-order-state.cancelled{background:#f7eeee;color:#bd8a8a}.m-order-person{display:flex;align-items:center;gap:10px}.m-order-avatar{display:grid;place-items:center;width:35px;height:39px;flex:none;border-radius:11px;background:#eef3fc;color:#86a0c7;font-size:12px}.m-order-client{min-width:0;flex:1}.m-order-client strong{display:block;font-size:12px;overflow-wrap:anywhere}.m-order-client small{display:block;font-size:10px;color:#9ba8ba;margin-top:4px}.m-order-amount{font-size:16px;font-variant-numeric:tabular-nums;letter-spacing:-.4px}.m-order-bottom{display:flex;justify-content:space-between;gap:8px;color:#a1adbd;font-size:10px;margin-top:15px}.m-order-bottom time{font-size:9px}.m-order-check{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;border:1px solid #b9ccec;color:#2f69eb;flex:none}.m-order-batch{position:sticky;bottom:75px;z-index:12;display:flex;align-items:center;flex-wrap:wrap;gap:3px;background:white;border:1px solid #e3ebf7;border-radius:15px;padding:9px;margin-bottom:13px;box-shadow:0 5px 22px #243c6210}.m-order-batch strong{font-size:11px;margin:0 5px}.m-order-batch :deep(.el-button){min-height:38px;font-size:11px;margin:0}
+.m-order-tabs :deep(.m-order-status-select .el-select__selected-item){font-size:12px!important;font-weight:400;color:#516783}
+:global(.m-order-status-popper.el-popper){max-width:calc(100vw - 24px)}
+:global(.m-order-status-popper .el-select-dropdown){min-width:132px!important;max-width:100%}
+:global(.m-order-status-popper .el-select-dropdown__wrap){max-height:min(280px,50dvh)}
+:global(.m-order-status-popper .el-select-dropdown__item){font-size:13px!important;font-weight:400;height:44px;line-height:44px;color:#435b79}
+:global(.m-order-status-popper .el-select-dropdown__item.is-selected){font-weight:600;color:#2f69eb}
+.order-responsive-filters.responsive-filters{display:flex;flex-flow:row wrap;align-items:center;gap:8px}
+.order-responsive-filters.responsive-filters :deep(> .el-input:first-child){order:0;flex:1 1 0%;width:0!important;min-width:0}
+.order-responsive-filters.responsive-filters :deep(> .order-filter-submit.el-button){order:1;flex:0 0 52px;width:52px;min-width:52px;height:48px;min-height:48px;padding:0;margin:0}
+.order-responsive-filters.responsive-filters :deep(> .mobile-filter-toggle.el-button){order:2;flex:0 0 48px;width:48px;min-width:48px;height:48px;min-height:48px;margin:0}
+.order-responsive-filters.responsive-filters :deep(> .el-date-editor){order:3;flex:1 0 100%;width:100%!important;min-width:0;max-width:100%}
+.order-responsive-filters.responsive-filters :deep(> .el-select){order:4;flex:1 1 calc(50% - 4px);width:auto;min-width:0;max-width:100%}
+.order-responsive-filters.responsive-filters :deep(> .order-filter-reset){order:5;margin-left:auto}
+.order-responsive-filters.responsive-filters :deep(> .el-tag),.order-responsive-filters.responsive-filters :deep(> .mobile-filter-chips){order:6}
+.m-order-tabs{display:flex;align-items:center;gap:12px;min-width:0;padding:2px 2px 12px}.m-order-tab-list{display:flex;align-items:stretch;flex:1;min-width:0;gap:16px;overflow-x:auto;position:relative;overscroll-behavior-x:contain;scrollbar-width:none}.m-order-tab-list::-webkit-scrollbar{display:none}.m-order-tab-list>button{flex:none;border:0;background:none;color:#64748b;font-size:12px;min-height:44px;white-space:nowrap;position:relative;padding:8px 0}.m-order-tab-list>button.active{color:#2f69eb;font-weight:650}.m-order-tab-list>button.active:after{content:'';height:2px;position:absolute;bottom:0;left:0;right:0;background:#2f69eb}.m-order-tabs small{font-size:11px;margin-left:5px;color:#687b94}.m-order-tab-list>button.active small{color:inherit}.m-order-tabs :deep(.el-select){flex:0 0 94px;width:94px;min-width:0}.m-order-tabs :deep(.el-select__wrapper){box-shadow:none;background:none;padding:0;font-size:11px;color:#516783}
+.m-order-status{display:flex;align-items:center;gap:7px;flex:none}.m-order-card{cursor:pointer;display:block;text-align:left;width:100%;padding:17px 16px 13px;background:white;border:1px solid #e9eef6;border-radius:18px;color:#182b49;box-sizing:border-box}.m-order-card.is-selected{border-color:#8dafef;background:#f7faff}.m-order-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:17px}.m-order-top>strong{font-size:12px;display:flex;align-items:center;gap:7px;min-width:0;overflow-wrap:anywhere}.m-order-top strong small{color:#4f7861;font-size:11px;font-weight:400}.m-order-state{font-size:11px;padding:4px 8px;border-radius:7px;background:#edf3fd;color:#516f9c;white-space:nowrap}.m-order-state.pending_payment{background:#fcf2e3;color:#93682b}.m-order-state.paid,.m-order-state.completed{background:#eaf6f1;color:#457d67}.m-order-state.cancelled{background:#f7eeee;color:#9b5a5a}.m-order-person{display:flex;align-items:center;gap:10px}.m-order-avatar{display:grid;place-items:center;width:35px;height:39px;flex:none;border-radius:11px;background:#eef3fc;color:#86a0c7;font-size:12px}.m-order-client{min-width:0;flex:1}.m-order-client strong{display:block;font-size:12px;overflow-wrap:anywhere}.m-order-client small{display:block;font-size:11px;color:#64748b;margin-top:4px;line-height:1.5}.m-order-amount{font-size:16px;font-variant-numeric:tabular-nums;letter-spacing:-.4px}.m-order-bottom{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;color:#64748b;font-size:11px;line-height:1.5;margin-top:15px}.m-order-bottom>span{min-width:0;overflow-wrap:anywhere}.m-order-bottom time{font-size:11px;flex:none}.m-order-check{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;border:1px solid #b9ccec;color:#2f69eb;flex:none}.m-order-batch{position:sticky;bottom:75px;z-index:12;display:flex;align-items:center;flex-wrap:wrap;gap:3px;background:white;border:1px solid #e3ebf7;border-radius:15px;padding:9px;margin-bottom:13px;box-shadow:0 5px 22px #243c6210}.m-order-batch strong{font-size:11px;margin:0 5px}.m-order-batch :deep(.el-button){min-height:38px;font-size:11px;margin:0}
 }
 </style>
