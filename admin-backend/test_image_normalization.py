@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from PIL import Image, JpegImagePlugin
+from PIL import Image, ImageCms, JpegImagePlugin
 
 import image_normalization as normalization
 
@@ -58,6 +58,28 @@ class ImageNormalizationTest(unittest.TestCase):
         self.assertEqual(result.mime, 'image/jpeg')
         self.assertLessEqual(result.width, 1000)
         self.assertGreaterEqual(max(result.width, result.height), 640)
+        self.assert_result(result)
+
+    def test_oversized_photos_keep_the_original_color_profile(self):
+        profile = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        for fmt in ('PNG', 'JPEG'):
+            with self.subTest(fmt=fmt):
+                original = encoded(noise((1000, 1000)), fmt, icc_profile=profile, **({'quality': 100} if fmt == 'JPEG' else {}))
+                self.assertGreater(len(original), 1_000_000)
+                result = normalization.normalize_image(original, purpose='product')
+                with Image.open(io.BytesIO(result.data)) as output:
+                    self.assertEqual(output.info.get('icc_profile'), profile)
+                self.assert_result(result)
+
+    def test_transparent_compression_keeps_color_profile_and_alpha(self):
+        profile = ImageCms.ImageCmsProfile(ImageCms.createProfile('sRGB')).tobytes()
+        image = Image.new('RGBA', (1000, 1000), (50, 100, 150, 128))
+        original = encoded(image, compress_level=0, icc_profile=profile)
+        self.assertGreater(len(original), 1_000_000)
+        result = normalization.normalize_image(original)
+        with Image.open(io.BytesIO(result.data)) as output:
+            self.assertEqual(output.info.get('icc_profile'), profile)
+            self.assertEqual(output.convert('RGBA').getchannel('A').tobytes(), image.getchannel('A').tobytes())
         self.assert_result(result)
 
     def test_transparent_alpha_preserved(self):
