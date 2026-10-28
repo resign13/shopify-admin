@@ -85,6 +85,7 @@
       storage-key="inventory-v2"
       :rows="orderedRows"
       :columns="columns"
+      :sort-state="queryToSortState(list.query)"
       :total="list.total"
       :page="list.query.page"
       :page-size="list.query.pageSize"
@@ -524,6 +525,7 @@ import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } 
 import { inventorySizeLabel } from "../utils/inventorySizes";
 import { registrationError, moveProcurementStage, defectiveReturnPreview } from "../utils/inventoryStages";
 import { sortProductsByCategory } from "../utils/catalogOrder";
+import { queryToSortState } from "../utils/tableSort";
 import { ElMessage } from "element-plus";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";

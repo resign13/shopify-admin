@@ -3,8 +3,8 @@
     :disabled="disabled" :currency="currency" :exchange-rate="exchangeRate" :apply-quantities="applyQuantities"
     @update:visible="emit('update:visible', $event)" />
   <ElDrawer v-else v-model="open" title="选择商品" size="820px"
-    ><form
-      class="filters product-picker-filters"
+    ><ResponsiveFilters
+      class="product-picker-filters"
       @submit.prevent="
         query.page = 1;
         load();
@@ -21,7 +21,7 @@
           :value="c.key"
           :label="c.labels?.zh || c.key" /></ElSelect
       ><ElButton native-type="submit">查询</ElButton>
-    </form>
+    </ResponsiveFilters>
     <ElAlert
       v-if="error"
       :title="error"
@@ -79,6 +79,7 @@
 </template>
 <script setup>
 import AdaptiveTable from "./AdaptiveTable";
+import ResponsiveFilters from './ResponsiveFilters.vue';
 import { computed, reactive, ref, watch } from "vue";
 import { api } from "../composables/workbench";
 import OrderQuantityPicker from './OrderQuantityPicker.vue';

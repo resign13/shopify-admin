@@ -2,13 +2,13 @@
   <ElDrawer :model-value="visible" title="选择商品" size="min(1120px, 100vw)"
     class="order-quantity-picker" :before-close="close" :close-on-press-escape="!busy"
     :show-close="!busy" append-to-body data-testid="order-quantity-picker">
-    <form class="picker-filters" @submit.prevent="search">
+    <ResponsiveFilters class="picker-filters" bare @submit="search">
       <ElInput v-model="query.keyword" clearable placeholder="标题、款式或 SKU" aria-label="选品关键词" :disabled="busy" />
       <ElSelect v-model="query.category" clearable placeholder="全部分类" aria-label="选品分类" :disabled="busy">
         <ElOption v-for="c in categories" :key="c.key" :value="c.key" :label="c.labels?.zh || c.key" />
       </ElSelect>
       <ElButton native-type="submit" :disabled="busy || loading">查询</ElButton>
-    </form>
+    </ResponsiveFilters>
     <ElAlert v-if="error" :title="error" type="error" :closable="false" class="picker-error" role="alert" />
     <div v-if="pendingOnly" class="pending-caption">正在查看全部待处理项<ElButton link @click="pendingOnly = false">返回查询结果</ElButton></div>
     <div v-loading="loading" class="quantity-list" role="list" aria-label="商品尺码数量" :aria-busy="loading">
@@ -69,6 +69,7 @@
 
 <script setup>
 import AdaptiveTable from "./AdaptiveTable";
+import ResponsiveFilters from './ResponsiveFilters.vue';
 import { computed, nextTick, onBeforeUnmount, reactive, ref, useId, watch } from 'vue';
 import { onBeforeRouteLeave } from 'vue-router';
 import { ElMessage } from 'element-plus';

@@ -99,6 +99,7 @@
       storage-key="orders"
       :rows="list.rows"
       :columns="columns"
+      :sort-state="queryToSortState(list.query)"
       :total="list.total"
       :page="list.query.page"
       :page-size="list.query.pageSize"
@@ -207,6 +208,7 @@ import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderCancellationDialog from "../components/OrderCancellationDialog.vue";
 import OrderCancelNoteMark from "../components/OrderCancelNoteMark.vue";
 import { removeAppliedOrderFilter } from "../utils/orderFilters";
+import { queryToSortState } from "../utils/tableSort";
 import OrderEditor from "../components/OrderEditor.vue";
 import OrderDrafts from "../components/OrderDrafts.vue";
 import CustomerTemplates from "../components/CustomerTemplates.vue";

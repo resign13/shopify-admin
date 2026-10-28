@@ -4,7 +4,7 @@ async (page) => {
   const measurements=[];
   for(const width of [360,393,430]) {
     await page.setViewportSize({width,height:852});
-    for(const [route,selector] of [['orders','.responsive-filters'],['inventory','.responsive-filters'],['products','.goods-search']]) {
+    for(const [route,selector] of [['orders','.responsive-filters'],['inventory','.responsive-filters'],['products','.responsive-filters']]) {
       await page.goto(base+'/'+route);await page.waitForLoadState('networkidle');
       const input=page.locator(selector+' input').first();await input.focus();
       const m=await input.evaluate(el=>({font:getComputedStyle(el).fontSize,height:el.closest('.el-input__wrapper').getBoundingClientRect().height,

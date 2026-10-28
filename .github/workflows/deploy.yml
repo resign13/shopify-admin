@@ -58,7 +58,7 @@ jobs:
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
       - name: Order quantity selection unit tests
         working-directory: frontend
-        run: node --test tests/exportDownload.test.js src/utils/orderSelection.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js
+        run: node --test tests/exportDownload.test.js src/utils/orderSelection.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
         run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
@@ -393,7 +393,9 @@ jobs:
             verify-admin-mobile-search-browser \
             verify-order-mobile-polish-browser \
             verify-order-mobile-filters-browser \
-            verify-order-detail-mobile-browser; do
+            verify-order-detail-mobile-browser \
+            verify-mobile-sort-sync-browser \
+            verify-api-read-state-browser; do
             run_mobile_check "$stage"
           done
           npx --yes --package @playwright/cli playwright-cli -s=mobileci close
