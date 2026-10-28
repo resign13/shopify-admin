@@ -18,9 +18,13 @@ async (page) => {
         left:document.querySelector('.workspace-main').getBoundingClientRect().left,
         font:getComputedStyle(document.querySelector('.workspace-content')).fontFamily,
         bottomNav:!!document.querySelector('.mobile-bottom-nav'),
+        voicePanel:!!document.querySelector('.voice-panel'),
+        voiceTrigger:!!document.querySelector('.mobile-voice-trigger'),
         mobileFontDownloaded:performance.getEntriesByType('resource').some(r => r.name.includes('NotoSansSC') && r.transferSize > 0),
       }));
       check(m.scroll <= width + 1, `Overflow ${route} at ${width}: ${m.scroll}`);
+      check(width < 1024 ? !m.voicePanel && !m.voiceTrigger : m.voicePanel && !m.voiceTrigger,
+        `Voice reminder visibility incorrect for ${route} at ${width}`);
       if (width < 768) {
         check(m.bottomNav, 'Missing mobile navigation: ' + route);
         check(m.font.includes('GINGTTO Mobile'), 'Mobile font differs: ' + route);

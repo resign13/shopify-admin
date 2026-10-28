@@ -35,9 +35,6 @@
   .desktop-breadcrumb { display:none; }
   .profile-button > span:not(.avatar) { display:none; }
   .voice-panel { display:none; }
-  .voice-panel.is-open { display:block; position:absolute; top:100%; left:8px; right:8px; margin:0; padding:16px; background:white; border:1px solid var(--line); border-radius:10px; box-shadow:0 8px 24px #0f172a14; }
-  .voice-panel .order-voice-reminder { margin:0; justify-content:flex-start; max-width:100%; }
-  .voice-panel .voice-message { text-align:left; }
 }
 
 
@@ -200,7 +197,6 @@
   .workspace-topbar .topbar-breadcrumb { display:none; }
   .mobile-brand { display:flex; flex-direction:column; gap:2px; font-size:15px; font-weight:750; letter-spacing:1.3px; color:#18253b; }
   .mobile-brand > span { color:#8290a2; font-size:10px; letter-spacing:1px; font-weight:500; }
-  .mobile-voice-trigger { width:44px; border-radius:50%; }
   .profile-button { padding:0 4px; justify-content:center; }
   .profile-button > .el-icon { display:none; }
   .profile-button .avatar { width:34px; height:34px; background:#e6edf9; color:#365a96; font-size:13px; }

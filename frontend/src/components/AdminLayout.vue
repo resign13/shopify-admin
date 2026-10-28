@@ -42,8 +42,7 @@
             <strong>{{ route.meta.title }}</strong></span
           >
         </div>
-        <ElButton v-if="isCompact && auth.can('orders') && ['admin','sales','warehouse'].includes(auth.userRole)" text class="mobile-voice-trigger" aria-label="提醒" :aria-expanded="voiceOpen" @click="voiceOpen = !voiceOpen"><ElIcon><Bell /></ElIcon></ElButton>
-        <div class="voice-panel" :class="{ 'is-open': voiceOpen }"><OrderVoiceReminder /></div>
+        <div v-if="!isCompact" class="voice-panel"><OrderVoiceReminder /></div>
         <ElDropdown @command="logout"
           ><button class="profile-button">
             <span class="avatar">{{ auth.user?.name?.slice(0, 1) }}</span
@@ -96,7 +95,6 @@ import {
   Expand,
   Fold,
   ArrowDown,
-  Bell,
   Grid,
   ArrowRight,
 } from "@element-plus/icons-vue";
@@ -107,8 +105,8 @@ const auth = useAdminAuthStore(),
   route = useRoute(),
   router = useRouter();
 const { isCompact, isPhone } = useResponsive();
-const menuOpen = ref(false), voiceOpen = ref(false);
-watch(() => route.path, () => { menuOpen.value = false; voiceOpen.value = false; });
+const menuOpen = ref(false);
+watch(() => route.path, () => { menuOpen.value = false; });
 watch(isCompact, () => { menuOpen.value = false; });
 const collapsed = ref(
   window.innerWidth < 1280 ||
@@ -118,7 +116,7 @@ const collapseNarrow = () => { if (window.innerWidth < 1024) collapsed.value = t
 window.addEventListener('resize', collapseNarrow);
 onBeforeUnmount(() => window.removeEventListener('resize', collapseNarrow));
 const toggle = () => {
-  if (isCompact.value) { menuOpen.value = !menuOpen.value; voiceOpen.value = false; return; }
+  if (isCompact.value) { menuOpen.value = !menuOpen.value; return; }
   collapsed.value = !collapsed.value;
   localStorage.setItem(
     "gingtto-sidebar",
