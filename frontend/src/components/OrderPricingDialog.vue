@@ -22,6 +22,7 @@
   </ElDialog>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import AdaptiveTable from "./AdaptiveTable";
 import { computed, ref, watch } from 'vue';
 import { catalogQuote, prepareCatalogPriceRestore, validAmount } from '../utils/orderPricing';
@@ -40,14 +41,14 @@ watch(()=>props.open,open=>{if(!open)return;error.value='';lines.value=JSON.pars
     for(const size of props.products[id]?.sizePrices||[]){if(!lines.value.some(line=>line.productId===id&&line.sizeCode===size.sizeCode)){
       lines.value.push({productId:id,sku:props.products[id].sku,productName:'',sizeCode:size.sizeCode,quantity:0,...catalogQuote(size.price,props.currency,props.exchangeRate)});
     }}
-  }}catch(e){error.value=e.message;}
+  }}catch(e){error.value=errorMessage(e);}
 });
 function uniformPrice(row){const prices=new Set(row.lines.map(line=>line.unitPrice));return prices.size===1?row.lines[0].unitPrice:undefined;}
 function setPrice(line,value){Object.assign(line,{unitPrice:value,priceSource:'manual',preserveQuote:false,conversionBase:undefined,catalogPriceChanged:false});}
 function current(line){return props.products[line.productId]?.sizePrices?.find(size=>size.sizeCode===line.sizeCode)?.price;}
 function reference(line){const usd=current(line);return usd==null?'—':money(usd,'USD');}
 function referenceRange(row){const values=row.lines.map(current).filter(value=>value!=null);if(!values.length)return '—';const lo=Math.min(...values),hi=Math.max(...values);return lo===hi?money(lo,'USD'):`${money(lo,'USD')} – ${money(hi,'USD')}`;}
-function restore(row){try{const restored=prepareCatalogPriceRestore(row.lines,props.products,props.currency,props.exchangeRate);row.lines.forEach((line,index)=>Object.assign(line,restored[index]));error.value='';}catch(e){error.value=e.message;}}
+function restore(row){try{const restored=prepareCatalogPriceRestore(row.lines,props.products,props.currency,props.exchangeRate);row.lines.forEach((line,index)=>Object.assign(line,restored[index]));error.value='';}catch(e){error.value=errorMessage(e);}}
 function apply(){if(lines.value.some(line=>!validAmount(line.unitPrice))){error.value='请填写非负单价，最多两位小数；空白不是零价';return;}emit('apply',lines.value);visible.value=false;}
 </script>
 <style scoped>

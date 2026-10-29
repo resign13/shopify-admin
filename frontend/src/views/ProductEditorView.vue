@@ -235,6 +235,7 @@
   >
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from '../composables/responsive';
 import { productSlug } from "../utils/productSlug";
 import { computed, onMounted, reactive, ref, watch } from "vue";
@@ -356,7 +357,7 @@ async function load() {
       markClean();
     }
   } catch (e) {
-    loadError.value = e.message;
+    loadError.value = errorMessage(e);
   } finally {
     loading.value = false;
   }
@@ -475,7 +476,7 @@ async function submit() {
     ElMessage.success("商品已保存");
     router.push("/products");
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
     conflict.value = e.status === 409;
   } finally {
     saving.value = false;

@@ -4,6 +4,15 @@ import { defineStore } from 'pinia'
 import { API_BASE, request } from '../api'
 import { useAdminAuthStore } from './auth'
 import { compareProductCategories } from '../utils/catalogOrder'
+import { responseError } from '../utils/adminErrors.js'
+
+async function readFailure(response, fallback) {
+  const data = await response.json().catch(error => {
+    if (error?.name === 'AbortError') throw error
+    return {}
+  })
+  return responseError(response.status, data, response.headers.get('Retry-After'), fallback)
+}
 
 function authHeaders(token) {
   return { }
@@ -208,12 +217,7 @@ export const useAdminStore = defineStore('admin-data', {
         { headers: authHeaders(auth.sessionId) }
       )
       if (!response.ok) {
-        let message = '库存导出失败'
-        try {
-          const data = await response.json()
-          message = data.message || message
-        } catch {}
-        throw new Error(message)
+        throw await readFailure(response, '库存导出失败，请重试')
       }
       return response.blob()
     },
@@ -226,8 +230,8 @@ export const useAdminStore = defineStore('admin-data', {
         headers: authHeaders(auth.sessionId),
         body: formData,
       })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || '库存导入预览失败')
+      const data = await response.json().catch(error => { if (error?.name === 'AbortError') throw error; return {} })
+      if (!response.ok) throw responseError(response.status, data, response.headers.get('Retry-After'), '库存导入预览失败')
       return data
     },
     async confirmInventoryImport(file, fileHash) {
@@ -240,8 +244,8 @@ export const useAdminStore = defineStore('admin-data', {
         headers: authHeaders(auth.sessionId),
         body: formData,
       })
-      const data = await response.json().catch(() => ({}))
-      if (!response.ok) throw new Error(data.message || '库存导入失败')
+      const data = await response.json().catch(error => { if (error?.name === 'AbortError') throw error; return {} })
+      if (!response.ok) throw responseError(response.status, data, response.headers.get('Retry-After'), '库存导入失败')
       await this.loadInventory()
       await this.loadDashboard()
       return data
@@ -418,7 +422,7 @@ export const useAdminStore = defineStore('admin-data', {
         )
       )
       if (!normalizedIds.length) {
-        throw new Error('No orders selected')
+        throw new Error('请先选择订单')
       }
       await request('/api/admin/orders', {
         method: 'DELETE',
@@ -446,14 +450,7 @@ export const useAdminStore = defineStore('admin-data', {
         }
       )
       if (!response.ok) {
-        let message = 'Export failed'
-        try {
-          const data = await response.json()
-          message = data.message || message
-        } catch {
-          // ignore json parse failure for file responses
-        }
-        throw new Error(message)
+        throw await readFailure(response, '订单导出失败，请重试')
       }
       return response.blob()
     },
@@ -475,14 +472,7 @@ export const useAdminStore = defineStore('admin-data', {
         }
       )
       if (!response.ok) {
-        let message = 'Export failed'
-        try {
-          const data = await response.json()
-          message = data.message || message
-        } catch {
-          // ignore json parse failure for file responses
-        }
-        throw new Error(message)
+        throw await readFailure(response, '订单导出失败，请重试')
       }
       return response.blob()
     },
@@ -495,14 +485,7 @@ export const useAdminStore = defineStore('admin-data', {
         }
       )
       if (!response.ok) {
-        let message = 'Export failed'
-        try {
-          const data = await response.json()
-          message = data.message || message
-        } catch {
-          // ignore json parse failure for file responses
-        }
-        throw new Error(message)
+        throw await readFailure(response, '发票导出失败，请重试')
       }
       return response.blob()
     },

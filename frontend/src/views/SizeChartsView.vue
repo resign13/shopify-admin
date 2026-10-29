@@ -117,6 +117,7 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from '../composables/responsive';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
 import AdaptiveTable from "../components/AdaptiveTable";
@@ -140,7 +141,7 @@ const previewUnit=ref('cm');
 const statuses={empty:'未填写',partial:'部分填写',complete:'已填完整'};
 const {dirty,markClean,canLeave}=useDirty(()=>editorOpen.value ? form.value : null);
 let sequence=0, saveAttempt=null; const unitAnchors=new Map();
-async function load(){const seq=++sequence;loading.value=true;listError.value='';try{const r=await api('size-charts?'+new URLSearchParams({...applied,page:page.value,pageSize:25}));if(seq!==sequence)return;rows.value=r.items;total.value=r.total;categories.value=r.categories;selected.value=[];table.value?.clearSelection();}catch(e){if(seq===sequence)listError.value=e.message;}finally{if(seq===sequence)loading.value=false;}}
+async function load(){const seq=++sequence;loading.value=true;listError.value='';try{const r=await api('size-charts?'+new URLSearchParams({...applied,page:page.value,pageSize:25}));if(seq!==sequence)return;rows.value=r.items;total.value=r.total;categories.value=r.categories;selected.value=[];table.value?.clearSelection();}catch(e){if(seq===sequence)listError.value=errorMessage(e);}finally{if(seq===sequence)loading.value=false;}}
 function query(){applied={...filters};page.value=1;load();}
 function reset(){Object.assign(filters,{keyword:'',category:'',status:''});query();}
 async function open(code, preview=false){if(!(await canLeave()))return;try{const data=await api('size-charts/detail?'+new URLSearchParams({styleCode:code}));form.value=data;previewUnit.value=data.unit;unitAnchors.clear();readonly.value=preview;mode.value='zh';error.value='';editorOpen.value=true;saveAttempt=null;markClean();}catch(e){notifyError(e);}}
@@ -155,12 +156,12 @@ function setPreviewUnit(value){try{previewChartInUnit(form.value,value);previewU
 const previewForm=computed(()=>form.value && readonly.value ? previewChartInUnit(form.value,previewUnit.value) : form.value);
 const previewDimensions=computed(()=>previewForm.value?.dimensions.filter(d=>mode.value!=='en'||d.showEn)||[]);
 const display=v=>v==null||v===''?'—':Number.isFinite(Number(v))?Number(v).toFixed(2):v;
-async function submit(){if(saving.value)return;saving.value=true;error.value='';try{const serialized=JSON.stringify(form.value);if(saveAttempt?.serialized!==serialized)saveAttempt={serialized,requestId:crypto.randomUUID()};const r=await save('size-charts/save',{requestId:saveAttempt.requestId,changes:[form.value]},'POST');form.value=r.items[0];unitAnchors.clear();markClean();saveAttempt=null;ElMessage.success(r.updated.length?'尺码表已保存':'数值未变化');await load();}catch(e){error.value=e.message;}finally{saving.value=false;}}
+async function submit(){if(saving.value)return;saving.value=true;error.value='';try{const serialized=JSON.stringify(form.value);if(saveAttempt?.serialized!==serialized)saveAttempt={serialized,requestId:crypto.randomUUID()};const r=await save('size-charts/save',{requestId:saveAttempt.requestId,changes:[form.value]},'POST');form.value=r.items[0];unitAnchors.clear();markClean();saveAttempt=null;ElMessage.success(r.updated.length?'尺码表已保存':'数值未变化');await load();}catch(e){error.value=errorMessage(e);}finally{saving.value=false;}}
 async function exportCharts(codes,version,unit){if(exporting.value)return;if(dirty.value){ElMessage.warning('请先保存或撤销页面修改，导出仅包含已保存数据');return;}exporting.value=true;try{await download('size-charts/export',version==='english'?'size-charts-english.xlsx':'商品尺码表.xlsx',{method:'POST',body:JSON.stringify({styleCodes:codes,mode:version,...(unit?{unit}:{})}),headers:{'Content-Type':'application/json'}});}catch(e){notifyError(e);}finally{exporting.value=false;}}
 const importOpen=ref(false),importBusy=ref(false),fileInput=ref(),fileName=ref(''),proposal=ref(null),importError=ref('');let importId='';
 function openImport(){if(dirty.value){ElMessage.warning('请先保存或撤销页面修改，再导入尺码表');return;}proposal.value=null;fileName.value='';importError.value='';importOpen.value=true;}
-async function upload(event){const f=event.target.files[0];event.target.value='';if(!f||importBusy.value)return;fileName.value=f.name;proposal.value=null;importError.value='';if(f.size>10*1024*1024){importError.value='文件不能超过 10 MB';return;}importBusy.value=true;try{const body=new FormData();body.append('file',f);proposal.value=await api('size-charts/import/preview',{method:'POST',body});importId=crypto.randomUUID();}catch(e){importError.value=e.message;}finally{importBusy.value=false;}}
-async function importConfirm(){if(importBusy.value)return;if(!(await confirm(`将更新 ${proposal.value.dimensionChangedCount} 项维度和 ${proposal.value.valueChangedCount} 项数值，其中删除 ${proposal.value.removedDimensionCount} 个维度、清空 ${proposal.value.clearCount} 项原值。确认保存？`,'确认导入覆盖')))return;importBusy.value=true;importError.value='';try{await save('size-charts/import/confirm',{requestId:importId,proposal:proposal.value.proposal,previewToken:proposal.value.previewToken},'POST');ElMessage.success('尺码表已更新');importOpen.value=false;if(editorOpen.value)await open(form.value.styleCode,readonly.value);await load();}catch(e){importError.value=e.message;}finally{importBusy.value=false;}}
+async function upload(event){const f=event.target.files[0];event.target.value='';if(!f||importBusy.value)return;fileName.value=f.name;proposal.value=null;importError.value='';if(f.size>10*1024*1024){importError.value='文件不能超过 10 MB';return;}importBusy.value=true;try{const body=new FormData();body.append('file',f);proposal.value=await api('size-charts/import/preview',{method:'POST',body});importId=crypto.randomUUID();}catch(e){importError.value=errorMessage(e);}finally{importBusy.value=false;}}
+async function importConfirm(){if(importBusy.value)return;if(!(await confirm(`将更新 ${proposal.value.dimensionChangedCount} 项维度和 ${proposal.value.valueChangedCount} 项数值，其中删除 ${proposal.value.removedDimensionCount} 个维度、清空 ${proposal.value.clearCount} 项原值。确认保存？`,'确认导入覆盖')))return;importBusy.value=true;importError.value='';try{await save('size-charts/import/confirm',{requestId:importId,proposal:proposal.value.proposal,previewToken:proposal.value.previewToken},'POST');ElMessage.success('尺码表已更新');importOpen.value=false;if(editorOpen.value)await open(form.value.styleCode,readonly.value);await load();}catch(e){importError.value=errorMessage(e);}finally{importBusy.value=false;}}
 onMounted(()=>{markClean();load();});
 </script>
 

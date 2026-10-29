@@ -2,6 +2,7 @@ import { roleModules, defaultRoleModules } from '../permissions';
 import { defineStore } from 'pinia';
 import { request } from '../api';
 import { setAuthSession, withAuthTransition } from '../authTransport';
+import { errorMessage } from '../utils/adminErrors.js';
 const HINT_KEY = 'gingtto-admin-session-hint', OLD_TOKEN_KEY = 'lumiere-admin-token', CHANNEL = 'gingtto-admin-auth';
 const PENDING_LOGOUT = 'gingtto-admin-logout-pending';
 const EXPECTED_ROLE = 'admin', LOGIN_PATH = '/api/auth/admin/login';
@@ -120,7 +121,7 @@ export const useAdminAuthStore = defineStore('admin-auth',{
           setAuthSession(data.sessionId,data.csrfToken); remember(data.sessionId); announce('changed',data.sessionId);
           return true;
         });
-      } catch (error) { if (revision === this.revision) this.error = error.code === 'login_failed' ? '账号或密码错误' : error.message; return false; }
+      } catch (error) { if (revision === this.revision) this.error = error.code === 'login_failed' ? '账号或密码错误' : errorMessage(error); return false; }
       finally { this.loading = false; }
     },
     async logout() {

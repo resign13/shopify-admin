@@ -1,6 +1,7 @@
 import { downloadFile } from '../utils/exportDownload';
 import { authenticatedFetch, csrfHeaders } from '../authTransport';
 import { sortStateToQuery } from '../utils/tableSort';
+import { errorMessage, responseError } from '../utils/adminErrors.js';
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -51,7 +52,7 @@ export const save = (path, payload, method = "PUT") =>
   api(path, { method, body: JSON.stringify(payload) });
 export function notifyError(error) {
   if (error?.name !== "AbortError")
-    ElMessage.error(error?.message || "操作失败");
+    ElMessage.error(errorMessage(error, "操作失败"));
 }
 export async function confirm(message, title = "确认操作") {
   try {
@@ -123,7 +124,7 @@ export function useList(resource, defaults = {}, ignoredKeys = []) {
       }
     } catch (error) {
       if (current === serial && error.name !== "AbortError")
-        state.error = error.message;
+        state.error = errorMessage(error);
     } finally {
       if (current === serial) state.loading = false;
     }
@@ -226,8 +227,8 @@ export async function uploadImage(file, onProgress = () => {}, endpoint = 'uploa
       if (session !== useAdminAuthStore().sessionId) { reject(new Error('登录账号已改变，请重新打开表单')); return; }
       let data = {}; try { data = JSON.parse(xhr.responseText); } catch {}
       if (xhr.status === 401) window.dispatchEvent(new Event('auth-session-expired'));
-      if (xhr.status >= 200 && xhr.status < 300 && data.urls?.[0]) resolve(data.urls[0]);
-      else reject(Object.assign(new Error(data.message || '附件上传失败'), {status:xhr.status, retryAfter:Number(xhr.getResponseHeader('Retry-After') || 0)}));
+      if (xhr.status >= 200 && xhr.status < 300 && data?.urls?.[0]) resolve(data.urls[0]);
+      else reject(responseError(xhr.status, data, xhr.getResponseHeader('Retry-After'), '附件上传失败，请重试'));
     };
     const body = new FormData(); body.append('files', file); body.append('purpose', purpose); xhr.send(body);
   });

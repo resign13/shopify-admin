@@ -35,6 +35,7 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import AdaptiveTable from "./AdaptiveTable";
 import { onBeforeUnmount, reactive, watch } from 'vue';
 import { api, dateTime, roleNames, statusNames, money } from '../composables/workbench';
@@ -60,7 +61,7 @@ async function load() {
       history.total = result.total;
     }
   } catch (error) {
-    if (current === serial && error.name !== 'AbortError') history.error = error.message;
+    if (current === serial && error.name !== 'AbortError') history.error = errorMessage(error);
   } finally {
     if (current === serial) history.loading = false;
   }

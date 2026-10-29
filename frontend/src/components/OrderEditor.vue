@@ -480,6 +480,7 @@
   <OrderPricingDialog v-model:open="pricingOpen" :items="form.items" :products="products" :currency="form.currency" :exchange-rate="form.exchangeRate" @apply="applyPrices" />
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { nextTick } from "vue";
 import { useResponsive } from "../composables/responsive";
 import AdaptiveTable from "./AdaptiveTable";
@@ -659,7 +660,7 @@ async function loadWeightPreview(current, items) {
     });
     if (current === weightSerial && props.open) weightPreview.value = result;
   } catch (error) {
-    if (current === weightSerial && error.name !== "AbortError") weightError.value = error.message;
+    if (current === weightSerial && error.name !== "AbortError") weightError.value = errorMessage(error);
   } finally {
     if (current === weightSerial) weightLoading.value = false;
   }
@@ -754,7 +755,7 @@ async function searchCustomers(keyword = "") {
         customers.value.unshift(chosen);
     }
   } catch (e) {
-    if (current === customerSerial) error.value = e.message;
+    if (current === customerSerial) error.value = errorMessage(e);
   } finally {
     if (current === customerSerial) customerLoading.value = false;
   }
@@ -907,7 +908,7 @@ async function loadEditor() {
       }
       await searchCustomers();
     } catch (e) {
-      if (current === serial) error.value = e.message;
+      if (current === serial) error.value = errorMessage(e);
     } finally {
       if (current === serial) loading.value = false;
     }
@@ -1032,7 +1033,7 @@ async function submit() {
     emit("saved", result.order?.id, result.order);
     ElMessage.success(props.id ? "订单修改已保存" : "订单已创建");
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
     if (e.data?.code === 'reorder_price_changed') {
       if(await confirm('目录售价已变化。是否将列出的目录价商品更新为最新报价？手工成交价保持不变，更新后仍需再次确认提交。')) applyReorderPrices(form.items, products, e.data.changes || []);
     }
@@ -1052,14 +1053,14 @@ async function saveDraft() {
     activeDraftId.value = result.id; draftVersion.value = result.version;
     draftSavedAt.value = result.updatedAt; requestId.value = result.submitRequestId;
     markClean(); ElMessage.success('草稿已保存，可从“我的草稿”继续编辑');
-  } catch(e) { error.value = e.message; }
+  } catch(e) { error.value = errorMessage(e); }
   finally { saving.value = false; }
 }
 async function readLatest() {
   try {
     latest.value = (await api(`orders/${props.id}`)).order;
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
   }
 }
 async function adoptLatest() {

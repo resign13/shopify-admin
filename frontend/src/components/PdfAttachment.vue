@@ -10,6 +10,7 @@
   </div>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { ref } from 'vue';
 import { ElMessage } from 'element-plus';
 import { uploadImage } from '../composables/workbench';
@@ -29,7 +30,7 @@ async function choose(event) {
   try {
     emit('update:modelValue', await uploadImage(file, undefined, 'orders/templates/attachments'));
   } catch (error) {
-    ElMessage.error(error.message);
+    ElMessage.error(errorMessage(error));
   } finally {
     busy.value = false;
     emit('busy', false);

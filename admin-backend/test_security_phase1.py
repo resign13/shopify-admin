@@ -62,7 +62,7 @@ class PhaseOneSecurityTest(unittest.TestCase):
         for _ in range(101):
             r = self.client.post('/api/auth/admin/login', json={'email': 'sales@gingtto.test', 'password': 'wrong'}, headers=self.preheaders)
             self.assertEqual(r.status_code, 401)
-            self.assertEqual(r.json['message'], 'Invalid email or password')
+            self.assertEqual(r.json['message'], '邮箱或密码错误')
             self.assertNotIn('Retry-After', r.headers)
         self.login()
         keys = [application.security.digest('quota:admin:login-ip:127.0.0.1'), application.security.digest('login-account:admin:sales@gingtto.test')]

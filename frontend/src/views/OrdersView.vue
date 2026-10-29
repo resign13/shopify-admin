@@ -192,6 +192,7 @@
   <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from "../composables/responsive";
 import { createOrderExportController } from "../utils/exportDownload";
 import { orderExportIds } from "../utils/orderExportScope";
@@ -243,7 +244,7 @@ const canExportPage = computed(() => !list.loading && !list.error && list.rows.l
 const orderExport = createOrderExportController(exportState);
 async function recoverExport() {
   try { await orderExport.recover(); }
-  catch (error) { ElMessage.error(error.message || '下载失败，请重试'); }
+  catch (error) { ElMessage.error(errorMessage(error, '下载失败，请重试')); }
 }
 watch(() => [isPhone.value, list.query.status, ...mobileStatusTabs.value.map(tab => list.statusCounts[tab.value])], async () => {
   await nextTick();

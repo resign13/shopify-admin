@@ -705,6 +705,7 @@
   </div>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import { Filter, ArrowRight } from '@element-plus/icons-vue';
 import { useResponsive } from '../composables/responsive';
@@ -1001,7 +1002,7 @@ async function loadStylePerformance(resetPage = false, applyDraft = resetPage) {
     syncRoute(query, filters.styleSalespersonId);
   } catch (e) {
     if (id === styleSeq && e.name !== "AbortError") {
-      stylePerformanceError.value = e.message;
+      stylePerformanceError.value = errorMessage(e);
       stylePerformance.value = { items: null, summary: {} };
     }
   } finally {
@@ -1047,7 +1048,7 @@ async function openStyle(row) {
     if (id === detailSeq) styleDetail.value = result;
   } catch (e) {
     if (id === detailSeq && e.name !== "AbortError")
-      styleDetailError.value = e.message;
+      styleDetailError.value = errorMessage(e);
   } finally {
     if (id === detailSeq) styleDetailLoading.value = false;
   }
@@ -1063,7 +1064,7 @@ async function load(resetPage = false, applyDraft = true) {
     styleDetail.value = null;
     styleDrawerVisible.value = false;
   }
-  if (auth.isSuperAdmin && !salespeople.value.length) { try { salespeople.value = (await api("salespeople")).items; } catch (e) { error.value = e.message; } }
+  if (auth.isSuperAdmin && !salespeople.value.length) { try { salespeople.value = (await api("salespeople")).items; } catch (e) { error.value = errorMessage(e); } }
   if (auth.userRole === "sales" || query.salespersonId) { styleRisk.value = ""; if (["stock","estimatedDays"].includes(styleSort.value)) styleSort.value = "units"; }
   resetPage ||=
     queryKey(query) !== queryKey(appliedGlobal.value) &&
@@ -1081,7 +1082,7 @@ async function load(resetPage = false, applyDraft = true) {
       if (id === seq) data.value = result;
     } catch (e) {
       if (id === seq && e.name !== "AbortError") {
-        error.value = e.message;
+        error.value = errorMessage(e);
         data.value = null;
       }
     }

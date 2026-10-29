@@ -23,6 +23,7 @@
   </ElDialog>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { api, save, confirm, statusNames } from '../composables/workbench';
@@ -56,7 +57,7 @@ async function refresh() {
     error.value = props.noteOnly && latest.status !== 'cancelled'
       ? '该订单已恢复，当前状态不适用取消备注。请返回查看订单。'
       : '已读取最新订单，输入的备注已保留；请核对状态并再次确认。';
-  } catch (e) { if (serial === generation) error.value = e.message; }
+  } catch (e) { if (serial === generation) error.value = errorMessage(e); }
   finally { busy.value = false; }
 }
 async function submit() {
@@ -70,7 +71,7 @@ async function submit() {
     initial.value = note.value;
     emit('saved', order); emit('update:open', false);
     ElMessage.success(props.noteOnly ? '取消备注已保存' : '订单已取消');
-  } catch (e) { error.value = e.message; conflict.value = e.status === 409; }
+  } catch (e) { error.value = errorMessage(e); conflict.value = e.status === 409; }
   finally { busy.value = false; }
 }
 </script>

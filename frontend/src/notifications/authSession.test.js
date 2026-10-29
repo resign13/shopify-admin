@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { errorMessage } from '../utils/adminErrors.js';
 
 // Exercise actual store actions with lightweight injected Pinia/HTTP adapters.
 const source = readFileSync(new URL('../stores/auth.js',import.meta.url),'utf8')
@@ -13,8 +14,8 @@ function auth(request) {
     for(const [name,action] of Object.entries(definition.actions)) state[name]=action.bind(state);
     return state;
   };
-  return {store:new Function('defineStore','roleModules','request','localStorage','setAuthSession','withAuthTransition',source+'\nreturn useAdminAuthStore();')
-    (defineStore,()=>[],request,localStorage,()=>{},(_,fn)=>fn()), values};
+  return {store:new Function('defineStore','roleModules','request','localStorage','setAuthSession','withAuthTransition','errorMessage',source+'\nreturn useAdminAuthStore();')
+    (defineStore,()=>[],request,localStorage,()=>{},(_,fn)=>fn(),errorMessage), values};
 }
 test('transport failure retains login identity but does not authorize protected views',async()=>{
   const {store,values}=auth(async()=>{throw new Error('network');});
@@ -30,6 +31,12 @@ test('401 and 403 invalidate retained login identity',async()=>{
 test('successful retry revalidates current permissions and clears transport error',async()=>{
   let failed=true;const {store}=auth(async()=>{if(failed)throw new Error('offline');return {role:'admin',user:{id:1,permissions:['orders']},sessionId:'public-fixture-id',csrfToken:'csrf'};});
   await store.initialize();failed=false;await store.initialize();assert.deepEqual(store.user.permissions,['orders']);assert.equal(store.error,'');
+});
+
+test('login exposes a Chinese fallback for native failures', async () => {
+  const {store} = auth(async () => { throw new TypeError('Browser failure'); });
+  assert.equal(await store.login({}), false);
+  assert.match(store.error, /操作失败/);
 });
 
 test('logout clears the local identity immediately, before its network response',async()=>{

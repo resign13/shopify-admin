@@ -63,6 +63,7 @@
   </div>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { uploadImage } from "../composables/workbench";
@@ -102,7 +103,7 @@ async function run(entry) {
     queue.value = queue.value.filter((q) => q.id !== entry.id);
   } catch (e) {
     entry.state = "failed";
-    entry.error = e.message;
+    entry.error = errorMessage(e);
   }
 }
 async function choose(event) {

@@ -112,6 +112,7 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import {useResponsive} from "../composables/responsive";
 import MobileActionMenu from "../components/MobileActionMenu.vue";
 import {Key,Plus,Clock,Document,ArrowRight,Box,Collection,Search} from "@element-plus/icons-vue";
@@ -159,7 +160,7 @@ function readTask(target, pending) {
     active: () => alive,
     loading: value => { pending.value=value;if(value)error.value=''; },
     receive: data => { target.value=data; },
-    fail: failure => { error.value=failure.message; },
+    fail: failure => { error.value=errorMessage(failure); },
   });
 }
 const accountsRead=readTask(accounts,accountsLoading),ownLogsRead=readTask(logs,logsLoading),managerLogsRead=readTask(managerLogs,managerLogsLoading);
@@ -169,7 +170,7 @@ watch(managerLogsOpen, open=>{if(!open)managerLogsRead.cancel();},{flush:'sync'}
 async function load() {
   initialLoading.value=!meta.value;error.value='';
   try { const data=await request(root+'/me');if(!alive)return;meta.value=data.item;canManage.value=data.canManage && auth.can('admin-users');baseUrl.value=data.baseUrl;await loadLogs(); }
-  catch(e){if(alive)error.value=e.message;} finally{if(alive)initialLoading.value=false;}
+  catch(e){if(alive)error.value=errorMessage(e);} finally{if(alive)initialLoading.value=false;}
 }
 async function loadLogs(){if(tab.value!=='mine')return;await ownLogsRead.run(root+'/logs?page='+logPage.value);}
 async function changeTab(value){if(value!==tab.value){cancelReads();managerLogsOpen.value=false;mobileCallsOpen.value=false;mobileAccountOpen.value=false;error.value='';tab.value=value;}if(value==='accounts')await loadAccounts();else if(value==='mine')await loadLogs();}
@@ -178,7 +179,7 @@ async function loadAccounts(){if(tab.value!=='accounts')return;await accountsRea
 function openGenerate(reset){resetting.value=reset;expiresInput.value='';generateOpen.value=true;}
 async function generate(){
   if(busy.value)return;
-  let expiresAt;try{expiresAt=expiryISO(expiresInput.value);}catch(e){ElMessage.error(e.message);return;}
+  let expiresAt;try{expiresAt=expiryISO(expiresInput.value);}catch(e){ElMessage.error(errorMessage(e));return;}
   busy.value=true;error.value='';
   try{
     const result=await request(root+'/me/'+(resetting.value?'reset':'generate'),{method:'POST',body:JSON.stringify({version:meta.value.version,expiresAt})});
@@ -187,14 +188,14 @@ async function generate(){
     if(!alive)return;
     generateOpen.value=false;
     await load(); // Never automatically retry a potentially committed create.
-    error.value=e.message+'。已尝试刷新状态；若已生成但未取得完整 Key，请手动重置。';
+    error.value=errorMessage(e)+'。已尝试刷新状态；若已生成但未取得完整 Key，请手动重置。';
   }finally{if(alive)busy.value=false;}
 }
 async function toggleOwn(){
   if(busy.value)return;
   const enabled=meta.value.status==='owner_disabled';
   try{await ElMessageBox.confirm(enabled?'恢复后，对接系统可继续读取商品素材和可售库存。':'停用后，对接系统的新请求将立即失效。',enabled?'启用 Key':'停用 Key',{type:'warning'});}catch{return;}
-  busy.value=true;try{const result=await request(root+'/me/status',{method:'PUT',body:JSON.stringify({version:meta.value.version,enabled})});if(alive)meta.value=result.item;}catch(e){await load();if(alive)error.value=e.message;}finally{if(alive)busy.value=false;}
+  busy.value=true;try{const result=await request(root+'/me/status',{method:'PUT',body:JSON.stringify({version:meta.value.version,enabled})});if(alive)meta.value=result.item;}catch(e){await load();if(alive)error.value=errorMessage(e);}finally{if(alive)busy.value=false;}
 }
 async function manage(row,action){
   if(busy.value)return;
@@ -203,7 +204,7 @@ async function manage(row,action){
   busy.value=true;try{
     await request(root+'/accounts/'+row.id+'/'+action,{method:action==='revoke'?'POST':'PUT',body:JSON.stringify({version:row.version,...(action==='authorization'?{blocked:!row.adminBlocked}:{})})});
     if(alive){await loadAccounts();await load();ElMessage.success('已更新');}
-  }catch(e){await loadAccounts();if(alive)error.value=e.message;}finally{if(alive)busy.value=false;}
+  }catch(e){await loadAccounts();if(alive)error.value=errorMessage(e);}finally{if(alive)busy.value=false;}
 }
 async function showAccountLogs(row){logAccount.value=row;managerLogPage.value=1;managerLogs.value={items:[],total:0};managerLogsOpen.value=true;await loadManagerLogs();}
 async function loadManagerLogs(){if(tab.value!=='accounts'||!managerLogsOpen.value||!logAccount.value)return;await managerLogsRead.run(root+'/logs?'+new URLSearchParams({userId:logAccount.value.id,page:managerLogPage.value}));}

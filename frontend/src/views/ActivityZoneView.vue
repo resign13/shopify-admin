@@ -136,6 +136,7 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { onMounted, reactive, ref, watch } from 'vue'
 
 import AdminLayout from '../components/AdminLayout.vue'
@@ -330,7 +331,7 @@ async function save() {
       displayCategoryKeys: [...form.displayCategoryKeys],
     })
   } catch (error) {
-    errorText.value = error.message || '保存失败'
+    errorText.value = errorMessage(error, '保存失败')
   } finally {
     saving.value = false
   }

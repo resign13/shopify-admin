@@ -1,3 +1,5 @@
+import { localizeError } from '../utils/adminErrors.js';
+
 // Reducers are synchronous: no fetch, audio or awaited work inside IDB transactions.
 export function createNotificationStorage(indexedDB = globalThis.indexedDB) {
   let database;
@@ -15,7 +17,10 @@ export function createNotificationStorage(indexedDB = globalThis.indexedDB) {
     request.onerror = () => { abandoned = true; reject(request.error); };
     request.onblocked = () => { abandoned = true; reject(new Error('其他标签页占用了提醒存储，请关闭旧页面后重试')); };
   }).catch(error => { database = null; throw error; });
-  const storageError = error => Object.assign(error || new Error("提醒存储失败"), { code: "notification_storage" });
+  const storageError = error => {
+    const localized = localizeError(error, '提醒存储失败，请检查浏览器存储后重试');
+    return localized?.name === 'AbortError' ? localized : Object.assign(localized, { code: 'notification_storage' });
+  };
   const safely = operation => (...args) => operation(...args).catch(error => { throw storageError(error); });
   const operations = {
     async update(key, reducer) {

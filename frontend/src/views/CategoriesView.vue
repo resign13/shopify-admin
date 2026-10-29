@@ -89,6 +89,7 @@
   >
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from '../composables/responsive';
 import MobileActionMenu from '../components/MobileActionMenu.vue';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
@@ -171,7 +172,7 @@ async function load() {
     items.value = result.items;
     orderVersion.value = result.orderVersion;
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
   } finally {
     loading.value = false;
   }
@@ -232,7 +233,7 @@ async function submit() {
     load();
     ElMessage.success("分类已保存");
   } catch (e) {
-    saveError.value = e.message;
+    saveError.value = errorMessage(e);
   } finally {
     saving.value = false;
   }

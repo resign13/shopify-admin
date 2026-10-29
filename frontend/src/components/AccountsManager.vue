@@ -220,6 +220,7 @@
   >
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from "../composables/responsive";
 import MobileActionMenu from "./MobileActionMenu.vue";
 import { Plus, Search } from "@element-plus/icons-vue";
@@ -344,7 +345,7 @@ async function submit() {
     }
     list.load();
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
   } finally {
     saving.value = false;
   }

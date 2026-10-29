@@ -28,6 +28,7 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import {useResponsive} from "../composables/responsive";
 const {isPhone}=useResponsive();
 import AdaptiveTable from "./AdaptiveTable";
@@ -57,7 +58,7 @@ async function loadPreview(){
     const data=await api('finance/costs/import/preview',{method:'POST',body});
     preview.value=data;stale.value=false;
     if(data.previewHash)pending={changes:data.changes.map(({styleCode,costCny,version})=>({styleCode,costCny,version})),previewHash:data.previewHash,requestId:crypto.randomUUID()};
-  }catch(e){error.value=e.message;}finally{loading.value=false;}
+  }catch(e){error.value=errorMessage(e);}finally{loading.value=false;}
 }
 async function commit(){
   if(!canSave.value||busy.value||stale.value||!pending)return;
@@ -65,7 +66,7 @@ async function commit(){
   try{
     const data=await save('finance/costs/save',pending,'POST');
     ElMessage.success(`已导入 ${data.saved} 款成本`);emit('update:modelValue',false);emit('saved');
-  }catch(e){error.value=e.message;if(e.status)stale.value=true;}
+  }catch(e){error.value=errorMessage(e);if(e.status)stale.value=true;}
   finally{saving.value=false;}
 }
 </script>

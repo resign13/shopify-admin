@@ -1,4 +1,5 @@
 import { acceptPoll, newEpisode } from './storage.js';
+import { errorMessage } from '../utils/adminErrors.js';
 
 export async function sessionKey(userId, token, crypto = globalThis.crypto) {
   const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(token));
@@ -105,7 +106,7 @@ export class OrderVoiceController {
         throw Object.assign(new Error('提醒请求超时，等待网络恢复'), { status: 503, code: 'notification_network' });
       if (!this.active(generation) || error.name === 'AbortError') return null;
       if ([401, 403, 409].includes(error.status)) {
-        await this.disable(); this.emit({ status: 'stopped', message: error.message }); return null;
+        await this.disable(); this.emit({ status: 'stopped', message: errorMessage(error, '提醒已停止，请重新登录后重试') }); return null;
       }
       throw error;
     } finally { clearTimeout(timeout); this.requests.delete(abort); }
@@ -204,7 +205,7 @@ export class OrderVoiceController {
     } catch (error) { this.fail(error); }
   }
   fail(error) {
-    this.halt('error'); this.emit({ message: error.message || '提醒发生异常，请点击恢复监听', playing: false });
+    this.halt('error'); this.emit({ message: errorMessage(error, '提醒发生异常，请点击恢复监听'), playing: false });
     this.refresh().catch(() => {});
   }
   halt(status) {
