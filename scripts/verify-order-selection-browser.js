@@ -91,7 +91,7 @@ async (page) => {
   await open();await query('GT-2026');
   await input('GT-2026-1','M').fill('1');await input('GT-2026-1','L').fill('0');await input('GT-2026-2','M').fill('2');
   await page.route(productsPattern,route=>new URL(route.request().url()).searchParams.has('ids')?route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({message:'Picker fixture unavailable'})}):route.continue());
-  await finish();await picker().getByRole('alert').filter({hasText:'Picker fixture unavailable'}).waitFor();await pending(2);
+  await finish();await picker().getByRole('alert').filter({hasText:'服务暂时不可用，请稍后重试'}).waitFor();await pending(2);
   check(await mainInput('GT-2026-1','M').inputValue()==='2','Failed Finish partially applied');await page.unroute(productsPattern);
   for(const fault of ['product','size']){
     await page.route(productsPattern,async route=>{
