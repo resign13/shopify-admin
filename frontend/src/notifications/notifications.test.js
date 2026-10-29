@@ -150,7 +150,14 @@ test('recovered polling removes the stale network failure message', async () => 
 
 test('an old reconnect summary cannot overwrite a new playback failure', async () => {
   const {c,store}=controller();const s=newEpisode('test','r');s.message='补播提醒：共 2 笔新订单';await store.update('test',()=>s);
-  c.fail(new Error('audio failed'));await c.refresh();assert.equal(c.ui.message,'audio failed');await c.dispose();
+  c.fail(new Error('audio failed'));await c.refresh();assert.equal(c.ui.message,'提醒发生异常，请点击恢复监听');await c.dispose();
+});
+
+test('native playback failures are shown in Chinese', async () => {
+  const {c}=controller();
+  c.fail(new DOMException('The operation is not allowed', 'NotAllowedError'));
+  assert.equal(c.ui.message, '提醒发生异常，请点击恢复监听');
+  await c.dispose();
 });
 
 class FakeAudio extends EventTarget {

@@ -252,6 +252,7 @@
   <OrderCancellationDialog v-model:open="cancelNoteOpen" :order="order" note-only @saved="cancelNoteSaved" />
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from "../composables/responsive";
 import MobileActionMenu from './MobileActionMenu.vue';
 import AdaptiveTable from "./AdaptiveTable";
@@ -400,7 +401,7 @@ async function submit() {
     ElMessage.success("订单已保存");
     emit("saved");
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
     conflict.value = e.status === 409;
   } finally {
     saving.value = false;
@@ -421,7 +422,7 @@ async function loadDetails() {
   } catch (e) {
     if (serial !== detailSerial || !props.open || props.id !== id) return;
     if (order.value) stockRefreshError.value = '刷新失败，以下库存为上次读取结果，请点击“刷新详情”重试。';
-    else error.value = e.message;
+    else error.value = errorMessage(e);
     notifyError(e);
   } finally { if (serial === detailSerial) loading.value = false; }
 }

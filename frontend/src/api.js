@@ -1,4 +1,5 @@
 import { authenticatedFetch } from './authTransport.js';
+import { localizeError, responseError } from './utils/adminErrors.js';
 export const API_BASE = "";
 export async function request(path, options = {}) {
   const { skipGlobalLoading, ...fetchOptions } = options;
@@ -14,23 +15,16 @@ export async function request(path, options = {}) {
       },
     });
   } catch (error) {
-    if (error.name === "AbortError" || error.status) throw error;
-    throw new Error("连接失败，请检查网络后重试。当前输入已保留。");
+    throw localizeError(error, "连接失败，请检查网络后重试。当前输入已保留。");
   }
-  const data = await response.json().catch(() => ({}));
+  const data = await response.json().catch((error) => {
+    if (error?.name === 'AbortError') throw error;
+    if (response.ok && response.status !== 204 && response.status !== 205)
+      throw new Error('服务器响应格式异常，请稍后重试');
+    return {};
+  });
   if (!response.ok) {
-    const error = new Error(
-      data.message ||
-        { 403: "没有执行此操作的权限", 409: "数据已更新，请核对最新版本" }[
-          response.status
-        ] ||
-        "请求失败，请重试",
-    );
-    error.status = response.status;
-    error.retryAfter = Number(response.headers.get("Retry-After") || 0);
-    error.code = data.code;
-    error.data = data;
-    throw error;
+    throw responseError(response.status, data, response.headers.get("Retry-After"));
   }
   return data;
 }

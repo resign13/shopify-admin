@@ -87,6 +87,7 @@
   </ElDialog>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import AdaptiveTable from "./AdaptiveTable";
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
@@ -119,7 +120,7 @@ async function searchOptions(search = '') {
   try {
     const result = await api('orders/templates?' + new URLSearchParams({ page: 1, pageSize: 100, keyword: search }));
     if (current === optionSerial) options.value = result.items;
-  } catch (error) { if (current === optionSerial) optionsError.value = error.message; }
+  } catch (error) { if (current === optionSerial) optionsError.value = errorMessage(error); }
   finally { if (current === optionSerial) optionsLoading.value = false; }
 }
 async function loadList() {
@@ -128,7 +129,7 @@ async function loadList() {
   try {
     const result = await api('orders/templates?' + new URLSearchParams({ page: page.value, pageSize: 25, keyword: keyword.value }));
     if (current === listSerial) { rows.value = result.items; total.value = result.total; }
-  } catch (error) { if (current === listSerial) listError.value = error.message; }
+  } catch (error) { if (current === listSerial) listError.value = errorMessage(error); }
   finally { if (current === listSerial) listLoading.value = false; }
 }
 async function searchCustomers(search = '') {
@@ -141,7 +142,7 @@ async function searchCustomers(search = '') {
       customers.value = result.items;
       if (chosen && !customers.value.some(customer => customer.id === chosen.id)) customers.value.unshift(chosen);
     }
-  } catch (error) { if (current === customerSerial) editError.value = error.message; }
+  } catch (error) { if (current === customerSerial) editError.value = errorMessage(error); }
   finally { if (current === customerSerial) customerLoading.value = false; }
 }
 async function edit(id = null, source = {}) {
@@ -180,7 +181,7 @@ async function saveTemplate() {
     ElMessage.success('客户模板已保存，仅创建者及管理员可使用');
     if (managerOpen.value) await loadList();
     if (!props.managerOnly) await searchOptions();
-  } catch (error) { editError.value = error.message; conflict.value = error.status === 409; }
+  } catch (error) { editError.value = errorMessage(error); conflict.value = error.status === 409; }
   finally { templateSaving.value = false; }
 }
 async function readLatest() {

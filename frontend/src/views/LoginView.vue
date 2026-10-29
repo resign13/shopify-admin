@@ -78,6 +78,7 @@
   </template>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import {useResponsive} from "../composables/responsive";
 import {Collection,User,Key,ArrowRight} from "@element-plus/icons-vue";
 const {isPhone}=useResponsive();
@@ -103,7 +104,7 @@ async function loadCaptcha() {
       captchaImage.value=result.image;form.captchaToken=result.captchaToken;
     }else if(result.enabled!==false)throw new Error('验证码配置响应异常，请重试。');
     captchaReady.value=true;
-  }catch(error){if(serial===captchaSerial)captchaError.value=error.status===429?`验证码刷新过于频繁，请在 ${error.retryAfter||60} 秒后重试。`:error.message||'验证码加载失败，请重试。';}
+  }catch(error){if(serial===captchaSerial)captchaError.value=error.status===429?`验证码刷新过于频繁，请在 ${error.retryAfter||60} 秒后重试。`:errorMessage(error, '验证码加载失败，请重试。');}
   finally{if(serial===captchaSerial)captchaLoading.value=false;}
 }
 onMounted(loadCaptcha);

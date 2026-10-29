@@ -24,6 +24,7 @@
   </ElDrawer>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import AdaptiveTable from "./AdaptiveTable";
 import ResponsiveFilters from './ResponsiveFilters.vue';
 import { ref, watch } from 'vue';
@@ -41,14 +42,14 @@ async function load() {
     if (current!==serial) return;
     rows.value=result.items; total.value=result.total;
     if (!rows.value.length && page.value>1) { page.value--; return load(); }
-  } catch(e) { if(current===serial) error.value=e.message; }
+  } catch(e) { if(current===serial) error.value=errorMessage(e); }
   finally { if(current===serial) loading.value=false; }
 }
 async function remove(row) {
   if (!(await confirm('删除这份草稿？不会删除附件文件或影响任何正式订单。'))) return;
   loading.value=true;
   try { await save(`orders/drafts/${row.id}`,{version:row.version},'DELETE'); await load(); }
-  catch(e) { error.value=e.message; loading.value=false; }
+  catch(e) { error.value=errorMessage(e); loading.value=false; }
 }
 watch(()=>props.open, value=>{ if(value) {page.value=1;load();} else ++serial; });
 </script>

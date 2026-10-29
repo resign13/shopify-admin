@@ -109,6 +109,9 @@ import order_numbering
 from time import perf_counter
 
 app = Flask(__name__)
+# Register first so this runs after the shared security response handler.
+import admin_messages
+admin_messages.register(app)
 app.teardown_request(export_resources.cleanup)
 import security_core
 import db as security_db

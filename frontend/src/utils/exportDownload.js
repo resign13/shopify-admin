@@ -1,3 +1,5 @@
+import { localizeError, responseError as makeResponseError, retryAfterSeconds } from './adminErrors.js';
+
 const BUSY_MESSAGES = {
   export_capacity: '导出服务繁忙，正在等待空闲资源',
   export_in_progress: '已有导出任务正在进行，正在等待完成',
@@ -5,14 +7,6 @@ const BUSY_MESSAGES = {
 };
 const QUEUE_WAIT_MS = 120000;
 const REQUEST_TIMEOUT_MS = 120000;
-
-function retryAfterSeconds(value) {
-  if (!value) return 0;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds)) return Math.max(0, seconds);
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.max(0, (date - Date.now()) / 1000) : 0;
-}
 
 async function downloadAttempt(fetcher, url, options, timeoutMs) {
   let timer, timedOut = false, externalAbort;
@@ -28,16 +22,22 @@ async function downloadAttempt(fetcher, url, options, timeoutMs) {
   try {
     const response = await fetcher(url, controller ? { ...options, signal: controller.signal } : options);
     if (response.ok) {
-      if (response.headers?.get('Content-Type')?.includes('application/json')) return { response, data: await response.json() };
+      if (response.headers?.get('Content-Type')?.includes('application/json')) {
+        const data = await response.json().catch(error => {
+          if (error?.name === 'AbortError') throw error;
+          throw new Error('导出结果格式异常，请检查导出状态后重试');
+        });
+        return { response, data };
+      }
       return { response, blob: await response.blob() };
     }
     let data;
     try { data = await response.json(); }
-    catch (error) { if (timedOut) throw error; data = {}; }
+    catch (error) { if (timedOut || error?.name === 'AbortError') throw error; data = {}; }
     return { response, data };
   } catch (error) {
     if (timedOut) throw Object.assign(new Error('请求或下载超时，请先确认导出状态再重试'), { code: 'export_request_timeout' });
-    throw error;
+    throw localizeError(error, '下载失败，请检查网络后重试');
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (externalAbort) options.signal.removeEventListener('abort', externalAbort);
@@ -45,21 +45,22 @@ async function downloadAttempt(fetcher, url, options, timeoutMs) {
 }
 
 function saveBlob(blob, filename) {
-  const urlObject = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = urlObject;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(urlObject), 60000);
+  try {
+    const urlObject = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = urlObject;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(urlObject), 60000);
+  } catch (error) {
+    throw localizeError(error, '保存下载文件失败，请重试');
+  }
 }
 
 function responseError(response, data) {
-  return Object.assign(new Error(data?.message || '导出失败'), {
-    status: response.status, code: data?.code, data,
-    retryAfter: retryAfterSeconds(response.headers.get('Retry-After')),
-  });
+  return makeResponseError(response.status, data, response.headers.get('Retry-After'), '导出失败，请重试');
 }
 
 export async function downloadFile(fetcher, url, filename, options = {}) {
@@ -100,7 +101,7 @@ export async function downloadFile(fetcher, url, filename, options = {}) {
       throw Object.assign(new Error(data.status === 'started' ? '文件仍在生成，请稍后再次检查' : '导出仍在排队，请稍后再次检查'), { code: 'export_pending' });
     }
     onExportUnavailable?.();
-    throw Object.assign(new Error(data?.message || '本次导出已结束，请重新发起'), { code: data?.code || 'export_finished' });
+    throw localizeError(Object.assign(new Error(data?.message), { code: data?.code || 'export_finished' }), '本次导出已结束，请重新发起');
   };
   if (resultPath) onStatusAvailable?.(checkStatus);
   let queueStarted;
@@ -118,8 +119,8 @@ export async function downloadFile(fetcher, url, filename, options = {}) {
     const code = data?.code;
     const message = busyRetry && response.status === 429 && Object.hasOwn(BUSY_MESSAGES, code)
       ? BUSY_MESSAGES[code]
-      : busyRetry && code === 'export_timeout' ? '导出生成超时，请稍后重新发起' : (data?.message || '导出失败');
-    const error = Object.assign(new Error(message), { status: response.status, code, retryAfter, data });
+      : busyRetry && code === 'export_timeout' ? '导出生成超时，请稍后重新发起' : data?.message;
+    const error = localizeError(Object.assign(new Error(message), { status: response.status, code, retryAfter, data }), '导出失败，请重试');
     if (!busyRetry || response.status !== 429 || !Object.hasOwn(BUSY_MESSAGES, code)) throw unavailable(error);
     if (queueStarted === undefined) queueStarted = Date.now();
     const remaining = QUEUE_WAIT_MS - (Date.now() - queueStarted);

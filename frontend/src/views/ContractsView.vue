@@ -251,6 +251,7 @@
   />
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from '../composables/responsive';
 import MobileActionMenu from '../components/MobileActionMenu.vue';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
@@ -442,7 +443,7 @@ async function submit() {
     ElMessage.success("合同已保存，合同未送数量已同步");
     await list.load();
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
   } finally {
     saving.value = false;
   }

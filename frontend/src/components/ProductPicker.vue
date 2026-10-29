@@ -78,6 +78,7 @@
   >
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import AdaptiveTable from "./AdaptiveTable";
 import ResponsiveFilters from './ResponsiveFilters.vue';
 import { computed, reactive, ref, watch } from "vue";
@@ -119,7 +120,7 @@ async function load() {
       total.value = result.total;
     }
   } catch (e) {
-    if (id === serial) error.value = e.message;
+    if (id === serial) error.value = errorMessage(e);
   } finally {
     if (id === serial) loading.value = false;
   }

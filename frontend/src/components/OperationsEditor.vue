@@ -249,6 +249,7 @@
   /></template>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "./PageHeader.vue";
@@ -360,7 +361,7 @@ async function load() {
     categories.value = cats.items;
     await populate(config.config);
   } catch (e) {
-    loadError.value = e.message;
+    loadError.value = errorMessage(e);
   } finally {
     loading.value = false;
   }
@@ -398,7 +399,7 @@ async function loadRows() {
       for (const p of result.items) names[p.id] = productName(p);
     }
   } catch (e) {
-    if (current === serial) rowsError.value = e.message;
+    if (current === serial) rowsError.value = errorMessage(e);
   } finally {
     if (current === serial) rowsLoading.value = false;
   }
@@ -492,7 +493,7 @@ async function submit() {
     await populate(result.config);
     ElMessage.success("配置已保存");
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
     conflict.value = e.status === 409;
   } finally {
     saving.value = false;

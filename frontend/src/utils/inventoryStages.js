@@ -1,3 +1,5 @@
+import { errorMessage } from './adminErrors.js';
+
 export const MAX_QUANTITY = 2147483647;
 
 export function registrationError(rows) {
@@ -31,7 +33,7 @@ export function moveProcurementStage(row, stage, value, old) {
       nextSource = stage === 'inspection' ? extra.contractPending : nextInspection;
     } catch (e) {
       row[target] = old;
-      return e.message;
+      return errorMessage(e);
     }
   }
   let error = "";

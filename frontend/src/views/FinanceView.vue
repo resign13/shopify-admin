@@ -172,12 +172,14 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import MobileActionMenu from '../components/MobileActionMenu.vue';
 import AdaptiveTable from "../components/AdaptiveTable";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import { useResponsive } from '../composables/responsive';
 const { isPhone } = useResponsive();
 import { authenticatedFetch } from '../authTransport';
+import { responseError } from '../utils/adminErrors.js';
 
 import {computed,onMounted,onBeforeUnmount,reactive,ref} from 'vue';
 import {onBeforeRouteLeave,RouterLink} from 'vue-router';
@@ -218,7 +220,7 @@ const rateDirty=computed(()=>filters.exchangeRate!==savedRate.value);
 async function loadRate(apply=true){
   rateLoading.value=true;rateError.value='';
   try{const data=await api('finance/preferences');savedRate.value=data.exchangeRate===null?null:Number(data.exchangeRate);rateVersion.value=data.version;rateLoaded.value=true;if(apply)filters.exchangeRate=savedRate.value;}
-  catch(e){rateLoaded.value=false;rateError.value='保存的汇率读取失败：'+e.message;}
+  catch(e){rateLoaded.value=false;rateError.value='保存的汇率读取失败：'+errorMessage(e);}
   finally{rateLoading.value=false;}
 }
 async function saveRate(){
@@ -227,7 +229,7 @@ async function saveRate(){
   try{const data=await save('finance/preferences',{exchangeRate:filters.exchangeRate,version:rateVersion.value});savedRate.value=Number(data.exchangeRate);rateVersion.value=data.version;ElMessage.success('公共汇率已保存，所有财务账号共用');}
   catch(e){
     if(e.status===409){await loadRate(false);rateError.value=rateLoaded.value?`公共汇率已被其他用户或窗口更新，最新保存值为 ${savedRate.value}。当前输入已保留，核对后可再次保存。`:rateError.value;}
-    else rateError.value=e.message;
+    else rateError.value=errorMessage(e);
   }finally{rateSaving.value=false;}
 }
 const costQuery=reactive({keyword:'',styleCodes:'',category:'',missingOnly:false});
@@ -250,7 +252,7 @@ const selectAll=value=>{selected.value=value?groups.value.map(g=>g.styleCode):[]
 async function leaveDraft(){return !saving.value&&(!dirty.value||await confirm('有尚未保存的成本修改。确认放弃修改并离开？取消可继续编辑。'));}
 onBeforeRouteLeave(leaveDraft);
 function unload(event){if(dirty.value){event.preventDefault();event.returnValue='';}}
-onMounted(async()=>{window.addEventListener('beforeunload',unload);await Promise.all([loadRate(),(async()=>{try{Object.assign(options,await api('finance/options'));}catch(e){error.value=e.message;}})()]);if(isPhone.value&&rateValid.value)await queryReport(1);});
+onMounted(async()=>{window.addEventListener('beforeunload',unload);await Promise.all([loadRate(),(async()=>{try{Object.assign(options,await api('finance/options'));}catch(e){error.value=errorMessage(e);}})()]);if(isPhone.value&&rateValid.value)await queryReport(1);});
 onBeforeUnmount(()=>{window.removeEventListener('beforeunload',unload);closeHistory();});
 async function changeTab(value){if(value===tab.value)return;if(tab.value==='costs'&&!await leaveDraft())return;tab.value=value;if(value==='costs')await loadCosts(1,true);else groups.value=[];}
 async function loadCosts(page=1,discard=false,existing=false){
@@ -260,16 +262,16 @@ async function loadCosts(page=1,discard=false,existing=false){
   try{const response=await api('finance/costs?'+new URLSearchParams({...query,page,pageSize:financeCostPageSize}));
     groups.value=response.items.map(g=>({...g,draftCost:g.costCny===null?undefined:Number(g.costCny)}));
     costPage.value=response.page;costTotal.value=response.total;selected.value=[];appliedCostQuery.value=query;
-  }catch(e){error.value=e.message;}finally{costLoading.value=false;}
+  }catch(e){error.value=errorMessage(e);}finally{costLoading.value=false;}
 }
 async function exportCosts(){
   if(!appliedCostQuery.value||costOutdated.value||costLoading.value||costExporting.value)return;
   costExporting.value=true;error.value='';
   try{
     const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/costs/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(appliedCostQuery.value)});
-    if(!response.ok)throw new Error((await response.json().catch(()=>({}))).message||'成本表导出失败');
+    if(!response.ok)throw responseError(response.status,await response.json().catch(()=>({})),response.headers.get('Retry-After'),'成本表导出失败');
     const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='商品成本.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }catch(e){error.value=e.message;}finally{costExporting.value=false;}
+  }catch(e){error.value=errorMessage(e);}finally{costExporting.value=false;}
 }
 function openCostImport(){
   if(saving.value||costLoading.value)return;
@@ -299,12 +301,12 @@ async function previewSave(){
   error.value='';
   saving.value=true;
   try{const body={changes:changes.value};preview.value=await save('finance/costs/preview',body,'POST');pendingSave={...body,previewHash:preview.value.previewHash,requestId:crypto.randomUUID()};previewOpen.value=true;}
-  catch(e){error.value=e.message;}finally{saving.value=false;}
+  catch(e){error.value=errorMessage(e);}finally{saving.value=false;}
 }
 async function commitCosts(){
   saving.value=true;error.value='';
   try{await save('finance/costs/save',pendingSave,'POST');previewOpen.value=false;reportCostChanged.value=Boolean(result.value);ElMessage.success('成本已保存');saving.value=false;await loadCosts(costPage.value,true,true);}
-  catch(e){error.value=e.message;if(e.status)previewOpen.value=false;}finally{saving.value=false;}
+  catch(e){error.value=errorMessage(e);if(e.status)previewOpen.value=false;}finally{saving.value=false;}
 }
 const historyOpen=ref(false),history=ref(null),historyTitle=ref(''),historyStyle=ref(''),historyLoading=ref(false),historyError=ref(''),historyPage=ref(1);
 let historyRequest=0,historyController;
@@ -318,7 +320,7 @@ async function loadHistory(page=1){
   const id=++historyRequest;historyController?.abort();historyController=new AbortController();historyPage.value=page;historyLoading.value=true;historyError.value='';history.value=null;
   const params={styleCode:historyStyle.value,page};
   try{const data=await api('finance/costs/history?'+new URLSearchParams(params),{signal:historyController.signal,skipGlobalLoading:true});if(id===historyRequest&&historyOpen.value){history.value=data;}}
-  catch(e){if(e.name!=='AbortError'&&id===historyRequest&&historyOpen.value)historyError.value=e.message;}
+  catch(e){if(e.name!=='AbortError'&&id===historyRequest&&historyOpen.value)historyError.value=errorMessage(e);}
   finally{if(id===historyRequest)historyLoading.value=false;}
 }
 const result=ref(null),reportLoading=ref(false),exporting=ref(false),reportCostChanged=ref(false);
@@ -329,15 +331,15 @@ async function queryReport(page=1,existing=false){
   try{const query=existing?result.value.filters:{...filters,styleCodes:financeCodes(filters.styleCodes.join(','))};
     const data=await save('finance/reports/query',{...query,page,pageSize:25},'POST');
     data.items.forEach(r=>r.rowKey=JSON.stringify([r.styleCode,r.productId,r.sku,r.sizeCode]));result.value=data;reportCostChanged.value=false;
-  }catch(e){error.value=e.message;}finally{reportLoading.value=false;}
+  }catch(e){error.value=errorMessage(e);}finally{reportLoading.value=false;}
 }
 async function exportReport(){
   if(!result.value||reportOutdated.value||reportLoading.value||exporting.value)return;
   exporting.value=true;error.value='';
   try{const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/reports/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result.value.filters)});
-    if(!response.ok)throw new Error((await response.json().catch(()=>({}))).message||'导出失败');
+    if(!response.ok)throw responseError(response.status,await response.json().catch(()=>({})),response.headers.get('Retry-After'),'导出失败');
     const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='财务成本核算.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }catch(e){error.value=e.message;}finally{exporting.value=false;}
+  }catch(e){error.value=errorMessage(e);}finally{exporting.value=false;}
 }
 </script>
 

@@ -29,7 +29,7 @@ function fakeBrowser() {
 test('error metadata and default download behavior', async () => {
   let count = 0;
   await assert.rejects(downloadFile(async () => { count++; return failure(429, 'export_capacity', '4'); }, '/x', 'x'), e => {
-    assert.equal(e.message, 'server message');
+    assert.equal(e.message, '导出服务繁忙，请稍后重试');
     assert.equal(e.status, 429); assert.equal(e.code, 'export_capacity'); assert.equal(e.retryAfter, 4);
     assert.deepEqual(e.data, { code: 'export_capacity', message: 'server message', extra: 7 });
     return true;
@@ -63,8 +63,15 @@ test('no automatic retry for ordinary rate limit, other status, or network error
     assert.equal(count, 1);
   }
   let count = 0;
-  await assert.rejects(downloadFile(async () => { count++; throw new Error('offline'); }, '/x', 'x', { busyRetry: true }), /offline/);
+  await assert.rejects(downloadFile(async () => { count++; throw new Error('offline'); }, '/x', 'x', { busyRetry: true }), /下载失败，请检查网络后重试/);
   assert.equal(count, 1);
+});
+
+test('invalid JSON export responses show Chinese while preserving HTTP metadata', async () => {
+  await assert.rejects(downloadFile(async () => new Response('<html>bad gateway</html>', { status: 502, headers: { 'Retry-After': '4' } }), '/x', 'x'),
+    error => error.status === 502 && error.retryAfter === 4 && /服务暂时不可用/.test(error.message));
+  await assert.rejects(downloadFile(async () => new Response('bad json', { headers: { 'Content-Type': 'application/json' } }), '/x', 'x'),
+    error => /导出结果格式异常/.test(error.message));
 });
 
 test('busy retries stop at 120 seconds with metadata and friendly timeout', async () => {
@@ -202,7 +209,7 @@ test('ready JSON and complete download have independent attempts; retry download
       if (downloads===1) throw new TypeError('Download disconnected');
       return new Response(body);
     };
-    await assert.rejects(controller.run(options => downloadFile(fetcher,'/generate','x.xlsx',{method:'POST',...options})), /disconnected/);
+    await assert.rejects(controller.run(options => downloadFile(fetcher,'/generate','x.xlsx',{method:'POST',...options})), /下载失败，请检查网络后重试/);
     assert.equal(state.busy,false); assert.equal(state.recovery,'download');
     assert.equal(await controller.recover(),true);
     assert.deepEqual(calls,[['/generate','POST'],[readyResult(ticket).downloadUrl,'GET'],[readyResult(ticket).downloadUrl,'GET']]);
@@ -227,7 +234,7 @@ test('unknown generation response can be recovered through status, without repla
       assert.equal(url,readyResult(ticket).downloadUrl);
       return new Response(new Uint8Array([80,75]));
     };
-    await assert.rejects(controller.run(options => downloadFile(fetcher,'/generate','x.xlsx',{method:'POST',...options})), /lost/);
+    await assert.rejects(controller.run(options => downloadFile(fetcher,'/generate','x.xlsx',{method:'POST',...options})), /下载失败，请检查网络后重试/);
     assert.equal(state.recovery,'status');
     await assert.rejects(controller.recover(),e => e.code==='export_pending');
     assert.equal(state.recovery,'status');
@@ -257,7 +264,7 @@ test('expired or forbidden result clears recovery rather than starting another e
     const state = {busy:false,phase:'',position:null}, controller = createOrderExportController(state);
     let calls=0;
     const fetcher=async()=>{ calls++; if(calls===1) throw new TypeError('offline'); return failure(404,'not_found'); };
-    await assert.rejects(controller.run(options=>downloadFile(fetcher,'/generate','x.xlsx',options)),/offline/);
+    await assert.rejects(controller.run(options=>downloadFile(fetcher,'/generate','x.xlsx',options)),/下载失败，请检查网络后重试/);
     await assert.rejects(controller.recover(),e=>e.status===404);
     assert.equal(calls,2); assert.equal(state.recovery,null);
   } finally { browser.restore(); }

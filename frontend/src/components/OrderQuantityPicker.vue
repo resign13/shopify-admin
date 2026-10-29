@@ -68,6 +68,7 @@
 </template>
 
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import AdaptiveTable from "./AdaptiveTable";
 import ResponsiveFilters from './ResponsiveFilters.vue';
 import { computed, nextTick, onBeforeUnmount, reactive, ref, useId, watch } from 'vue';
@@ -93,7 +94,7 @@ const confirmationOpen = ref(false), notices = ref([]);
 const idPrefix = useId();
 const quantityErrorId = (row, size) => `${idPrefix}-quantity-${row.id}-${encodeURIComponent(size)}`;
 let serial = 0, epoch = 0, baselineSignature = '', confirmResolver, discarding = false;
-const quantityError = (row, size) => { try { selectionQuantity(records[row.id].quantities[size]); return ''; } catch (error) { return error.message; } };
+const quantityError = (row, size) => { try { selectionQuantity(records[row.id].quantities[size]); return ''; } catch (error) { return errorMessage(error); } };
 const numericQuantity = (row, size) => { try { return selectionQuantity(records[row.id].quantities[size]); } catch { return undefined; } };
 const cellChanged = (row, size) => quantityError(row, size) || numericQuantity(row, size) !== records[row.id].baseline[size];
 const existsInOrder = row => props.items.some(item => String(item.productId) === String(row.id));
@@ -121,7 +122,7 @@ async function load() {
     }
     rows.value = result.items;
     total.value = result.total;
-  } catch (failure) { if (id === serial && session === epoch) error.value = failure.message; }
+  } catch (failure) { if (id === serial && session === epoch) error.value = errorMessage(failure); }
   finally { if (id === serial && session === epoch) loading.value = false; }
 }
 function search() { query.page = 1; pendingOnly.value = false; load(); }
@@ -178,7 +179,7 @@ async function apply(selected, finish) {
     if (finish) emit('update:visible', false);
   } catch (failure) {
     if (session === epoch) {
-      error.value = failure.message || '应用失败，请重试';
+      error.value = errorMessage(failure, '应用失败，请重试');
       if (isPhone.value) {
         await nextTick();
         if (session === epoch && props.visible) mobileErrorFeedback.value?.focus({ preventScroll: true });

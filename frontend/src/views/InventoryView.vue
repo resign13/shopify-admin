@@ -517,6 +517,7 @@
   >
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { useResponsive } from "../composables/responsive";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
@@ -640,7 +641,7 @@ async function loadOperations() {
       operationHistory.total = result.total;
     }
   } catch (e) {
-    if (serial === operationSerial && e.name !== 'AbortError') operationHistory.error = e.message;
+    if (serial === operationSerial && e.name !== 'AbortError') operationHistory.error = errorMessage(e);
   } finally {
     if (serial === operationSerial) operationHistory.loading = false;
   }
@@ -772,7 +773,7 @@ async function submit() {
     ElMessage.success("库存已更新");
     list.load();
   } catch (e) {
-    error.value = e.message;
+    error.value = errorMessage(e);
     conflict.value = e.status === 409;
   } finally {
     saving.value = false;
@@ -856,7 +857,7 @@ async function previewFile(event) {
     });
     if (preview.value.errors.length) previewFilter.value = "errors";
   } catch (e) {
-    importError.value = e.message;
+    importError.value = errorMessage(e);
   } finally {
     importing.value = false;
   }
@@ -881,7 +882,7 @@ async function confirmImport() {
     });
     list.load();
   } catch (e) {
-    importError.value = e.message;
+    importError.value = errorMessage(e);
   } finally {
     importing.value = false;
   }
@@ -971,7 +972,7 @@ async function receive() {
     if (receiptBatch.value) clearSelection();
     list.load();
   } catch (e) {
-    receiptError.value = e.message;
+    receiptError.value = errorMessage(e);
     receiptConflict.value = e.status === 409;
   } finally {
     receiving.value = false;

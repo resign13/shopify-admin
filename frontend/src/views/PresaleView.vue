@@ -45,6 +45,7 @@
   </ElDialog>
 </template>
 <script setup>
+import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from '../composables/responsive';
 import MobileActionMenu from '../components/MobileActionMenu.vue';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
@@ -66,7 +67,7 @@ async function reload(){
   if(dirty.value && !(await confirm('读取最新配置将放弃当前草稿，是否继续？'))) return
   loading.value=true; error.value=''
   try{const data=await api('presale'); items.value=data.items; Object.assign(draft,data.config); markClean()}
-  catch(e){error.value=e.message} finally{loading.value=false}
+  catch(e){error.value=errorMessage(e)} finally{loading.value=false}
 }
 function addPicked(){
   if(saving.value) return
@@ -82,7 +83,7 @@ function resetOrder(){draft.sortMode='automatic'}
 async function persist(){
   saving.value=true; error.value=''
   try{const result=await save('presale',JSON.parse(JSON.stringify(draft))); Object.assign(draft,result.config); markClean(); ElMessage.success('预售配置已保存')}
-  catch(e){error.value=e.message} finally{saving.value=false}
+  catch(e){error.value=errorMessage(e)} finally{saving.value=false}
 }
 onMounted(reload)
 </script>
