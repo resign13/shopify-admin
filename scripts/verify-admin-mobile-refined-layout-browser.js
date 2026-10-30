@@ -7,12 +7,31 @@ async (page) => {
   const onError = error => errors.push(error.message);
   page.on('pageerror', onError);
   const routes = ['dashboard','orders','inventory','finance','products','size-charts','categories','contracts','presale','store-accounts','admin-users','audit-logs','api-integrations','products/1/edit'];
+  // Wait for the data used by this screen, not 500 ms of silence from every
+  // request (including voice polling). Keep all 112 layout checks and fonts.
+  const resources = {'store-accounts':['store-users'], 'products/1/edit':['products/1/family'],
+    finance:['finance/preferences','finance/options'], 'api-integrations':['api-integrations/me','api-integrations/logs'],
+    dashboard:['dashboard?view=workbench','dashboard?view=style-performance']};
+  const visit = async route => {
+    const responses = (resources[route] || [route]).map(resource => page.waitForResponse(response => {
+      const actual = new URL(response.url()), expected = new URL(base + '/api/admin/' + resource);
+      return actual.pathname === expected.pathname && [...expected.searchParams].every(([k,v]) => actual.searchParams.get(k) === v);
+    }));
+    await page.goto(base + '/' + route);
+    const loaded = await Promise.all(responses);
+    for (const response of loaded) { check(response.ok(), `Failed layout data: ${route}`); await response.finished(); }
+    await page.locator('.workspace-content').waitFor();
+    if (route === 'dashboard') await page.locator('.chart canvas').waitFor();
+    if (route === 'products/1/edit') await page.locator('.editor-layout').waitFor();
+    if (route === 'finance' && page.viewportSize().width < 768 && Number((await loaded[0].json()).exchangeRate) > 0) {
+      await page.locator('.mf-hero').waitFor();
+    }
+    await page.waitForFunction(() => ![...document.querySelectorAll('.workspace-content .el-loading-mask, .workspace-content .el-skeleton')].some(el => el.getBoundingClientRect().height && getComputedStyle(el).visibility !== 'hidden'));
+  };
   for (const width of [360,393,430,768,1024,1440,1920,852]) {
     await page.setViewportSize({ width, height: width === 852 ? 393 : width < 768 ? 852 : 1000 });
     for (const route of routes) {
-      await page.goto(base + '/' + route);
-      await page.locator('.workspace-content').waitFor();
-      await page.waitForLoadState('networkidle');
+      await visit(route);
       if (width < 768) await page.evaluate(() => document.fonts.ready);
       const m = await page.evaluate(() => ({scroll:document.documentElement.scrollWidth, width:innerWidth,
         left:document.querySelector('.workspace-main').getBoundingClientRect().left,
@@ -41,7 +60,7 @@ async (page) => {
   }
   // Navigation permission filtering and resize must not remount business pages.
   await page.setViewportSize({width:393,height:852});
-  await page.goto(base + '/orders'); await page.waitForLoadState('networkidle');
+  await visit('orders');
   let reads = 0;
   const countReads = request => { if (/\/api\/admin\/orders\?/.test(request.url())) reads++; };
   page.on('request', countReads);

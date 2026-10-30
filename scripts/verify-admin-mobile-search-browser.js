@@ -5,6 +5,19 @@ async (page) => {
   const check=(v,m)=>{if(!v) throw new Error(m);};
   const errors=[],measurements=[];
   const onError=e=>errors.push(e.message);page.on('pageerror',onError);
+  const settle = async () => page.waitForFunction(() => ![...document.querySelectorAll('.workspace-content .el-loading-mask')].some(el=>el.getBoundingClientRect().height && getComputedStyle(el).visibility!=='hidden'));
+  const resources={'/store-accounts':'store-users','/api-integrations':'api-integrations/me','/finance':'finance/options'};
+  const visit=async route=>{
+    const path=new URL(base+route).pathname, resource=resources[path]||path.slice(1);
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/'+resource);
+    await page.goto(base+route);
+    const loaded=await response;check(loaded.ok(),'Initial search data failed: '+path);await loaded.finished();
+    await page.locator('.workspace-content').waitFor();await settle();
+  };
+  const loadTab=async(button,resource)=>{
+    const response=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/admin/'+resource);
+    await button.click();const loaded=await response;check(loaded.ok(),'Search tab data failed: '+resource);await loaded.finished();await settle();
+  };
   const searchRows=[
     ['/orders','.responsive-filters'],['/inventory','.responsive-filters'],
     ['/products','.responsive-filters'],['/size-charts','.responsive-filters'],
@@ -16,10 +29,9 @@ async (page) => {
   for(const width of [360,393,430]) {
     await page.setViewportSize({width,height:852});
     for(const [route,selector] of searchRows) {
-      await page.goto(base+route);await page.waitForLoadState('networkidle');
-      if(route==='/finance') await page.getByRole('button',{name:'商品成本',exact:true}).click();
-      if(route==='/api-integrations') await page.getByRole('tab',{name:'账号管理',exact:true}).click();
-      await page.waitForLoadState('networkidle');
+      await visit(route);
+      if(route==='/finance') await loadTab(page.getByRole('button',{name:'商品成本',exact:true}),'finance/costs');
+      if(route==='/api-integrations') await loadTab(page.getByRole('tab',{name:'账号管理',exact:true}),'api-integrations/accounts');
       const search=page.locator(selector).first();await search.locator('.el-input__wrapper').first().waitFor();
       await page.evaluate(()=>document.fonts.ready);
       const m=await search.locator('.el-input__wrapper').first().evaluate(el=>({height:el.getBoundingClientRect().height,
@@ -35,7 +47,7 @@ async (page) => {
       }
     }
   }
-  await page.setViewportSize({width:393,height:852});await page.goto(base+'/orders?page=1&pageSize=25');await page.waitForLoadState('networkidle');
+  await page.setViewportSize({width:393,height:852});await visit('/orders?page=1&pageSize=25');
   const beforeCount=await page.locator('.m-order-card').count();
   check(beforeCount>0,'Orders fixture did not load before search');
   const keyword=page.getByRole('textbox',{name:'订单查询关键词'});
@@ -50,13 +62,13 @@ async (page) => {
   await page.locator('.responsive-filters.is-expanded .el-select').first().waitFor();
   check(await keyword.inputValue()==='','Expanding filters changed keyword');
   await page.getByRole('button',{name:'收起筛选',exact:true}).click();
-  await page.goto(base+'/inventory?page=1&pageSize=25');await page.waitForLoadState('networkidle');
+  await visit('/inventory?page=1&pageSize=25');
   const stock=page.waitForResponse(r=>r.url().includes('/api/admin/inventory?')&&r.url().includes('keyword=GT-2026-1'));
   await page.locator('.responsive-filters input').first().fill('GT-2026-1');
   await page.getByRole('button',{name:'查询',exact:true}).click();check((await stock).ok(),'Inventory query failed');
   await page.waitForFunction(()=>document.querySelectorAll('.m-stock-card').length===1);
   // Only the search presentation changes below 768px.
-  await page.setViewportSize({width:1440,height:1000});await page.goto(base+'/orders');await page.waitForLoadState('networkidle');
+  await page.setViewportSize({width:1440,height:1000});await visit('/orders');
   await page.screenshot({path:'output/playwright/mobile-search-pc-after.png',animations:'disabled'});
   check(!errors.length,'Browser errors: '+errors.join('; '));page.off('pageerror',onError);
   return {passed:true,layoutChecks:measurements.length,measurements,enterSearch:true,queryButton:true,filtersPreserveInput:true,inventoryQuery:true,errors};

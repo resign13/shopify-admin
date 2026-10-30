@@ -1,0 +1,8 @@
+{
+  "name": "gingtto-ci-browser",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@playwright/cli": "0.1.22"
+  }
+}

@@ -9,9 +9,45 @@ permissions:
   contents: read
 concurrency:
   group: admin-${{ github.event.pull_request.number || 'production' }}
-  cancel-in-progress: false
+  # Superseded PRs stop wasting runners; production is never auto-cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  reuse:
+    # PRs and manual runs always execute the full verification suite.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      reused: ${{ steps.resolve.outputs.reused == 'true' && steps.upload.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Find the exact successful PR tree and verified build
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/ci/reuse_verified.py resolve
+      - name: Share verified PR build in this run
+        if: steps.resolve.outputs.reused == 'true'
+        id: upload
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-frontend
+          path: ${{ runner.temp }}/reused-frontend
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
   build:
+    needs: reuse
+    if: ${{ always() && !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    outputs:
+      frontend_artifact_id: ${{ steps.artifact.outputs.artifact-id }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -34,13 +70,17 @@ jobs:
         working-directory: frontend
         run: npm run build
       - name: Share candidate build; deployment requires every check
+        id: artifact
         uses: actions/upload-artifact@v4
         with:
           name: verified-frontend
           path: frontend/dist
           if-no-files-found: error
+          overwrite: true
           retention-days: 7
   backend:
+    needs: reuse
+    if: ${{ always() && !cancelled() && needs.reuse.outputs.reused != 'true' }}
     env:
       APP_ENV: test
       DB_SCHEMA_AUTO_MIGRATE: '1'
@@ -81,7 +121,9 @@ jobs:
           docker build --tag gingtto-security-runtime-fixture --file scripts/security/test_runtime.Dockerfile scripts/security
           docker run --rm --network none -e SECURITY_INSTALL_FIXTURE=1 --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/security,dst=/fixture,readonly" --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/systemd,dst=/fixture-units,readonly" gingtto-security-runtime-fixture
       - name: Release configuration tests
-        run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
+        run: |
+          python -m unittest discover -s scripts -p test_order_voice_settings.py -v
+          python -m unittest discover -s .github/ci -p 'test_*.py' -v
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:
@@ -118,7 +160,8 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
-    needs: build
+    needs: [reuse, build]
+    if: ${{ always() && !cancelled() && needs.reuse.outputs.reused != 'true' && needs.build.result == 'success' }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
@@ -137,7 +180,8 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-          cache-dependency-path: frontend/package-lock.json
+          # Separate cache from build: this runner installs only the CLI.
+          cache-dependency-path: .github/ci/playwright/package-lock.json
       - name: Restore candidate build from this workflow run
         uses: actions/download-artifact@v4
         with:
@@ -146,7 +190,9 @@ jobs:
       - name: Prepare browser once per runner
         run: |
           mkdir -p output/playwright
-          npx --yes --package @playwright/cli playwright-cli install-browser chrome
+          npm ci --prefix .github/ci/playwright --no-audit --no-fund
+          echo "$GITHUB_WORKSPACE/.github/ci/playwright/node_modules/.bin" >> "$GITHUB_PATH"
+          .github/ci/playwright/node_modules/.bin/playwright-cli install-browser chrome
       - name: Build and verify browser voice lifecycle on an isolated fixture
         if: matrix.suite == 'orders'
         env:
@@ -166,12 +212,12 @@ jobs:
           done
           if ! curl -fsS http://127.0.0.1:5358/api/health >/dev/null; then cat "$RUNNER_TEMP/voice-browser.log"; exit 1; fi
           mkdir -p output/playwright
-          npx --yes --package @playwright/cli playwright-cli -s=voiceci open http://127.0.0.1:5358/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=voiceci run-code --filename scripts/login-voice-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=voiceci run-code --filename scripts/verify-order-voice-browser.js | tee "$RUNNER_TEMP/voice-result.log"
+          playwright-cli -s=voiceci open http://127.0.0.1:5358/login --browser chrome
+          playwright-cli -s=voiceci run-code --filename scripts/login-voice-browser-fixture.js
+          playwright-cli -s=voiceci run-code --filename scripts/verify-order-voice-browser.js | tee "$RUNNER_TEMP/voice-result.log"
           grep -q '"multiTabOnce":true' "$RUNNER_TEMP/voice-result.log"
           grep -q '"authTransportRetryRetainsEpisode":true' "$RUNNER_TEMP/voice-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=voiceci close
+          playwright-cli -s=voiceci close
       - name: Isolated login CAPTCHA and department permission lifecycle
         if: matrix.suite == 'orders'
         env:
@@ -192,16 +238,16 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5364/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=departmentci open http://127.0.0.1:5364/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=departmentci snapshot
-          npx --yes --package @playwright/cli playwright-cli -s=departmentci run-code --filename scripts/verify-login-captcha-browser.js | tee "$RUNNER_TEMP/captcha-result.log"
+          playwright-cli -s=departmentci open http://127.0.0.1:5364/login --browser chrome
+          playwright-cli -s=departmentci snapshot
+          playwright-cli -s=departmentci run-code --filename scripts/verify-login-captcha-browser.js | tee "$RUNNER_TEMP/captcha-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/captcha-result.log"; then exit 1; fi
           grep -q '"logoutRevokesSession":true' "$RUNNER_TEMP/captcha-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=departmentci snapshot
-          npx --yes --package @playwright/cli playwright-cli -s=departmentci run-code --filename scripts/verify-department-permissions-browser.js | tee "$RUNNER_TEMP/department-result.log"
+          playwright-cli -s=departmentci snapshot
+          playwright-cli -s=departmentci run-code --filename scripts/verify-department-permissions-browser.js | tee "$RUNNER_TEMP/department-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/department-result.log"; then exit 1; fi
           grep -q '"extraGrantSavedAndPersisted":true' "$RUNNER_TEMP/department-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=departmentci close
+          playwright-cli -s=departmentci close
       - name: Isolated cumulative overdelivery browser lifecycle
         if: matrix.suite == 'operations'
         env:
@@ -220,18 +266,18 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5359/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci open http://127.0.0.1:5359/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci run-code --filename scripts/login-overdelivery-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-registration-ui-browser.js | tee "$RUNNER_TEMP/inventory-ui-result.log"
+          playwright-cli -s=overdeliveryci open http://127.0.0.1:5359/login --browser chrome
+          playwright-cli -s=overdeliveryci run-code --filename scripts/login-overdelivery-browser-fixture.js
+          playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-registration-ui-browser.js | tee "$RUNNER_TEMP/inventory-ui-result.log"
           grep -q '"alignedInputs":true' "$RUNNER_TEMP/inventory-ui-result.log"
           grep -q '"narrowScreen":true' "$RUNNER_TEMP/inventory-ui-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-overdelivery-browser.js | tee "$RUNNER_TEMP/overdelivery-result.log"
+          playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-overdelivery-browser.js | tee "$RUNNER_TEMP/overdelivery-result.log"
           grep -q '"accepted115":true' "$RUNNER_TEMP/overdelivery-result.log"
           grep -q '"spentQuotaNotRenewed":true' "$RUNNER_TEMP/overdelivery-result.log"
           python scripts/verify-inventory-overdelivery.py admin-backend
-          npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci close
+          playwright-cli -s=overdeliveryci close
       - name: Isolated product weights browser lifecycle
-        if: matrix.suite == 'orders'
+        if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -248,28 +294,28 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5360/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci open http://127.0.0.1:5360/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/login-weights-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-product-weights-browser.js | tee "$RUNNER_TEMP/weights-result.log"
+          playwright-cli -s=weightsci open http://127.0.0.1:5360/login --browser chrome
+          playwright-cli -s=weightsci run-code --filename scripts/login-weights-browser-fixture.js
+          playwright-cli -s=weightsci run-code --filename scripts/verify-product-weights-browser.js | tee "$RUNNER_TEMP/weights-result.log"
           grep -q '"currentWeightRefresh":true' "$RUNNER_TEMP/weights-result.log"
           grep -q '"warehouseWeightWithoutMoney":true' "$RUNNER_TEMP/weights-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-order-ui-browser.js | tee "$RUNNER_TEMP/order-ui-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-order-ui-browser.js | tee "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"dateAfterOrderNo":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"goodsSummaryPosition":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"warehouseReopenWithoutMoney":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"compactWeightHint":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"unsetWeightSmallFont":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"narrowWeightSummary":true' "$RUNNER_TEMP/order-ui-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-order-reorder-browser.js | tee "$RUNNER_TEMP/reorder-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-order-reorder-browser.js | tee "$RUNNER_TEMP/reorder-result.log"
           grep -q '"reorder":true' "$RUNNER_TEMP/reorder-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-order-drafts-browser.js | tee "$RUNNER_TEMP/drafts-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-order-drafts-browser.js | tee "$RUNNER_TEMP/drafts-result.log"
           grep -q '"drafts":true' "$RUNNER_TEMP/drafts-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-order-number-browser.js | tee "$RUNNER_TEMP/order-number-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-order-number-browser.js | tee "$RUNNER_TEMP/order-number-result.log"
           grep -q '"orderNumberUI":true' "$RUNNER_TEMP/order-number-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci run-code --filename scripts/verify-partial-allocation-browser.js | tee "$RUNNER_TEMP/partial-allocation-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-partial-allocation-browser.js | tee "$RUNNER_TEMP/partial-allocation-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/partial-allocation-result.log"; then exit 1; fi
           grep -q '"partialAllocation": *true' "$RUNNER_TEMP/partial-allocation-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=weightsci close
+          playwright-cli -s=weightsci close
       - name: Isolated cancellation notes and current-stock browser lifecycle
         if: matrix.suite == 'orders'
         env:
@@ -289,16 +335,16 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5360/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=notesstockci open http://127.0.0.1:5360/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=notesstockci run-code --filename scripts/login-weights-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=notesstockci run-code --filename scripts/verify-order-cancel-note-browser.js | tee "$RUNNER_TEMP/cancel-note-result.log"
+          playwright-cli -s=notesstockci open http://127.0.0.1:5360/login --browser chrome
+          playwright-cli -s=notesstockci run-code --filename scripts/login-weights-browser-fixture.js
+          playwright-cli -s=notesstockci run-code --filename scripts/verify-order-cancel-note-browser.js | tee "$RUNNER_TEMP/cancel-note-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/cancel-note-result.log"; then exit 1; fi
           grep -q '"stockReturnedOnce":true' "$RUNNER_TEMP/cancel-note-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=notesstockci run-code --filename scripts/verify-order-detail-stock-browser.js | tee "$RUNNER_TEMP/detail-stock-result.log"
+          playwright-cli -s=notesstockci run-code --filename scripts/verify-order-detail-stock-browser.js | tee "$RUNNER_TEMP/detail-stock-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/detail-stock-result.log"; then exit 1; fi
           grep -q '"cancelledNotDoubleReturned":true' "$RUNNER_TEMP/detail-stock-result.log"
           grep -q '"lateResponseIgnored":true' "$RUNNER_TEMP/detail-stock-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=notesstockci close
+          playwright-cli -s=notesstockci close
       - name: Isolated order size and quantity selection lifecycle
         if: matrix.suite == 'orders'
         env:
@@ -318,26 +364,26 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5360/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=selectionci open http://127.0.0.1:5360/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/login-weights-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-browser.js | tee "$RUNNER_TEMP/order-selection-result.log"
+          playwright-cli -s=selectionci open http://127.0.0.1:5360/login --browser chrome
+          playwright-cli -s=selectionci run-code --filename scripts/login-weights-browser-fixture.js
+          playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-browser.js | tee "$RUNNER_TEMP/order-selection-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/order-selection-result.log"; then exit 1; fi
           grep -q '"crossPageStaging":true' "$RUNNER_TEMP/order-selection-result.log"
           grep -q '"createDeductsOnce":true' "$RUNNER_TEMP/order-selection-result.log"
           grep -q '"zeroOnlyExplicitJoin":true' "$RUNNER_TEMP/order-selection-result.log"
           grep -q '"finishNeverAddsNewSku":true' "$RUNNER_TEMP/order-selection-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-edit-browser.js | tee "$RUNNER_TEMP/order-selection-edit-result.log"
+          playwright-cli -s=selectionci run-code --filename scripts/verify-order-selection-edit-browser.js | tee "$RUNNER_TEMP/order-selection-edit-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/order-selection-edit-result.log"; then exit 1; fi
           grep -q '"manualQuoteRetained":true' "$RUNNER_TEMP/order-selection-edit-result.log"
           grep -q '"fulfilledEdits":true' "$RUNNER_TEMP/order-selection-edit-result.log"
           grep -q '"cancelledLocked":true' "$RUNNER_TEMP/order-selection-edit-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=selectionci run-code --filename scripts/verify-order-size-standards-browser.js | tee "$RUNNER_TEMP/order-size-standards-result.log"
+          playwright-cli -s=selectionci run-code --filename scripts/verify-order-size-standards-browser.js | tee "$RUNNER_TEMP/order-size-standards-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/order-size-standards-result.log"; then exit 1; fi
           grep -q '"independentSizeRows":true' "$RUNNER_TEMP/order-size-standards-result.log"
           grep -q '"mixedDraftRestore":true' "$RUNNER_TEMP/order-size-standards-result.log"
           grep -q '"mainEditorIndependentSizes":true' "$RUNNER_TEMP/order-size-standards-result.log"
           grep -q '"zeroOnlyDraftRestore":true' "$RUNNER_TEMP/order-size-standards-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=selectionci close
+          playwright-cli -s=selectionci close
       - name: Isolated finance browser lifecycle
         if: matrix.suite == 'operations'
         env:
@@ -356,15 +402,15 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5362/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=financeci open http://127.0.0.1:5362/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=financeci run-code --filename scripts/login-finance-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=financeci run-code --filename scripts/verify-finance-browser.js | tee "$RUNNER_TEMP/finance-result.log"
+          playwright-cli -s=financeci open http://127.0.0.1:5362/login --browser chrome
+          playwright-cli -s=financeci run-code --filename scripts/login-finance-browser-fixture.js
+          playwright-cli -s=financeci run-code --filename scripts/verify-finance-browser.js | tee "$RUNNER_TEMP/finance-result.log"
           grep -Eq '"financeBrowser":[[:space:]]*true' "$RUNNER_TEMP/finance-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=financeci snapshot
-          npx --yes --package @playwright/cli playwright-cli -s=financeci run-code --filename scripts/verify-finance-cost-ui-browser.js | tee "$RUNNER_TEMP/finance-ui-result.log"
+          playwright-cli -s=financeci snapshot
+          playwright-cli -s=financeci run-code --filename scripts/verify-finance-cost-ui-browser.js | tee "$RUNNER_TEMP/finance-ui-result.log"
           grep -Eq '"twoColumnLedger":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           grep -Eq '"renderOnlyNoWrites":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=financeci close
+          playwright-cli -s=financeci close
       - name: Isolated cost Excel export and import lifecycle
         if: matrix.suite == 'operations'
         env:
@@ -386,12 +432,12 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5362/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci open http://127.0.0.1:5362/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci run-code --filename scripts/login-finance-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci run-code --filename scripts/verify-finance-cost-excel-browser.js | tee "$RUNNER_TEMP/finance-excel-result.log"
+          playwright-cli -s=financeexcelci open http://127.0.0.1:5362/login --browser chrome
+          playwright-cli -s=financeexcelci run-code --filename scripts/login-finance-browser-fixture.js
+          playwright-cli -s=financeexcelci run-code --filename scripts/verify-finance-cost-excel-browser.js | tee "$RUNNER_TEMP/finance-excel-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/finance-excel-result.log"; then exit 1; fi
           grep -Eq '"costExcelBrowser":[[:space:]]*true' "$RUNNER_TEMP/finance-excel-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=financeexcelci close
+          playwright-cli -s=financeexcelci close
       - name: Isolated machine-key management and read-only API browser acceptance
         if: matrix.suite == 'operations'
         env:
@@ -411,15 +457,15 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5366/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=apici open http://127.0.0.1:5366/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=apici run-code --filename scripts/login-api-integrations-browser-fixture.js
-          npx --yes --package @playwright/cli playwright-cli -s=apici run-code --filename scripts/verify-api-integrations-browser.js | tee "$RUNNER_TEMP/api-browser-result.log"
+          playwright-cli -s=apici open http://127.0.0.1:5366/login --browser chrome
+          playwright-cli -s=apici run-code --filename scripts/login-api-integrations-browser-fixture.js
+          playwright-cli -s=apici run-code --filename scripts/verify-api-integrations-browser.js | tee "$RUNNER_TEMP/api-browser-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/api-browser-result.log"; then exit 1; fi
           grep -q '"noPlaintextPersistence":true' "$RUNNER_TEMP/api-browser-result.log"
           grep -q '"committedResponseLossNotRetried":true' "$RUNNER_TEMP/api-browser-result.log"
           grep -q '"apiOnlyRoleIsolation":true' "$RUNNER_TEMP/api-browser-result.log"
           grep -q '"desktopAndMobile":true' "$RUNNER_TEMP/api-browser-result.log"
-          npx --yes --package @playwright/cli playwright-cli -s=apici close
+          playwright-cli -s=apici close
       - name: Isolated iPhone-sized admin layout and interactions
         if: matrix.suite == 'mobile'
         env:
@@ -442,12 +488,12 @@ jobs:
           mkdir -p output/playwright
           # One admin login for this isolated fixture. The checks reuse its cookie
           # session; role checks log in only distinct accounts in new contexts.
-          npx --yes --package @playwright/cli playwright-cli -s=mobileci open http://127.0.0.1:5380/login --browser chrome
-          npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename scripts/login-admin-mobile-browser-fixture.js
+          playwright-cli -s=mobileci open http://127.0.0.1:5380/login --browser chrome
+          playwright-cli -s=mobileci run-code --filename scripts/login-admin-mobile-browser-fixture.js
           run_mobile_check() {
             local stage="$1"
             local result="$RUNNER_TEMP/$stage.log"
-            npx --yes --package @playwright/cli playwright-cli -s=mobileci run-code --filename "scripts/$stage.js" | tee "$result"
+            playwright-cli -s=mobileci run-code --filename "scripts/$stage.js" | tee "$result"
             if grep -q '^### Error' "$result"; then return 1; fi
             # Match the top-level result, never nested successful assertions in
             # a {"passed":false,"checks":[{"passed":true}]} failure report.
@@ -472,7 +518,7 @@ jobs:
             verify-api-read-state-browser; do
             run_mobile_check "$stage"
           done
-          npx --yes --package @playwright/cli playwright-cli -s=mobileci close
+          playwright-cli -s=mobileci close
       - name: Isolated size chart edit, Excel import and preview lifecycle
         if: matrix.suite == 'operations'
         env:
@@ -496,32 +542,45 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:5366/api/health >/dev/null
-          npx --yes --package @playwright/cli playwright-cli -s=sizechartsci open http://127.0.0.1:5366/login --browser chrome
+          playwright-cli -s=sizechartsci open http://127.0.0.1:5366/login --browser chrome
           for stage in login-size-charts-browser-fixture verify-size-charts-edit verify-size-charts-import verify-size-charts-boundaries verify-size-charts-preview verify-size-charts-units verify-size-charts-preview-units verify-size-charts-dimensions; do
-            npx --yes --package @playwright/cli playwright-cli -s=sizechartsci run-code --filename "scripts/$stage.js" | tee "$RUNNER_TEMP/$stage.log"
+            playwright-cli -s=sizechartsci run-code --filename "scripts/$stage.js" | tee "$RUNNER_TEMP/$stage.log"
             if grep -q '^### Error' "$RUNNER_TEMP/$stage.log"; then exit 1; fi
             grep -Eq '"passed":[[:space:]]*true' "$RUNNER_TEMP/$stage.log"
             if [ "$stage" = verify-size-charts-edit ]; then python scripts/verify-size-charts-workbooks.py; fi
             if [ "$stage" = verify-size-charts-units ]; then python scripts/verify-size-charts-unit-workbooks.py; fi
             if [ "$stage" = verify-size-charts-preview-units ]; then python scripts/verify-size-charts-dimension-workbooks.py; fi
           done
-          npx --yes --package @playwright/cli playwright-cli -s=sizechartsci close
+          playwright-cli -s=sizechartsci close
   verify:
-    # Stable required check: failed, cancelled or skipped prerequisites block deployment.
+    # Stable required check: either an exact verified build or every full job.
     if: always()
-    needs: [build, backend, browsers]
+    needs: [reuse, build, backend, browsers]
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    env:
+      REUSED: ${{ needs.reuse.outputs.reused }}
+      REUSE_RESULT: ${{ needs.reuse.result }}
+      BUILD_RESULT: ${{ needs.build.result }}
+      BACKEND_RESULT: ${{ needs.backend.result }}
+      BROWSERS_RESULT: ${{ needs.browsers.result }}
     steps:
-      - name: Require all verification groups
+      - uses: actions/checkout@v4
+      - name: Require verified reuse or all verification groups
+        run: python .github/ci/reuse_verified.py gate
+      - name: Record the tested PR merge tree and immutable build artifact
+        if: github.event_name == 'pull_request'
         env:
-          BUILD_RESULT: ${{ needs.build.result }}
-          BACKEND_RESULT: ${{ needs.backend.result }}
-          BROWSER_RESULT: ${{ needs.browsers.result }}
-        run: |
-          test "$BUILD_RESULT" = success
-          test "$BACKEND_RESULT" = success
-          test "$BROWSER_RESULT" = success
+          FRONTEND_ARTIFACT_ID: ${{ needs.build.outputs.frontend_artifact_id }}
+        run: python .github/ci/reuse_verified.py record
+      - name: Publish verification receipt after every check passed
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-ci-${{ github.run_attempt }}
+          path: verified-ci.json
+          if-no-files-found: error
+          retention-days: 7
   deploy:
     needs: verify
     if: github.event_name != 'pull_request' && !contains(github.event.head_commit.message, '[no deploy]')
