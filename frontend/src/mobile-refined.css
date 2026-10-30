@@ -148,7 +148,7 @@
   .style-performance-panel .style-performance-title { flex-direction:row; justify-content:space-between; align-items:center; padding:0 2px; margin-bottom:0; }
   .style-performance-title > div:first-child > small { display:none; }
   .style-performance-title h2 { font-size:14px; }
-  .style-performance-title .inline-actions > .el-radio-group,.style-performance-title .inline-actions > .el-button:not(.is-link) { display:none; }
+  .style-performance-title .inline-actions > .el-radio-group,.style-performance-title .inline-actions > .el-button:not(.is-link):not(.style-export-button) { display:none; }
   .mobile-style-summary-toggle { display:flex; justify-content:space-between; align-items:center; gap:10px; width:100%; min-height:38px; border:0; padding:0 3px; background:transparent; color:#9baac0; font-size:10px; }
   .style-performance-panel .mobile-explanation { margin:0 3px 9px; }
   .style-performance-panel .mobile-explanation > summary { min-height:33px; font-size:10px; }

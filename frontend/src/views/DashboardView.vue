@@ -192,6 +192,15 @@
             @click="loadStylePerformance(false)"
             >刷新</ElButton
           >
+          <ElButton
+            class="style-export-button"
+            size="small"
+            :loading="styleExporting"
+            :disabled="stylePerformanceLoading || !stylePerformance.total || !!stylePerformanceError"
+            title="导出当前已查询条件下的全部款号，不限当前页"
+            @click="exportStylePerformance"
+            >导出 Excel</ElButton
+          >
         </div>
       </div>
       <ResponsiveFilters class="style-performance-filters" @submit="loadStylePerformance(true)">
@@ -724,8 +733,8 @@ import {
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
-import { stylePerformanceQuery, isPersonalStyleScope } from "../utils/styleSalesperson";
-import { api, money, dateTime, statusNames } from "../composables/workbench";
+import { stylePerformanceQuery, stylePerformanceExportQuery, isPersonalStyleScope } from "../utils/styleSalesperson";
+import { api, download, notifyError, money, dateTime, statusNames } from "../composables/workbench";
 const TrendChart = defineAsyncComponent(
   () => import("../components/TrendChart.vue"),
 );
@@ -755,6 +764,7 @@ const appliedGlobal = ref({}),
 const stylePerformance = ref({ items: null, summary: {} });
 const stylePerformanceLoading = ref(false),
   stylePerformanceError = ref("");
+const styleExporting = ref(false);
 const styleSalespersonId = ref("");
 const styleKeyword = ref(""),
   styleCategory = ref(""),
@@ -1009,6 +1019,22 @@ async function loadStylePerformance(resetPage = false, applyDraft = resetPage) {
     if (id === styleSeq) stylePerformanceLoading.value = false;
   }
 }
+async function exportStylePerformance() {
+  if (styleExporting.value || stylePerformanceLoading.value || !stylePerformance.value.total || stylePerformanceError.value) return;
+  const query = stylePerformanceExportQuery(appliedStyleQuery.value);
+  styleExporting.value = true;
+  try {
+    await download(
+      "dashboard/style-performance/export?" + new URLSearchParams(query),
+      `款号商品表现_${query.dateFrom}_${query.dateTo}.xlsx`,
+      { requestTimeout: 60000 },
+    );
+  } catch (error) {
+    notifyError(error);
+  } finally {
+    styleExporting.value = false;
+  }
+}
 function changeStylePage(page) {
   if (page === stylePage.value) return;
   stylePage.value = page;
@@ -1247,6 +1273,8 @@ onBeforeUnmount(() => {
   padding: 12px 8px;
 }
 @media (max-width: 767px) {
+  .style-performance-panel .style-performance-title { flex-direction:row; align-items:center; gap:12px; }
+  .style-performance-title .style-export-button { margin-left:0; }
   .mobile-dashboard-range > div { min-width:0; }
   .mobile-dashboard-range > div > button { min-width:0; min-height:44px; }
   .mobile-dashboard-range > .mobile-dashboard-filter { flex:0 0 44px; width:44px; min-width:44px; height:44px; min-height:44px; }

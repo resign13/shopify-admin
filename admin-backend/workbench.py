@@ -129,15 +129,15 @@ def _style_row(row):
     return result
 
 
-def style_performance(args):
+def style_performance(args, *, paginate=True):
     if args.get('_ownerId') is not None:
         args = {**dict(args), 'risk':'', 'sort':args.get('sort') if args.get('sort') not in {'stock','estimatedDays'} else 'units'}
     start, end, span = _dashboard_window(args)
     velocity_days = int(args.get('velocityWindow', 7) or 7)
     if velocity_days not in {7, 30}:
         raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
-    page = int(args.get('page', 1) or 1)
-    page_size = int(args.get('pageSize', 10) or 10)
+    page = int(args.get('page', 1) or 1) if paginate else 1
+    page_size = int(args.get('pageSize', 10) or 10) if paginate else 10
     if page < 1 or page_size not in {10, 25, 50}:
         raise ValueError('款号分页参数无效')
     catalog_cte, catalog_params = _style_catalog_parts(args)
@@ -234,8 +234,9 @@ def style_performance(args):
     total = int(summary['total'] or 0)
     page = min(page, max(1, (total + page_size - 1) // page_size))
     rows = db._fetch_all(
-        f'SELECT * FROM ({metrics_sql}) q{risk_filter} ORDER BY {order} {direction} NULLS LAST, "styleCode" ASC LIMIT %s OFFSET %s',
-        tuple([*base_params, *risk_params, page_size, (page - 1) * page_size]),
+        f'SELECT * FROM ({metrics_sql}) q{risk_filter} ORDER BY {order} {direction} NULLS LAST, "styleCode" ASC'
+        + (' LIMIT %s OFFSET %s' if paginate else ''),
+        tuple([*base_params, *risk_params] + ([page_size, (page - 1) * page_size] if paginate else [])),
     )
     return {
         'items': [_style_row(row) for row in rows],
