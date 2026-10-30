@@ -7,7 +7,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-import db
 import safe_excel
 import sales_ownership
 import workbench
@@ -16,11 +15,6 @@ import workbench
 RISK_NAMES = {
     'backordered': '欠货', 'out_of_stock': '无库存', 'no_sales': '周转期无销量',
     'critical': '7 天内售罄', 'warning': '7–30 天售罄', 'healthy': '库存健康',
-}
-SORT_NAMES = {
-    'units': '销量', 'amount': '商品金额', 'stock': '现货余额',
-    'estimatedDays': '预计可售天数', 'lastSoldAt': '最近销售时间',
-    'styleCode': '款号', 'velocityUnits': '周转期销量',
 }
 BASE_COLUMNS = [
     ('styleCode', '款号', 24, '@'), ('name', '商品名称', 48, '@'),
@@ -35,7 +29,7 @@ STOCK_COLUMNS = [
     ('pendingInbound', '合格', 16, '#,##0'), ('defectivePending', '待打回次品', 16, '#,##0'),
     ('temporaryInbound', '临时待入库', 16, '#,##0'),
 ]
-HEADER_ROW = 7
+HEADER_ROW = 1
 
 
 def _local_time(value):
@@ -56,7 +50,7 @@ def _days(item):
     return item['estimatedDays']
 
 
-def build_workbook(data, args, scope_label, category_label):
+def build_workbook(data):
     personal = data.get('scope', {}).get('personal', False)
     columns = [*BASE_COLUMNS, *([] if personal else STOCK_COLUMNS),
                ('averageDailyUnits', '日均销量（件）', 18, '#,##0.00')]
@@ -67,31 +61,6 @@ def build_workbook(data, args, scope_label, category_label):
     sheet = book.active
     sheet.title = '款号商品表现'
     sheet.sheet_view.showGridLines = False
-    sales, velocity = data['salesWindow'], data['velocityWindow']
-    sort = args.get('sort') or 'units'
-    if personal and sort in {'stock', 'estimatedDays'}:
-        sort = 'units'
-    criteria = [f"关键词：{args.get('keyword') or '全部'}", f'分类：{category_label}',
-                f"国家：{args.get('country') or '全部'}", f"款号：{args.get('style') or '全部'}"]
-    if not personal:
-        criteria.append(f"库存状态：{RISK_NAMES.get(args.get('risk'), '全部')}")
-    criteria.append(f"排序：{SORT_NAMES.get(sort, '销量')} · {'从低到高' if args.get('direction') == 'asc' else '从高到低'}")
-    notes = [
-        '款号商品表现',
-        f"销售日期：{sales['dateFrom']} 至 {sales['dateTo']}（北京时间）｜数据范围：{scope_label}",
-        '；'.join(criteria),
-        f"日均销量窗口：{velocity['dateFrom']} 至 {velocity['dateTo']}（{velocity['days']} 天）；与销量使用相同国家和业务员范围。",
-        '排除已取消订单，金额不含运费，按订单保存汇率折合 USD。'
-        + ('' if personal else '库存各阶段为当前余额；预计可售按未舍入日均销量计算，欠货或无销量时不估算。'),
-        f"读取时间：{_local_time(data['updatedAt']):%Y-%m-%d %H:%M:%S}（北京时间）｜共 {data['total']} 个款号，导出全部筛选结果。",
-    ]
-    for row, text in enumerate(notes, 1):
-        sheet.cell(row, 1, text)
-        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=len(columns))
-        sheet.row_dimensions[row].height = 34 if row == 1 else 30
-        sheet.cell(row, 1).font = Font(name='Microsoft YaHei', size=16 if row == 1 else 11,
-                                      bold=row == 1, color='17324D' if row == 1 else '475569')
-        sheet.cell(row, 1).alignment = Alignment(vertical='center', wrap_text=True)
     sheet.append([label for _, label, _, _ in columns])
     for item in data['items']:
         values = {**item, 'lastSoldAt': _local_time(item.get('lastSoldAt'))}
@@ -123,7 +92,7 @@ def build_workbook(data, args, scope_label, category_label):
                 cell.fill = PatternFill('solid', fgColor='EFF6FF' if row == total_row else 'F8FAFC')
     for row in range(HEADER_ROW, total_row + 1):
         sheet.row_dimensions[row].height = 40 if row == HEADER_ROW else 42
-    sheet.freeze_panes = f'C{HEADER_ROW + 1}'
+    sheet.freeze_panes = f'A{HEADER_ROW + 1}'
     sheet.auto_filter.ref = f'A{HEADER_ROW}:{get_column_letter(len(columns))}{last_data_row}'
     sheet.print_title_rows = f'1:{HEADER_ROW}'
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
@@ -139,19 +108,7 @@ def export(args, user):
     owner_id = sales_ownership.scope(args, user)
     scoped = {**args, '_ownerId': owner_id}
     data = sales_ownership.personalize(workbench.style_performance(scoped, paginate=False), owner_id)
-    if owner_id is None:
-        scope_label = '全公司'
-    elif owner_id == 0:
-        scope_label = '未分配订单'
-    else:
-        owner = db._fetch_one('SELECT name FROM admin_users WHERE id=%s', (owner_id,))
-        scope_label = owner['name'] if owner else '本人数据'
-    category = args.get('category')
-    category_row = db._fetch_one('''SELECT COALESCE(t.label,c.category_key) AS label
-        FROM product_categories c LEFT JOIN product_category_translations t
-        ON t.category_id=c.id AND t.lang_code='zh' WHERE c.category_key=%s''', (category,)) if category and category != 'all' else None
-    category_label = category_row['label'] if category_row else '全部' if category in (None, '', 'all') else category
-    book = build_workbook(data, scoped, scope_label, category_label)
+    book = build_workbook(data)
     out = BytesIO()
     book.save(out)
     book.close()

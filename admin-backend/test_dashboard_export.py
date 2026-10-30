@@ -51,14 +51,19 @@ class DashboardExportTest(unittest.TestCase):
         rows = self.records(sheet)
         self.assertEqual(len(rows), 13)
         self.assertEqual([r['款号'] for r in rows], sorted(r['款号'] for r in rows))
-        total = dict(zip([c.value for c in sheet[7]], [c.value for c in sheet[sheet.max_row]]))
+        total = dict(zip([c.value for c in sheet[1]], [c.value for c in sheet[sheet.max_row]]))
         self.assertEqual(total['销量（件）'], page['summary']['units'])
         self.assertAlmostEqual(total['商品金额（USD，不含运费）'], page['summary']['amount'])
         self.assertEqual(total['现货余额'], page['summary']['stock'])
-        self.assertEqual(sheet.freeze_panes, 'C8')
+        self.assertEqual(sheet['A1'].value, '款号')
+        self.assertFalse(sheet.merged_cells.ranges)
+        self.assertEqual(sheet.freeze_panes, 'A2')
+        self.assertEqual(sheet.sheet_view.pane.xSplit, None)
+        self.assertEqual(sheet.sheet_view.pane.ySplit, 1)
+        self.assertTrue(sheet.auto_filter.ref.startswith('A1:'))
         self.assertTrue(sheet.auto_filter.ref.endswith(str(sheet.max_row - 1)))
-        self.assertEqual(sheet['A8'].data_type, 's')
-        self.assertEqual(sheet['D8'].number_format, '#,##0.00')
+        self.assertEqual(sheet['A2'].data_type, 's')
+        self.assertEqual(sheet['D2'].number_format, '#,##0.00')
         sold = next(row for row in rows if row['款号'] == 'GT-2026')
         self.assertEqual(sold['最近销售时间（北京时间）'], datetime(2026, 9, 18, 17))
         self.assertEqual(sold['库存状态'], '库存健康')
@@ -87,8 +92,6 @@ class DashboardExportTest(unittest.TestCase):
                                        ('合格', 'pendingInbound'), ('待打回次品', 'defectivePending'),
                                        ('临时待入库', 'temporaryInbound'), ('日均销量（件）', 'averageDailyUnits')]:
                         self.assertEqual(row[label], item[key], label)
-                if query.get('category') == 'denim':
-                    self.assertIn('牛仔系列', sheet['A3'].value)
 
     def test_personal_scope_does_not_export_company_stock_or_other_owner_sales(self):
         own = db._fetch_one("SELECT id FROM admin_users WHERE role='sales'")['id']
@@ -98,7 +101,7 @@ class DashboardExportTest(unittest.TestCase):
             with self.subTest(params=params):
                 expected = self.data(**params)
                 sheet = self.workbook(**params)
-                headers = [c.value for c in sheet[7]]
+                headers = [c.value for c in sheet[1]]
                 self.assertNotIn('现货余额', headers)
                 self.assertNotIn('库存状态', headers)
                 self.assertNotIn('合同未送', headers)
@@ -123,7 +126,7 @@ class DashboardExportTest(unittest.TestCase):
             self.assertEqual(self.export(**params).status_code, 400, params)
         sheet = self.workbook(keyword='does-not-exist')
         self.assertEqual(self.records(sheet), [])
-        self.assertEqual(sheet['C8'].value, 0)
+        self.assertEqual(sheet['C2'].value, 0)
         with patch.dict('os.environ', {'SECURITY_LIMIT_EXPORT': '1'}):
             response = self.export()
             self.assertEqual(response.status_code, 429)
@@ -135,10 +138,10 @@ class DashboardExportTest(unittest.TestCase):
         before = db._fetch_all('SELECT id,stock FROM product_size_prices ORDER BY id')
         before_orders = db._fetch_all('SELECT id,total_amount,status,updated_at FROM orders ORDER BY id')
         sheet = self.workbook(style='0000123')
-        self.assertEqual(sheet['A8'].value, '0000123')
-        self.assertEqual(sheet['A8'].number_format, '@')
-        self.assertEqual(sheet['B8'].value, '=1+1')
-        self.assertEqual(sheet['B8'].data_type, 's')
+        self.assertEqual(sheet['A2'].value, '0000123')
+        self.assertEqual(sheet['A2'].number_format, '@')
+        self.assertEqual(sheet['B2'].value, '=1+1')
+        self.assertEqual(sheet['B2'].data_type, 's')
         self.assertEqual(before, db._fetch_all('SELECT id,stock FROM product_size_prices ORDER BY id'))
         self.assertEqual(before_orders, db._fetch_all('SELECT id,total_amount,status,updated_at FROM orders ORDER BY id'))
 
