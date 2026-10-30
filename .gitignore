@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 venv/
 frontend/node_modules/
+.github/ci/playwright/node_modules/
 frontend/dist/
 frontend/.vite/
 .env
