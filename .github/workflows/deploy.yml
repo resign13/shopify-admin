@@ -11,7 +11,36 @@ concurrency:
   group: admin-${{ github.event.pull_request.number || 'production' }}
   cancel-in-progress: false
 jobs:
-  verify:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend test dependencies
+        working-directory: frontend
+        run: npm ci && npm audit --audit-level=high
+      - name: Order quantity selection unit tests
+        working-directory: frontend
+        run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js
+      - name: Catalog ordering UI tests
+        working-directory: frontend
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
+      - name: Build shared frontend
+        working-directory: frontend
+        run: npm run build
+      - name: Share candidate build; deployment requires every check
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-frontend
+          path: frontend/dist
+          if-no-files-found: error
+          retention-days: 7
+  backend:
     env:
       APP_ENV: test
       DB_SCHEMA_AUTO_MIGRATE: '1'
@@ -27,14 +56,17 @@ jobs:
         options: >-
           --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Validate deployment script syntax
-        run: bash -n scripts/deploy-admin.sh
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+          cache: pip
+          cache-dependency-path: admin-backend/requirements.txt
       - run: pip install pip-audit==2.10.1 -r admin-backend/requirements.txt
+      - name: Validate deployment script syntax
+        run: bash -n scripts/deploy-admin.sh
       - name: Dependency and credential checks
         run: |
           python -m pip_audit -r admin-backend/requirements.txt
@@ -48,20 +80,8 @@ jobs:
         run: |
           docker build --tag gingtto-security-runtime-fixture --file scripts/security/test_runtime.Dockerfile scripts/security
           docker run --rm --network none -e SECURITY_INSTALL_FIXTURE=1 --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/security,dst=/fixture,readonly" --mount "type=bind,src=$GITHUB_WORKSPACE/scripts/systemd,dst=/fixture-units,readonly" gingtto-security-runtime-fixture
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install frontend test dependencies
-        working-directory: frontend
-        run: npm ci && npm audit --audit-level=high
       - name: Release configuration tests
         run: python -m unittest discover -s scripts -p test_order_voice_settings.py -v
-      - name: Order quantity selection unit tests
-        working-directory: frontend
-        run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js
-      - name: Catalog ordering UI tests
-        working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
       - name: Isolated inventory, permissions, transactions and image tests
         working-directory: admin-backend
         env:
@@ -82,7 +102,53 @@ jobs:
           python scripts/verify-security-aux-roles.py --expected-db gingtto_workbench_test --prefix gingtto_ci_aux_test
           docker pull postgres:16
           python scripts/security/verify_native_restore.py --isolated-fixture --report "$RUNNER_TEMP/native-restore.json"
+  browsers:
+    env:
+      APP_ENV: test
+      DB_SCHEMA_AUTO_MIGRATE: '1'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: gingtto_workbench_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fixture-only-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    needs: build
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        suite: [orders, operations, mobile]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: admin-backend/requirements.txt
+      - run: pip install pip-audit==2.10.1 -r admin-backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Restore candidate build from this workflow run
+        uses: actions/download-artifact@v4
+        with:
+          name: verified-frontend
+          path: frontend/dist
+      - name: Prepare browser once per runner
+        run: |
+          mkdir -p output/playwright
+          npx --yes --package @playwright/cli playwright-cli install-browser chrome
       - name: Build and verify browser voice lifecycle on an isolated fixture
+        if: matrix.suite == 'orders'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -90,7 +156,6 @@ jobs:
           PGUSER: postgres
           PGPASSWORD: fixture-only-password
         run: |
-          cd frontend && npm run build && cd ..
           python scripts/voice-browser-fixture.py > "$RUNNER_TEMP/voice-browser.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
@@ -101,7 +166,6 @@ jobs:
           done
           if ! curl -fsS http://127.0.0.1:5358/api/health >/dev/null; then cat "$RUNNER_TEMP/voice-browser.log"; exit 1; fi
           mkdir -p output/playwright
-          npx --yes --package @playwright/cli playwright-cli install-browser chrome
           npx --yes --package @playwright/cli playwright-cli -s=voiceci open http://127.0.0.1:5358/login --browser chrome
           npx --yes --package @playwright/cli playwright-cli -s=voiceci run-code --filename scripts/login-voice-browser-fixture.js
           npx --yes --package @playwright/cli playwright-cli -s=voiceci run-code --filename scripts/verify-order-voice-browser.js | tee "$RUNNER_TEMP/voice-result.log"
@@ -109,6 +173,7 @@ jobs:
           grep -q '"authTransportRetryRetainsEpisode":true' "$RUNNER_TEMP/voice-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=voiceci close
       - name: Isolated login CAPTCHA and department permission lifecycle
+        if: matrix.suite == 'orders'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -138,6 +203,7 @@ jobs:
           grep -q '"extraGrantSavedAndPersisted":true' "$RUNNER_TEMP/department-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=departmentci close
       - name: Isolated cumulative overdelivery browser lifecycle
+        if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -165,6 +231,7 @@ jobs:
           python scripts/verify-inventory-overdelivery.py admin-backend
           npx --yes --package @playwright/cli playwright-cli -s=overdeliveryci close
       - name: Isolated product weights browser lifecycle
+        if: matrix.suite == 'orders'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -204,6 +271,7 @@ jobs:
           grep -q '"partialAllocation": *true' "$RUNNER_TEMP/partial-allocation-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=weightsci close
       - name: Isolated cancellation notes and current-stock browser lifecycle
+        if: matrix.suite == 'orders'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -232,6 +300,7 @@ jobs:
           grep -q '"lateResponseIgnored":true' "$RUNNER_TEMP/detail-stock-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=notesstockci close
       - name: Isolated order size and quantity selection lifecycle
+        if: matrix.suite == 'orders'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -270,6 +339,7 @@ jobs:
           grep -q '"zeroOnlyDraftRestore":true' "$RUNNER_TEMP/order-size-standards-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=selectionci close
       - name: Isolated finance browser lifecycle
+        if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -296,6 +366,7 @@ jobs:
           grep -Eq '"renderOnlyNoWrites":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=financeci close
       - name: Isolated cost Excel export and import lifecycle
+        if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -322,6 +393,7 @@ jobs:
           grep -Eq '"costExcelBrowser":[[:space:]]*true' "$RUNNER_TEMP/finance-excel-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=financeexcelci close
       - name: Isolated machine-key management and read-only API browser acceptance
+        if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -349,6 +421,7 @@ jobs:
           grep -q '"desktopAndMobile":true' "$RUNNER_TEMP/api-browser-result.log"
           npx --yes --package @playwright/cli playwright-cli -s=apici close
       - name: Isolated iPhone-sized admin layout and interactions
+        if: matrix.suite == 'mobile'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -401,6 +474,7 @@ jobs:
           done
           npx --yes --package @playwright/cli playwright-cli -s=mobileci close
       - name: Isolated size chart edit, Excel import and preview lifecycle
+        if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
           PGPORT: '5432'
@@ -432,13 +506,22 @@ jobs:
             if [ "$stage" = verify-size-charts-preview-units ]; then python scripts/verify-size-charts-dimension-workbooks.py; fi
           done
           npx --yes --package @playwright/cli playwright-cli -s=sizechartsci close
-      - name: Preserve the frontend build that passed verification
-        uses: actions/upload-artifact@v4
-        with:
-          name: verified-frontend
-          path: frontend/dist
-          if-no-files-found: error
-          retention-days: 7
+  verify:
+    # Stable required check: failed, cancelled or skipped prerequisites block deployment.
+    if: always()
+    needs: [build, backend, browsers]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require all verification groups
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          BACKEND_RESULT: ${{ needs.backend.result }}
+          BROWSER_RESULT: ${{ needs.browsers.result }}
+        run: |
+          test "$BUILD_RESULT" = success
+          test "$BACKEND_RESULT" = success
+          test "$BROWSER_RESULT" = success
   deploy:
     needs: verify
     if: github.event_name != 'pull_request' && !contains(github.event.head_commit.message, '[no deploy]')
