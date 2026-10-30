@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { stylePerformanceQuery, isPersonalStyleScope } from "./styleSalesperson.js";
+import { stylePerformanceQuery, stylePerformanceExportQuery, isPersonalStyleScope } from "./styleSalesperson.js";
 
 const overview = { dateFrom: "2026-10-01", dateTo: "2026-10-08", country: "Germany", style: "CS2209", salespersonId: "2" };
 const filters = { keyword: "CS2209", category: "pants", sort: "amount", direction: "desc", risk: "", velocityWindow: "7" };
@@ -41,4 +41,24 @@ test("panel owner persists in routes and details without changing overview scope
   assert.match(source, /requestedStyleQuery\.value = filters/);
   assert.match(source, /\.\.\.appliedStyleQuery\.value,[\s\S]*view: "style-detail"/);
   assert.match(source, /<section v-if="!personalScope" class="panel">/);
+});
+
+test("export carries every applied filter and sort, without pagination or internal fields", () => {
+  const applied = stylePerformanceQuery(overview, { ...filters, styleSalespersonId: "5" }, true);
+  const source = { ...applied, page: "3", pageSize: "10", view: "style-performance", _ownerId: "99" };
+  const result = stylePerformanceExportQuery(source);
+  assert.deepEqual(result, Object.fromEntries(Object.entries(applied).filter(([, value]) => value !== "")));
+  assert.equal(source.page, "3");
+  assert.equal(result.salespersonId, "5");
+  assert.equal("page" in result || "pageSize" in result || "_ownerId" in result, false);
+});
+
+test("export uses the successful query snapshot and recovers its loading state", () => {
+  const source = readFileSync(new URL("../views/DashboardView.vue", import.meta.url), "utf8");
+  const action = source.slice(source.indexOf("async function exportStylePerformance()"), source.indexOf("function changeStylePage("));
+  assert.match(action, /stylePerformanceExportQuery\(appliedStyleQuery.value\)/);
+  assert.doesNotMatch(action, /styleKeyword.value|globalQuery\(\)|requestedStyleQuery.value/);
+  assert.match(action, /styleExporting.value \|\| stylePerformanceLoading.value/);
+  assert.match(action, /notifyError\(error\)/);
+  assert.match(action, /finally\s*\{\s*styleExporting.value = false/);
 });

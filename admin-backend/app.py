@@ -2280,6 +2280,14 @@ def dashboard() -> Any:
     )
 
 
+@app.get("/api/admin/dashboard/style-performance/export")
+@require_auth
+@require_roles("admin", "sales")
+def export_style_performance() -> Any:
+    import dashboard_export
+    return dashboard_export.export(request.args, g.current_user)
+
+
 @app.get("/api/admin/products")
 @require_auth
 @require_roles("admin", "sales")
