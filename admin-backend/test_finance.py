@@ -71,6 +71,34 @@ class FinanceTest(unittest.TestCase):
         self.assertEqual(len(first['items']),25)
         self.assertEqual(self.query(page=99)['items'],[])
 
+    def test_missing_styles_cover_all_pages_filters_and_inactive_products(self):
+        # Zero is a valid cost. Create enough other styles to exceed one page.
+        self.save_cost(cost='0')
+        ids=[]
+        for index in range(27):
+            style=f'QA{index:02}'
+            product=db.create_product({'categoryKey':'outerwear','productCode':style+'-black',
+                'sku':style+'-black','slug':style.lower()+'-black','colorGroup':style,
+                'title':'Missing cost fixture','image':'/uploads/fixture.jpg','sizes':['M'],
+                'sizePrices':[{'sizeCode':'M','price':5,'stock':0}]})
+            ids.append(product['id'])
+            db._fetch_one('''INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price)
+                VALUES(1,%s,%s,%s,'M',1,5,5) RETURNING id''',(product['id'],'Fixture',product['sku']))
+        db._fetch_one('''INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price)
+            VALUES(1,%s,'Fixture','QA26-black','M',2,5,10) RETURNING id''',(ids[-1],))
+        db._fetch_one('UPDATE products SET is_active=FALSE WHERE id=%s RETURNING id',(ids[-1],))
+
+        first=self.query(page=1); second=self.query(page=2)
+        expected=[{'styleCode':f'QA{index:02}','missingQuantity':3 if index==26 else 1} for index in range(27)]
+        self.assertEqual(first['missingStyles'],expected)
+        self.assertEqual(second['missingStyles'],expected)
+        self.assertEqual(first['summary']['missingQuantity'],29)
+        self.assertNotIn('QA26',[row['styleCode'] for row in first['items']])
+        self.assertEqual(self.query(styleCodes=['QA26'])['missingStyles'],expected[-1:])
+        self.assertEqual(self.query(dateFrom='2026-08-01',dateTo='2026-08-31')['missingStyles'],[])
+        complete=finance.report({'dateFrom':'2026-09-01','dateTo':'2026-09-30','exchangeRate':'7.123456'},paginate=False)
+        self.assertEqual(complete['missingStyles'],expected)
+
     def test_partial_allocation_remains_in_finance_and_export(self):
         self.save_cost(cost='12.00')
         before = self.query()['summary']
@@ -474,6 +502,9 @@ class FinanceTest(unittest.TestCase):
         exported=self.post('reports/export',result['filters']);self.assertEqual(exported.status_code,200)
         self.assertEqual(load_workbook(BytesIO(exported.data))['成本缺失'].max_row,3)
         self.assertEqual(self.stock(),stock);self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM orders')['n'],order_count)
+        self.save_cost(cost='20',at='2026-10-15T09:00:00+08:00')
+        self.assertEqual(self.call('finance/costs',role='finance').json['items'][0]['costCny'],'20.00')
+        self.assertEqual(self.query()['missingStyles'],[{'styleCode':'GT-2026','missingQuantity':3}])
 
     def test_clear_zero_cost_idempotency_conflict_and_restore(self):
         self.save_cost(cost='0')

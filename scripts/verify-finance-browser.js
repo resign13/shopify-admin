@@ -29,8 +29,17 @@ async (page) => {
   await page.screenshot({path:'output/playwright/finance-toolbar-desktop.png',fullPage:true});
   await date('开始日期','2026-09-01');await date('结束日期','2026-09-30');
   let data=await query();assert(data.summary.missingQuantity===3&&data.summary.knownCostCny==='84.00'&&data.summary.profitCny===null,'Historical costs matched; missing cost is not zero');
+  assert(data.missingStyles.length===1&&data.missingStyles[0].styleCode==='GT-OTHER'&&data.missingStyles[0].missingQuantity===3,'Missing styles cover the full filtered report');
+  await page.getByRole('button',{name:'查看缺失成本款号',exact:true}).hover();
+  await page.getByRole('tooltip',{name:/本次核算缺失成本的款号 GT-OTHER 3 件/}).waitFor();
+  await page.locator('.finance-tab-nav').hover();
+  await page.setViewportSize({width:390,height:844});
+  await page.getByRole('button',{name:'查看缺失成本款号',exact:true}).click();
+  await page.getByRole('tooltip',{name:/本次核算缺失成本的款号 GT-OTHER 3 件/}).waitFor();
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({width:1920,height:1000});
   assert(await page.locator('.finance-summary>article').count()===3,'Only three monetary summaries');
-  assert(await page.locator('.report-missing').textContent()==='3 件成本未设置 · 完整成本与毛利待补全','Missing costs remain visible, not zero');
+  assert((await page.locator('.report-missing').textContent()).trim()==='3 件成本未设置 · 完整成本与毛利待补全','Missing costs remain visible, not zero');
   const initialPartialDownload=page.waitForEvent('download');await page.getByRole('button',{name:'导出 Excel',exact:true}).click();
   await (await initialPartialDownload).saveAs('output/playwright/finance-style-partial-report.xlsx');
   assert(await page.locator('.report-advanced-filters').isHidden(),'Advanced filters initially collapsed');
