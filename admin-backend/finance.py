@@ -356,7 +356,7 @@ def _report(payload, paginate=True):
     if page_size not in (25,50,100): raise ValueError('分页无效')
     if paginate:
         from finance_reporting import page as report_page
-        rows, full_summary, full_total = report_page(db,query,params,rate,page,page_size)
+        rows, full_summary, full_total, missing_styles = report_page(db,query,params,rate,page,page_size)
     else:
         rows=db._fetch_all(query,params)
     groups={}; lines=[]
@@ -391,13 +391,19 @@ def _report(payload, paginate=True):
         items.append({'styleCode':key[0],'productId':key[1],'sku':key[2],'sizeCode':key[3] or '',**aggregate(values),
             'minCostCny':money(min(costs)) if costs else None,'maxCostCny':money(max(costs)) if costs else None,'lines':values})
     items.sort(key=lambda r:(r['styleCode'],r['sku'],r['sizeCode']))
+    if not paginate:
+        missing_by_style={}
+        for line in lines:
+            if line['costCny'] is None:
+                missing_by_style[line['styleCode']]=missing_by_style.get(line['styleCode'],0)+line['quantity']
+        missing_styles=[{'styleCode':code,'missingQuantity':missing_by_style[code]} for code in sorted(missing_by_style)]
     page=integer(payload.get('page',1)); page_size=integer(payload.get('pageSize',25))
     if page_size not in (25,50,100): raise ValueError('分页无效')
     filters={'dateFrom':str(start),'dateTo':str(end),'customerName':customer,'customerId':payload.get('customerId'),
         'salespersonIds':people,'styleCodes':codes,'statuses':states,'exchangeRate':str(rate)}
     return {'items':items,
         'total':full_total if paginate else len(items),'page':page,'pageSize':page_size,'summary':full_summary if paginate else aggregate(lines),
-        'filters':filters,'costBasis':COST_BASIS,'generatedAt':datetime.now(TZ).isoformat(),**({'lines':lines} if not paginate else {})}
+        'filters':filters,'missingStyles':missing_styles,'costBasis':COST_BASIS,'generatedAt':datetime.now(TZ).isoformat(),**({'lines':lines} if not paginate else {})}
 
 
 def export(payload):

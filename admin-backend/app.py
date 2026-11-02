@@ -91,6 +91,7 @@ from db import (
     product_code_exists,
     product_sku_exists,
     product_slug_exists,
+    restore_product,
     save_homepage_config,
     update_admin_user,
     update_banner,
@@ -2566,6 +2567,18 @@ def delete_product_route(product_id: int) -> Any:
             }
         )
     return jsonify({"message": "Product deleted", "action": "deleted"})
+
+
+@app.post("/api/admin/products/<int:product_id>/restore")
+@require_auth
+@require_roles("admin", "sales")
+def restore_product_route(product_id: int) -> Any:
+    payload = request.get_json(silent=True) or {}
+    if not isinstance(payload.get("version"), str) or not payload["version"]:
+        return jsonify({"message": "请刷新商品列表后再恢复"}), 400
+    if not restore_product(product_id):
+        return jsonify({"message": "商品不存在或已删除"}), 404
+    return jsonify({"message": "商品已恢复", "action": "restored"})
 
 
 @app.get("/api/admin/banners")

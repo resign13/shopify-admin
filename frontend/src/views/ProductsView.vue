@@ -69,7 +69,7 @@
         <MobileGoodsCard :title="productName(row)" :eyebrow="row.sku" :subtitle="`${row.colorName || '未设置颜色'} · ${row.categoryLabel || '—'}`" :image="row.image" :selectable="mobileSelectionMode" :selected="checked" @select="toggleSelection($event)" @open="preview(row)">
           <template v-if="row.isActive === false" #badge><ElTag type="info" size="small">已停用</ElTag></template>
           <template #footer><span :class="{ 'mobile-goods-short': row.shortageUnits }">{{ row.shortageUnits ? `欠货 ${row.shortageUnits} 件` : `现货 ${row.stock} 件` }}</span><strong class="mobile-goods-price">{{ priceRange(row) }}</strong></template>
-          <template v-if="!mobileSelectionMode" #actions><MobileActionMenu label="更多"><ElButton @click="preview(row)">查看资料</ElButton><ElButton v-if="row.isActive !== false" @click="router.push(`/products/${row.id}/edit`)">编辑商品</ElButton><ElButton @click="copy(row.sku)">复制 SKU</ElButton><ElButton v-if="row.isActive !== false" type="danger" @click="remove(row)">删除商品</ElButton></MobileActionMenu></template>
+          <template v-if="!mobileSelectionMode" #actions><MobileActionMenu label="更多"><ElButton @click="preview(row)">查看资料</ElButton><ElButton v-if="row.isActive !== false" @click="router.push(`/products/${row.id}/edit`)">编辑商品</ElButton><ElButton @click="copy(row.sku)">复制 SKU</ElButton><ElButton v-if="row.isActive !== false" type="danger" @click="remove(row)">删除商品</ElButton><ElButton v-else :disabled="restoringId === row.id" @click="restore(row)">恢复商品</ElButton></MobileActionMenu></template>
         </MobileGoodsCard>
       </template>
       <template #toolbar><span class="small-note">分类顺序优先，表头排序仅调整同类商品</span></template>
@@ -109,7 +109,7 @@
           >编辑</ElButton
         ><ElDropdown
           @command="
-            (command) => (command === 'preview' ? preview(row) : remove(row))
+            (command) => handleProductCommand(command, row)
           "
           ><ElButton link>更多</ElButton
           ><template #dropdown
@@ -117,6 +117,8 @@
               ><ElDropdownItem command="preview">查看资料</ElDropdownItem
               ><ElDropdownItem v-if="row.isActive !== false" command="delete" divided
                 >删除商品</ElDropdownItem
+              ><ElDropdownItem v-else command="restore" :disabled="restoringId === row.id" divided
+                >恢复商品</ElDropdownItem
               ></ElDropdownMenu
             ></template
           ></ElDropdown
@@ -225,6 +227,7 @@ const router = useRouter(),
   item = ref(),
   batchOpen = ref(false),
   saving = ref(false),
+  restoringId = ref(null),
   batch = reactive({ categoryKey: "" });
 const orderedRows = computed(() => sortProductsByCategory(list.rows || [], categories.value));
 const filters = reactive({
@@ -287,18 +290,47 @@ async function preview(row) {
 async function remove(row) {
   if (
     !(await confirm(
-      `删除“${productName(row)}”？此操作会影响商品展示。`,
+      `确定删除“${productName(row)}”（${row.sku}）？存在关联订单或需保留的库存记录时，商品将停用并保留历史数据；否则将直接删除。`,
       "删除商品",
     ))
   )
     return;
   try {
-    await save(`products/${row.id}`, { version: row.version }, "DELETE");
-    ElMessage.success("商品已删除");
+    const result = await save(`products/${row.id}`, { version: row.version }, "DELETE");
+    if (result.action === "hidden") {
+      ElMessage.warning("商品存在关联订单或需保留的库存记录，已停用并保留历史数据；可在停用商品中恢复。");
+    } else if (result.action === "deleted") {
+      ElMessage.success("商品已删除。");
+    } else {
+      ElMessage.info("操作已完成，请刷新商品列表查看状态。");
+    }
     clearSelection();
     list.load();
   } catch (e) {
     notifyError(e);
+  }
+}
+function handleProductCommand(command, row) {
+  if (command === "preview") return preview(row);
+  if (command === "delete") return remove(row);
+  if (command === "restore") return restore(row);
+}
+async function restore(row) {
+  if (restoringId.value !== null) return;
+  if (!(await confirm(
+    `确定恢复“${productName(row)}”（${row.sku}）？恢复后商品可能重新在商城展示，请核对售价和库存。`,
+    "恢复商品",
+  ))) return;
+  restoringId.value = row.id;
+  try {
+    await save(`products/${row.id}/restore`, { version: row.version }, "POST");
+    ElMessage.success("商品已恢复，库存与历史订单保持不变。");
+    clearSelection();
+    list.load();
+  } catch (e) {
+    notifyError(e);
+  } finally {
+    restoringId.value = null;
   }
 }
 async function applyBatch() {

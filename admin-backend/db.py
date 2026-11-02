@@ -1413,6 +1413,42 @@ def delete_product(product_id: int) -> dict[str, Any] | None:
     return {"action": action, "hasRelatedOrders": has_related_orders}
 
 
+def restore_product(product_id: int) -> bool:
+    """Restore an inactive color SKU without changing its inventory or history."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Serialize against category deletion so a restored product cannot
+            # be placed back into a category that is being disabled.
+            cur.execute('SELECT pg_advisory_xact_lock(%s)', (catalog_order.CATEGORY_ORDER_LOCK,))
+            cur.execute(
+                '''SELECT p.is_active, p.product_code, pc.is_active AS category_active
+                   FROM products p JOIN product_categories pc ON pc.id = p.category_id
+                   WHERE p.id = %s FOR UPDATE OF p''',
+                (product_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+            if row['is_active']:
+                raise ValueError('该商品已经启用，请刷新列表')
+            if not row['category_active']:
+                raise ValueError('商品所属分类已停用，请先处理分类后再恢复商品')
+            if row['product_code']:
+                cur.execute(
+                    '''SELECT 1 FROM products WHERE id <> %s AND is_active = TRUE
+                       AND LOWER(product_code) = LOWER(%s) LIMIT 1''',
+                    (product_id, row['product_code']),
+                )
+                if cur.fetchone():
+                    raise ValueError('该商品的颜色商品编码已被其他启用商品使用，请先处理重复编码')
+            cur.execute(
+                'UPDATE products SET is_active = TRUE, updated_at = clock_timestamp() WHERE id = %s',
+                (product_id,),
+            )
+        conn.commit()
+    return True
+
+
 def count_products() -> int:
     row = _fetch_one("SELECT COUNT(*) AS total FROM products WHERE is_active = TRUE")
     return int(row["total"]) if row else 0
