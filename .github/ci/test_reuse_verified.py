@@ -46,6 +46,14 @@ def fixture():
 
 
 class ValidationTest(unittest.TestCase):
+    def test_deploy_gate_accepts_verified_reuse_but_not_skipped_verification(self):
+        workflow = (Path(__file__).resolve().parents[1] / 'workflows' / 'deploy.yml').read_text(encoding='utf-8')
+        deploy = workflow.split('\n  deploy:\n', 1)[1].split('\n    runs-on:', 1)[0]
+        self.assertIn('needs: verify', deploy)
+        self.assertIn("!cancelled() && needs.verify.result == 'success'", deploy)
+        self.assertIn("github.event_name != 'pull_request'", deploy)
+        self.assertIn("!contains(github.event.head_commit.message, '[no deploy]')", deploy)
+
     def test_exact_tested_merge_tree_reused_even_with_squash_sha(self):
         receipt, args = fixture()
         ci.validate(receipt, **args)
