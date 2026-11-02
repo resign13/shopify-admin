@@ -38,7 +38,14 @@ def export(payload):
     if not isinstance(payload, dict):
         raise ValueError('成本筛选格式无效')
     source, params = finance.cost_query(payload)
-    rows = db._fetch_all(source + ' ORDER BY p.style_code LIMIT %s', (*params, MAX_STYLES + 1))
+    # Costs are per style, not per color: keep a style if at least one of its
+    # variants remains active. The editor and historical reports keep their
+    # existing visibility rules; only this workbook has the active-only default.
+    rows = db._fetch_all(
+        'SELECT * FROM (' + source + ') AS export_styles '
+        'WHERE export_styles.is_active IS TRUE ORDER BY export_styles.style_code LIMIT %s',
+        (*params, MAX_STYLES + 1),
+    )
     if len(rows) > MAX_STYLES:
         raise ValueError('成本表单次最多导出 2,000 款，请缩小查询范围后重试；未截断数据')
     book = Workbook()
@@ -67,6 +74,7 @@ def export(payload):
     notes = book.create_sheet('填写说明')
     for text in [
         '商品成本填写说明',
+        '仅导出至少有一个启用商品的款号；全部颜色停用的款号不导出。',
         '只填写“商品成本”表的“新成本 CNY／件”列；每个款号一个成本，全部颜色与尺码共用。',
         '留空不修改；0 是明确零成本；与当前成本相同则跳过。不通过 Excel 清空成本。',
         '填写非负金额，最多两位小数，不使用公式。款号保留文本，不新增或重复款号。',
