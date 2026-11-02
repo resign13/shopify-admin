@@ -96,6 +96,47 @@ class CostExcelTest(unittest.TestCase):
         self.assertEqual(db._fetch_one('SELECT count(*) AS n FROM finance_style_cost_audit')['n'], 1)
         self.assertIsNone(db._fetch_one("SELECT cost_cny FROM finance_style_costs WHERE style_code='OTHER'"))
 
+    def test_export_excludes_only_fully_inactive_styles_without_changing_editor_or_history(self):
+        inactive = self.add_style('INACTIVE')
+        self.add_style('ACTIVE')
+        self.add_style('MIXED')
+        mixed_inactive = self.add_style('MIXED-HIDDEN')
+        self.save_cost(cost='12')
+        original_report = self.query()['summary']
+        old_book = self.book(styleCodes='INACTIVE')
+        db._fetch_one('UPDATE products SET is_active=FALSE WHERE id=%s RETURNING id', (inactive['id'],))
+        db._fetch_one('UPDATE products SET style_code=%s,is_active=FALSE WHERE id=%s RETURNING id',
+                      ('MIXED', mixed_inactive['id']))
+
+        data = self.book()
+        codes = [row[0].value for row in data[excel.SHEET].iter_rows(min_row=2)]
+        self.assertIn('ACTIVE', codes)
+        self.assertIn('MIXED', codes)  # One active and one inactive color.
+        self.assertNotIn('INACTIVE', codes)
+        self.assertNotIn('INACTIVE', [row[0].value for row in data[excel.META].iter_rows(min_row=3)])
+        self.assertIn('全部颜色停用', data['填写说明']['A2'].value)
+        self.assertEqual(self.book(styleCodes='INACTIVE')[excel.SHEET].max_row, 1)
+        self.assertEqual(self.book(styleCodes='INACTIVE,MIXED')[excel.SHEET].max_row, 2)
+        missing = self.book(category='outerwear', missingOnly=True)
+        self.assertEqual({row[0].value for row in missing[excel.SHEET].iter_rows(min_row=2)}, {'ACTIVE', 'MIXED'})
+        # A keyword matching an inactive color still identifies its mixed style.
+        mixed_by_sku = self.book(keyword='MIXED-HIDDEN-black')
+        self.assertEqual(mixed_by_sku[excel.SHEET]['A2'].value, 'MIXED')
+
+        editor = self.call('finance/costs?styleCodes=INACTIVE,MIXED', role='finance').json
+        self.assertEqual({row['styleCode']: row['active'] for row in editor['items']},
+                         {'INACTIVE': False, 'MIXED': True})
+        self.assertEqual(self.query()['summary'], original_report)
+        self.assertEqual(self.call('finance/costs/history?styleCode=GT-2026', role='finance').json['total'], 1)
+        # Previously downloaded templates remain usable under the existing import rules.
+        old_book[excel.SHEET]['D2'] = 5
+        self.assertEqual(self.upload(old_book).json['summary']['update'], 1)
+        # The maximum applies after inactive-only styles have been excluded.
+        with patch.object(excel, 'MAX_STYLES', 3):
+            self.assertEqual(self.post('costs/export', {}).status_code, 200)
+        with patch.object(excel, 'MAX_STYLES', 2):
+            self.assertEqual(self.post('costs/export', {}).status_code, 400)
+
     def test_import_uses_existing_save_timeline_idempotency_and_one_batch_timestamp(self):
         self.add_style('OTHER')
         before = self.stock()
