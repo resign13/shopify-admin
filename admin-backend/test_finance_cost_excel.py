@@ -137,6 +137,28 @@ class CostExcelTest(unittest.TestCase):
         with patch.object(excel, 'MAX_STYLES', 2):
             self.assertEqual(self.post('costs/export', {}).status_code, 400)
 
+    def test_fully_inactive_style_keeps_cost_and_historical_order_accounting(self):
+        self.save_cost(cost='12')
+        original = self.query()['summary']
+        self.assertEqual(original['totalCostCny'], '108.00')
+        for product_id in (1, 2, 3):
+            item = self.call(f'products/{product_id}').json['product']
+            response = self.call(f'products/{product_id}', 'DELETE', {'version': item['version']})
+            self.assertEqual(response.status_code, 200, response.json)
+            self.assertEqual(response.json['action'], 'hidden')
+        editor = self.call('finance/costs?styleCodes=GT-2026', role='finance').json['items']
+        self.assertEqual(len(editor), 1)
+        self.assertFalse(editor[0]['active'])
+        self.assertEqual(editor[0]['costCny'], '12.00')
+        self.assertEqual(self.book(styleCodes='GT-2026')[excel.SHEET].max_row, 1)
+        self.assertEqual(self.query()['summary'], original)
+        self.assertEqual(self.call('finance/costs/history?styleCode=GT-2026', role='finance').json['total'], 1)
+        inactive = self.call('products/1').json['product']
+        restored = self.call('products/1/restore', 'POST', {'version': inactive['version']})
+        self.assertEqual(restored.status_code, 200, restored.json)
+        self.assertEqual(self.book(styleCodes='GT-2026')[excel.SHEET]['A2'].value, 'GT-2026')
+        self.assertEqual(self.query()['summary'], original)
+
     def test_import_uses_existing_save_timeline_idempotency_and_one_batch_timestamp(self):
         self.add_style('OTHER')
         before = self.stock()
