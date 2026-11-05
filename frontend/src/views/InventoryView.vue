@@ -203,7 +203,7 @@
           </div>
         </ElPopover>
       </div>
-      <div v-if="isPhone" class="m-registration" data-testid="mobile-inventory-registration"><nav class="m-registration-sizes" aria-label="登记真实尺码"><button v-for="row in draft" :key="row.sizeCode" :class="{active:mobileRegistrationRow?.sizeCode === row.sizeCode,changed:registrationRowChanged(row)}" @click="registrationSize=row.sizeCode">{{ inventorySizeLabel(row.sizeCode) }}</button></nav><section v-if="mobileRegistrationRow" class="m-registration-card"><div class="m-registration-title"><strong>{{ inventorySizeLabel(mobileRegistrationRow.sizeCode) }} · 登记数量</strong><InventoryInspectionAllowance :row="mobileRegistrationRow"/></div><div class="m-registration-grid"><label v-for="field in mobileStageFields" :key="field.key"><span>{{ field.label }}</span><ElInputNumber :model-value="mobileRegistrationRow[field.key]" :min="field.key === 'stock' ? -2147483648 : 0" :max="2147483647" :precision="0" :controls="false" :aria-label="`${field.label} ${mobileRegistrationRow.sizeCode}`" @update:model-value="value => setMobileRegistration(field.key,value)"/><InventoryQuantityChange :value="mobileRegistrationRow[field.key]" :original="mobileRegistrationRow[field.original]"/></label></div></section></div>
+      <div v-if="isPhone" class="m-registration" data-testid="mobile-inventory-registration"><nav class="m-registration-sizes" aria-label="登记真实尺码"><button v-for="row in draft" :key="row.sizeCode" :class="{active:mobileRegistrationRow?.sizeCode === row.sizeCode,changed:registrationRowChanged(row)}" @click="registrationSize=row.sizeCode">{{ inventorySizeLabel(row.sizeCode) }}</button></nav><section v-if="mobileRegistrationRow" class="m-registration-card"><div class="m-registration-title"><strong>{{ inventorySizeLabel(mobileRegistrationRow.sizeCode) }} · 登记数量</strong><InventoryInspectionAllowance :row="mobileRegistrationRow"/></div><div class="m-registration-grid"><label v-for="field in mobileStageFields" :key="field.key"><span>{{ field.label }}</span><ElInputNumber :model-value="mobileRegistrationRow[field.key]" :min="field.key === 'stock' ? -2147483648 : 0" :max="2147483647" :precision="0" :controls="false" :aria-label="`${field.label} ${mobileRegistrationRow.sizeCode}`" @change="value => setMobileRegistration(field.key,value)"/><InventoryQuantityChange :value="mobileRegistrationRow[field.key]" :original="mobileRegistrationRow[field.original]"/></label></div></section></div>
       <AdaptiveTable v-else :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
         ><ElTableColumn
           prop="sizeCode"
@@ -240,7 +240,7 @@
               :precision="0"
               controls-position="right"
               :aria-label="`待验货 ${row.sizeCode}`"
-              @update:model-value="(value) => moveStage(row, 'inspection', value)"
+              @change="(value) => moveStage(row, 'inspection', value)"
             />
             <InventoryQuantityChange :value="row.pendingInspection" :original="row.originalInspection" />
           </div></template></ElTableColumn
@@ -252,7 +252,7 @@
           ><template #default="{ row }"
             ><div class="registration-quantity"><ElInputNumber
               :model-value="row.pendingInbound"
-              @update:model-value="(value) => moveStage(row, 'inbound', value)"
+              @change="(value) => moveStage(row, 'inbound', value)"
               :min="0"
               :precision="0"
               controls-position="right"
@@ -524,7 +524,7 @@ import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { inventorySizeLabel } from "../utils/inventorySizes";
-import { registrationError, moveProcurementStage, defectiveReturnPreview } from "../utils/inventoryStages";
+import { registrationError, moveProcurementStage, defectiveReturnPreview, procurementTargets } from "../utils/inventoryStages";
 import { sortProductsByCategory } from "../utils/catalogOrder";
 import { queryToSortState } from "../utils/tableSort";
 import { ElMessage } from "element-plus";
@@ -709,9 +709,12 @@ async function moveStage(row, stage, value) {
   const target = stage === "inspection" ? "pendingInspection" : "pendingInbound";
   const source = stage === "inspection" ? "contractPending" : "pendingInspection";
   const old = row[target];
-  // InputNumber updates the model while typing, before its change event. Use
-  // the last accepted model value, not the component's potentially stale value.
+  // Commit the complete input on change (blur/Enter/step), never each digit.
+  // Otherwise typing 68 may accept 6, reject 68, and silently leave a transfer of 6.
   if (!Number.isInteger(value) || value < 0 || value > 2147483647) {
+    row[target] = value;
+    await nextTick();
+    row[target] = old;
     error.value = "阶段数量须为范围内的非负整数";
     return;
   }
@@ -748,25 +751,9 @@ async function submit() {
           .filter((s) => s.contractPending !== s.originalPending)
           .map((s) => [s.sizeCode, s.contractPending]),
       ),
-      pendingInspectionBySize: Object.fromEntries(
-        draft.value
-          .filter((s) => s.pendingInspection !== s.originalInspection)
-          .map((s) => [s.sizeCode, s.pendingInspection]),
-      ),
-      pendingInboundBySize: Object.fromEntries(
-        draft.value
-          .filter((s) => s.pendingInbound !== s.originalInbound)
-          .map((s) => [s.sizeCode, s.pendingInbound]),
-      ),
+      ...procurementTargets(draft.value),
       defectivePendingBySize: Object.fromEntries(draft.value.filter((s) => s.defectivePending !== s.originalDefective).map((s) => [s.sizeCode, s.defectivePending])),
       temporaryInboundBySize: Object.fromEntries(draft.value.filter((s) => s.temporaryInbound !== s.originalTemporary).map((s) => [s.sizeCode, s.temporaryInbound])),
-      // A phone user may arrive then qualify the same quantity, leaving inspection
-      // equal to its original value. Send both final procurement targets so the
-      // server does not infer a different inspection balance from a partial map.
-      ...(isPhone.value ? {
-        pendingInspectionBySize: Object.fromEntries(draft.value.map(s => [s.sizeCode, s.pendingInspection])),
-        pendingInboundBySize: Object.fromEntries(draft.value.map(s => [s.sizeCode, s.pendingInbound])),
-      } : {}),
     });
     markClean();
     editing.value = false;

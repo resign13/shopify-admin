@@ -50,7 +50,11 @@ def internal(total, ledger=None, row=None):
     row = row or {}
     received = ledger.get('normal_received')
     if received is None:
-        received = max(0, int(total)-int(row.get('contract_pending',total)), int(row.get('pending_inspection',0))+int(row.get('pending_inbound',0))) if total else 0
+        # Inspection/qualified balances can predate the first purchase contract.
+        # They are not evidence that this contract has already received goods.
+        # Once established, the persisted counter remains authoritative (including
+        # after manual pending adjustments, receipt and defective returns).
+        received = max(0, int(total)-int(row.get('contract_pending',total))) if total else 0
     result = {'originalContractQuantity': int(total), 'overdeliveryLimit': limit,
             'overdeliveryUsed': used, 'overdeliveryRemaining': max(0, limit-used),
             'overdeliveryInspection': int(ledger.get('inspection', 0)),

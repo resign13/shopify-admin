@@ -2,6 +2,16 @@ import { errorMessage } from './adminErrors.js';
 
 export const MAX_QUANTITY = 2147483647;
 
+// Send paired final targets for a transfer, even if one returns to its original
+// value. Omitting it makes the server infer another transfer from a partial map.
+export function procurementTargets(rows) {
+  const changed = rows.filter(row => row.pendingInspection !== row.originalInspection || row.pendingInbound !== row.originalInbound);
+  return {
+    pendingInspectionBySize: Object.fromEntries(changed.map(row => [row.sizeCode, row.pendingInspection])),
+    pendingInboundBySize: Object.fromEntries(changed.map(row => [row.sizeCode, row.pendingInbound])),
+  };
+}
+
 export function registrationError(rows) {
   for (const row of rows) {
     if (!Number.isInteger(row.stock) || row.stock < -2147483648 || row.stock > MAX_QUANTITY)
