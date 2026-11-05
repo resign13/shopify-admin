@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { registrationError, moveProcurementStage, defectiveReturnPreview, procurementPreview } from './inventoryStages.js';
+import { registrationError, moveProcurementStage, defectiveReturnPreview, procurementPreview, procurementTargets } from './inventoryStages.js';
 const size = () => ({ sizeCode: 'M', stock: -5, contractPending: 10, pendingInspection: 8, pendingInbound: 4, temporaryInbound: 7, defectivePending: 3 });
 
 test('defect and temporary quantity inputs use right-side integer step controls', () => {
@@ -96,4 +96,45 @@ test('stage edits do not silently discard manual contract adjustments', () => {
   const base=contractBase();const row={...base,registrationBase:base,contractPending:101,pendingInspection:10,defectivePending:0};
   assert.match(moveProcurementStage(row,'inspection',10,0),/先单独保存/);
   assert.equal(row.contractPending,101);assert.equal(row.pendingInspection,0);
+});
+
+test('CS5402 complete targets debit 60/68 exactly from a 70-piece new contract', () => {
+  const base={...contractBase(),contractPending:70,originalContractQuantity:70,overdeliveryLimit:10};
+  const row={...base,registrationBase:base,defectivePending:0};
+  for (const quantity of [60,68,59,0,70]) {
+    const old=row.pendingInspection;
+    row.pendingInspection=quantity;
+    assert.equal(moveProcurementStage(row,'inspection',quantity,old),'');
+    assert.equal(row.contractPending,70-quantity);
+    assert.equal(row.overdeliveryUsed,0);
+  }
+});
+
+test('stage inputs commit full values on change on desktop and mobile', () => {
+  const view=readFileSync(new URL('../views/InventoryView.vue',import.meta.url),'utf8');
+  assert.doesNotMatch(view,/@update:model-value="[^"\n]*(moveStage|setMobileRegistration)/);
+  assert.match(view,/@change="\(value\) => moveStage\(row, 'inspection', value\)"/);
+  assert.match(view,/@change="value => setMobileRegistration\(field.key,value\)"/);
+});
+
+test('arrival then qualification sends both final targets on desktop and mobile', () => {
+  const base=contractBase();
+  const row={...base,sizeCode:'M',originalInspection:0,originalInbound:0,registrationBase:base,defectivePending:0};
+  row.pendingInspection=60;
+  assert.equal(moveProcurementStage(row,'inspection',60,0),'');
+  row.pendingInbound=60;
+  assert.equal(moveProcurementStage(row,'inbound',60,0),'');
+  assert.equal(row.pendingInspection,0);
+  assert.equal(row.contractPending,40);
+  assert.deepEqual(procurementTargets([row]),{pendingInspectionBySize:{M:0},pendingInboundBySize:{M:60}});
+  const view=readFileSync(new URL('../views/InventoryView.vue',import.meta.url),'utf8');
+  assert.match(view,/\.\.\.procurementTargets\(draft\.value\)/);
+});
+
+test('paired targets preserve qualification reversals and omit untouched sizes', () => {
+  const rows=[
+    {sizeCode:'M',originalInspection:5,originalInbound:20,pendingInspection:25,pendingInbound:0},
+    {sizeCode:'L',originalInspection:0,originalInbound:0,pendingInspection:0,pendingInbound:0},
+  ];
+  assert.deepEqual(procurementTargets(rows),{pendingInspectionBySize:{M:25},pendingInboundBySize:{M:0}});
 });

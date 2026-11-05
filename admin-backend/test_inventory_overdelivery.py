@@ -170,6 +170,102 @@ class OverdeliveryTest(unittest.TestCase):
         self.assertEqual(self.size()['originalContractQuantity'],100)
         self.assertEqual(self.size()['overdeliveryUsed'],15)
 
+    def test_legacy_stages_do_not_spend_first_contract_quantity(self):
+        # CS5402: thirteen old inspection pieces existed before a new 70-piece
+        # contract. Qualifying/receiving those old pieces must not consume it.
+        db._fetch_one('UPDATE product_size_prices SET contract_pending=0,pending_inspection=0,pending_inbound=0 WHERE product_id=1 RETURNING id')
+        db._fetch_one("UPDATE product_size_prices SET pending_inspection=13 WHERE product_id=1 AND size_code='M' RETURNING id")
+        body={'requestId':str(uuid.uuid4()),'partyA':'采购','partyB':'工厂','contractNo':'LEGACY-CS5402',
+              'styleImage':'/uploads/fixture.jpg','sizeChartImage':'/uploads/fixture.jpg','deliveryDate':'2026-11-20',
+              'items':[{'productId':1,'quantities':{'M':70}}]}
+        result=self.call('contracts','POST',body)
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(70,0))
+        self.assertEqual(self.save(pendingInboundBySize={'M':13}).status_code,200)
+        self.assertEqual(self.receive().status_code,200)
+        self.assertEqual(self.size()['contractReceived'],0)
+        # Absolute target corrections are reversible, and never charge old stock.
+        for amount, pending in [(60,10),(68,2),(0,70),(70,0)]:
+            result=self.save(pendingInspectionBySize={'M':amount})
+            self.assertEqual(result.status_code,200,result.json)
+            self.assertEqual((self.size()['pendingInspection'],self.size()['contractPending'],self.size()['contractReceived']),(amount,pending,amount))
+
+    def test_missing_counter_uses_contract_balance_not_legacy_inspection(self):
+        for inspection,qualified in [(13,0),(0,13),(7,6)]:
+            row={'contract_pending':70,'pending_inspection':inspection,'pending_inbound':qualified}
+            self.assertEqual(policy.internal(70,{'normal_received':None},row)['contractReceived'],0)
+            self.assertEqual(policy.internal(70,{'normal_received':20},row)['contractReceived'],20)
+        self.assertEqual(policy.internal(70,None,{'contract_pending':60,'pending_inspection':13})['contractReceived'],10)
+
+    def test_contract_extension_preserves_real_received_counter(self):
+        contract=self.prepare({'M':70})
+        self.assertEqual(self.save(pendingInspectionBySize={'M':20}).status_code,200)
+        body={**contract,'requestId':str(uuid.uuid4()),'revision':contract['revision']}
+        body['items'][0]['quantities']['M']=100
+        result=self.call('contracts/1','PUT',body)
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual((self.size()['contractReceived'],self.size()['contractPending']),(20,80))
+
+    def test_contract_adds_to_pending_and_does_not_count_other_color_or_old_qualified(self):
+        db._fetch_one("UPDATE product_size_prices SET contract_pending=12,pending_inspection=7,pending_inbound=6 WHERE product_id=1 AND size_code='M' RETURNING id")
+        other=db.get_product_by_id(2,include_contract_pending=True)
+        body={'requestId':str(uuid.uuid4()),'partyA':'采购','partyB':'工厂','contractNo':'ADDITIVE',
+              'styleImage':'/uploads/fixture.jpg','sizeChartImage':'/uploads/fixture.jpg','deliveryDate':'2026-11-20',
+              'items':[{'productId':1,'quantities':{'M':70,'L':10}}]}
+        result=self.call('contracts','POST',body)
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(82,0))
+        self.assertEqual((self.size()['pendingInspection'],self.size()['pendingInbound']),(7,6))
+        self.assertEqual(db.get_product_by_id(2,include_contract_pending=True),other)
+        # Editing unrelated stock must not initialize the counter from old WIP.
+        self.assertEqual(self.save(sizeStocks={'M':20}).status_code,200)
+        self.assertEqual(self.size()['contractReceived'],0)
+        cancel=self.call('contracts/1/cancel','POST',{'revision':result.json['item']['revision']})
+        self.assertEqual(cancel.status_code,200,cancel.json)
+        self.assertEqual(self.size()['contractPending'],12)
+
+    def test_existing_null_counter_and_repaired_counter_survive_registration(self):
+        self.prepare({'M':70})
+        db._fetch_one("UPDATE product_size_prices SET pending_inspection=13 WHERE product_id=1 AND size_code='M' RETURNING id")
+        db._fetch_one("UPDATE inventory_overdelivery SET normal_received=NULL WHERE product_id=1 AND size_code='M' RETURNING product_id")
+        self.assertEqual(self.size()['contractReceived'],0)
+        self.assertEqual(self.save(sizeStocks={'M':20}).status_code,200)
+        self.assertEqual(self.size()['contractReceived'],0)
+        self.assertEqual(self.save(pendingInboundBySize={'M':13}).status_code,200)
+        self.assertEqual(self.receive().status_code,200)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':68}).status_code,200)
+        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(2,68))
+
+    def test_combined_arrival_and_qualification_matches_preview_and_is_atomic(self):
+        self.prepare({'M':70,'L':7})
+        before=self.detail()
+        # Paired absolute targets are essential when inspection ends at zero.
+        result=self.save(contractPendingBySize={'M':10},pendingInspectionBySize={'M':0},pendingInboundBySize={'M':60})
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual((self.size()['contractPending'],self.size()['pendingInspection'],self.size()['pendingInbound'],self.size()['contractReceived']),(10,0,60,60))
+        saved=self.detail()
+        result=self.save(pendingInspectionBySize={'M':8,'L':9},pendingInboundBySize={'M':60,'L':0})
+        self.assertEqual(result.status_code,400)
+        self.assertEqual(self.detail(),saved)
+        stale=self.call('inventory/1','PUT',{'version':before['version'],'sizeStocks':{},'pendingInspectionBySize':{'M':0},'pendingInboundBySize':{'M':68}})
+        self.assertEqual(stale.status_code,409)
+        self.assertEqual(self.detail(),saved)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':0},pendingInboundBySize={'M':0}).status_code,200)
+        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(70,0))
+
+    def test_first_contract_failure_rolls_back_initialized_counters(self):
+        db._fetch_one('UPDATE product_size_prices SET contract_pending=0 WHERE product_id=1 RETURNING id')
+        before=self.detail()
+        ledgers=db._fetch_all('SELECT * FROM inventory_overdelivery WHERE product_id=1 ORDER BY size_code')
+        body={'requestId':str(uuid.uuid4()),'partyA':'采购','partyB':'工厂','contractNo':'ROLLBACK',
+              'styleImage':'/uploads/fixture.jpg','sizeChartImage':'/uploads/fixture.jpg','deliveryDate':'2026-11-20',
+              'items':[{'productId':1,'quantities':{'M':70}}]}
+        with patch('private_media.bind_current',side_effect=ValueError('attachment validation failed')):
+            result=self.call('contracts','POST',body)
+        self.assertEqual(result.status_code,400,result.json)
+        self.assertEqual(self.detail(),before)
+        self.assertEqual(db._fetch_all('SELECT * FROM inventory_overdelivery WHERE product_id=1 ORDER BY size_code'),ledgers)
+
     def test_empty_product_deletion_preserves_cumulative_history(self):
         self.prepare();self.save(pendingInspectionBySize={'M':115})
         self.save(pendingInspectionBySize={'M':0},sizeStocks={'M':0,'L':0,'Tall XL':0})

@@ -183,9 +183,15 @@ def apply_delta(before, after):
         used = int(ledger.get((pid, size), {}).get('used', 0))
         if used > max(0, new_total)*15//100:
             raise ValueError('合同减少后不足以覆盖已使用的15%超量额度，请先核对累计超量记录')
-        received = ledger.get((pid,size),{}).get('normal_received') or 0
+        state = inventory_overdelivery.internal(totals.get((pid, size), 0), ledger.get((pid, size)), row)
+        received = state['contractReceived']
         if new_total < received:
             raise ValueError('合同减少后小于已累计接收的合同内数量，请先核对到货记录')
+        # Establish provenance against the PRE-change contract, not legacy
+        # inspection stock left over when this contract is first introduced.
+        if ledger.get((pid, size), {}).get('normal_received') is None:
+            with db.get_connection() as conn, conn.cursor() as cur:
+                inventory_overdelivery.save(cur, pid, size, state)
         db._fetch_one('UPDATE product_size_prices SET contract_pending=%s WHERE product_id=%s AND size_code=%s RETURNING id',(value,pid,size))
         db._fetch_one('UPDATE products SET updated_at=clock_timestamp() WHERE id=%s RETURNING id',(pid,))
 
