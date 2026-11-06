@@ -90,6 +90,13 @@
       <strong>已选 {{ selected.length }} 个订单</strong
       ><ElButton text @click="clear">清空选择</ElButton
       >
+      <div v-if="!auth.isWarehouse" class="order-selection-totals" data-testid="order-selection-totals" aria-live="polite">
+        <template v-if="selectionTotals">
+          <div data-testid="selection-goods-total"><span>商品总金额</span><strong v-for="item in selectionTotals" :key="item.currency">{{ formatSelectionAmount(item.goods, item.currency) }}</strong></div>
+          <div data-testid="selection-payable-total"><span>应付总金额</span><strong v-for="item in selectionTotals" :key="item.currency">{{ formatSelectionAmount(item.payable, item.currency) }}</strong></div>
+        </template>
+        <span v-else>金额暂不可用，请刷新列表</span>
+      </div>
     </div>
     <div v-if="isPhone && mobileSelection" class="m-order-batch" data-testid="mobile-order-selection"><strong>已选 {{ selected.length }} 笔</strong><ElButton text @click="table?.selectCurrentPage()">选择本页</ElButton><ElButton text @click="clear">清空</ElButton><ElButton text @click="mobileSelection=false; clear()">完成</ElButton><ElButton type="primary" :disabled="!canExportPage || !selected.length" :loading="exporting" @click="exportOrders('export')">导出</ElButton></div>
     <DataTable
@@ -196,6 +203,7 @@ import { errorMessage } from '../utils/adminErrors.js';
 import { useResponsive } from "../composables/responsive";
 import { createOrderExportController } from "../utils/exportDownload";
 import { orderExportIds } from "../utils/orderExportScope";
+import { orderSelectionTotals, formatSelectionAmount } from "../utils/orderSelectionTotals";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import MobileActionMenu from "../components/MobileActionMenu.vue";
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
@@ -239,6 +247,7 @@ const auth = useAdminAuthStore(),
   detailId = ref();
 const exportState = reactive({ busy: false, phase: "", position: null });
 const exporting = computed(() => exportState.busy);
+const selectionTotals = computed(() => orderSelectionTotals(selected.value));
 const exportScopeLabel = computed(() => selected.value.length ? `已选 ${selected.value.length} 笔订单` : `本页 ${list.rows.length} 笔订单`);
 const canExportPage = computed(() => !list.loading && !list.error && list.rows.length > 0 && orderExportIds(selected.value, list.rows).length > 0);
 const orderExport = createOrderExportController(exportState);
@@ -436,6 +445,10 @@ onMounted(async () => {
 
 <style scoped>
 .order-export-progress { margin: 0 0 12px; color: #516783; font-size: 14px; }
+.batch-bar { flex-wrap: wrap; }
+.order-selection-totals { margin-left: auto; display: flex; flex-wrap: wrap; gap: 8px 36px; justify-content: flex-end; color: #334e78; font-size: 13px; }
+.order-selection-totals > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 10px; }
+.order-selection-totals strong { color: #17355e; font-variant-numeric: tabular-nums; white-space: nowrap; }
 @media(max-width:767px){
 .m-order-tabs :deep(.m-order-status-select .el-select__selected-item){font-size:12px!important;font-weight:400;color:#516783}
 :global(.m-order-status-popper.el-popper){max-width:calc(100vw - 24px)}
