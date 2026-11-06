@@ -17,7 +17,7 @@ export function isPersonalStyleScope(query, isSales) {
 
 // Export the last successfully applied query, never draft controls or pagination.
 export function stylePerformanceExportQuery(appliedQuery) {
-  const keys = ["dateFrom", "dateTo", "country", "style", "salespersonId",
+  const keys = ["dateFrom", "dateTo", "country", "style", "statuses", "salespersonId",
     "keyword", "category", "risk", "sort", "direction", "velocityWindow"];
   return Object.fromEntries(keys.filter(key => appliedQuery[key] != null && appliedQuery[key] !== "")
     .map(key => [key, appliedQuery[key]]));

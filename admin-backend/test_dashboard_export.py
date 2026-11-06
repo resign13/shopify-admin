@@ -41,6 +41,17 @@ class DashboardExportTest(unittest.TestCase):
         return [dict(zip(columns, row)) for row in sheet.iter_rows(
             min_row=dashboard_export.HEADER_ROW + 1, max_row=sheet.max_row - 1, values_only=True)]
 
+    def test_multiple_statuses_and_styles_export(self):
+        coat = self.product('COAT')
+        self.order(coat, 4, status='shipped')
+        self.order(coat, 9, status='allocated')
+        query = dict(style='GT-2026,COAT', statuses='paid,shipped')
+        data = self.data(**query)
+        rows = self.records(self.workbook(**query))
+        self.assertEqual(sum(r['销量（件）'] for r in rows), data['summary']['units'])
+        self.assertEqual(data['summary']['units'], 7)
+        self.assertEqual({r['款号'] for r in rows}, {'GT-2026','COAT'})
+
     def test_full_filtered_result_not_page_with_formats_totals_and_beijing_time(self):
         for index in range(12):
             self.product(f'EXTRA-{index:02}', stock=index)

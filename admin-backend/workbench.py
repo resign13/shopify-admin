@@ -17,6 +17,15 @@ import sales_ownership
 SHANGHAI = timezone(timedelta(hours=8))
 
 
+def filter_values(args, key):
+    raw = args.get(key) or ''
+    values = raw if isinstance(raw, (list, tuple)) else str(raw).split(',')
+    result = list(dict.fromkeys(str(v).strip() for v in values if str(v).strip() not in {'', 'all'}))
+    if key == 'statuses' and any(v not in db.ORDER_STATUSES for v in result):
+        raise ValueError('订单状态无效')
+    return result
+
+
 def _style_code_sql(alias: str = "p") -> str:
     """SQL expression shared by dashboard aggregations and product filters."""
     return f"""
@@ -50,9 +59,9 @@ def _dashboard_window(args, default_days: int = 30):
 def _style_catalog_parts(args, style_code: str | None = None):
     style_sql = _style_code_sql('p')
     where, params = ['(p.is_active = TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))'], []
-    if args.get('style') not in {None, '', 'all'}:
-        where.append(f"({style_sql}=%s OR COALESCE(NULLIF(p.product_code,''),p.sku)=%s)")
-        params.extend([args['style']] * 2)
+    if styles := filter_values(args, 'style'):
+        where.append(f"({style_sql}=ANY(%s) OR COALESCE(NULLIF(p.product_code,''),p.sku)=ANY(%s))")
+        params.extend([styles] * 2)
     if args.get('category') and args.get('category') != 'all':
         where.append('pc.category_key=%s')
         params.append(args['category'])
@@ -102,6 +111,8 @@ def _style_sales_join(args, start: date, end: date, *, days: int | None = None):
     if args.get('country') and args.get('country') != 'all':
         clauses.append('o.country=%s')
         params.append(args['country'])
+    if statuses := filter_values(args, 'statuses'):
+        clauses.append('o.status=ANY(%s)'); params.append(statuses)
     owner_clause, owner_params = sales_ownership.clause(args.get('_ownerId'))
     clauses.append(owner_clause); params.extend(owner_params)
     return ' AND '.join(clauses), params
@@ -923,6 +934,8 @@ def order_where(args, status=True, owner_id=None):
     where.append(owner_clause); params.extend(owner_params)
     if status and args.get('status') not in {None, '', 'all'}:
         where.append('o.status=%s'); params.append(args['status'])
+    if status and (statuses := filter_values(args, 'statuses')):
+        where.append('o.status=ANY(%s)'); params.append(statuses)
     keyword = str(args.get('keyword') or '').strip()
     if keyword:
         # EXISTS keeps one row per order even when several sizes/colors match.
@@ -938,9 +951,9 @@ def order_where(args, status=True, owner_id=None):
     if args.get('category') not in {None, '', 'all'}:
         product_conditions.append('c.category_key=%s')
         params.append(args['category'])
-    if args.get('style') not in {None, '', 'all'}:
-        product_conditions.append(f"({_style_code_sql('p')}=%s OR COALESCE(NULLIF(p.product_code,''),i.sku)=%s)")
-        params.extend([args['style']] * 2)
+    if styles := filter_values(args, 'style'):
+        product_conditions.append(f"({_style_code_sql('p')}=ANY(%s) OR COALESCE(NULLIF(p.product_code,''),i.sku)=ANY(%s))")
+        params.extend([styles] * 2)
     if product_conditions:
         where.append('EXISTS(SELECT 1 FROM order_items i JOIN products p ON p.id=i.product_id '
                      'JOIN product_categories c ON c.id=p.category_id WHERE i.order_id=o.id AND '
@@ -970,6 +983,8 @@ def orders_page(args, owner_id=None):
     counts = db._fetch_all('SELECT o.status,COUNT(*) AS count FROM orders o JOIN store_users su ON su.id=o.store_user_id WHERE '+where+' GROUP BY o.status', tuple(params))
     status_counts = {row['status']: row['count'] for row in counts}
     total = status_counts.get(args['status'], 0) if args.get('status') not in {None,'','all'} else sum(status_counts.values())
+    if statuses := filter_values(args, 'statuses'):
+        total = sum(n for key,n in status_counts.items() if key in statuses and (args.get('status') in {None,'','all'} or key == args['status']))
     ids = order_ids(args, size, (page-1)*size, owner_id=owner_id)
     items = db.list_orders(order_ids=ids)
     positions = {v:i for i,v in enumerate(ids)}
@@ -1033,9 +1048,9 @@ def dashboard(args):
     def period(a,b):
         where, params=order_where({**dict(args),'dateFrom':a.isoformat(),'dateTo':b.isoformat()})
         line_clause=''
-        if args.get('style') not in {None,'','all'}:
-            line_clause += f" AND ({_style_code_sql('p')}=%s OR COALESCE(NULLIF(p.product_code,''),i.sku)=%s)"
-            params.extend([args['style']] * 2)
+        if styles := filter_values(args, 'style'):
+            line_clause += f" AND ({_style_code_sql('p')}=ANY(%s) OR COALESCE(NULLIF(p.product_code,''),i.sku)=ANY(%s))"
+            params.extend([styles] * 2)
         if args.get('category') not in {None,'','all'}:
             line_clause += ' AND EXISTS(SELECT 1 FROM product_categories c WHERE c.id=p.category_id AND c.category_key=%s)'
             params.append(args['category'])
@@ -1057,6 +1072,8 @@ def dashboard(args):
     global_counts=db._fetch_all('SELECT status,COUNT(*) AS count FROM orders o WHERE '+owner_clause+' GROUP BY status', tuple(owner_params))
     inventory={} if args.get('_ownerId') is not None else db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COALESCE(SUM(s.defective_pending),0) AS "defectivePending",COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0))')
     filtered_counts=orders_page({**dict(args),'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'page':1,'pageSize':25})
+    if statuses := filter_values(args, 'statuses'):
+        filtered_counts['statusCounts'] = {k:v for k,v in filtered_counts['statusCounts'].items() if k in statuses}
     return {'metrics':metrics,'previous':previous,'trend':points,
             'topProducts':[{**r,'amount':float(r['amount'])} for r in top],
             'topProductsByAmount':[{**r,'amount':float(r['amount'])} for r in top_amount],
