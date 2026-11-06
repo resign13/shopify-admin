@@ -8,10 +8,12 @@ import unittest
 import uuid
 from unittest.mock import patch
 from openpyxl import load_workbook
+from psycopg import sql
 from werkzeug.security import generate_password_hash
 import test_orders as helpers
 from test_workbench import db, application
 import finance
+import finance_order_styles
 
 DATABASE_COST_CLOCK=finance.cost_save_time
 
@@ -283,7 +285,8 @@ class FinanceTest(unittest.TestCase):
         self.assertEqual((history['items'][0]['oldCostCny'],history['items'][0]['costCny']),('15.00','0.00'))
         self.assertEqual((history['items'][1]['oldCostCny'],history['items'][1]['costCny']),('10.00','15.00'))
         row=self.call('finance/costs',role='finance').json['items'][0]
-        self.assertEqual(set(row),{'styleCode','costCny','version','updatedAt','active'})
+        self.assertEqual(set(row),{'styleCode','costCny','version','updatedAt','active','historicalOnly'})
+        self.assertFalse(row['historicalOnly'])
         self.assertEqual(row['costCny'],'0.00')
         self.assertEqual(self.call('finance/costs?keyword=长标题测试',role='finance').json['total'],0)
         self.assertEqual(self.call('finance/costs?keyword=GT-2026-1',role='finance').json['total'],1)
@@ -294,18 +297,98 @@ class FinanceTest(unittest.TestCase):
 
     def test_cost_and_history_survive_removed_sizes_deleted_color_and_style_changes(self):
         self.save_cost(cost='19')
+        original=self.query()
         with db.get_connection() as conn:
             conn.execute("DELETE FROM product_size_prices WHERE product_id=1 AND size_code='M'")
             conn.execute("UPDATE products SET style_code='OTHER-STYLE' WHERE id=2")
             conn.execute('DELETE FROM products WHERE id=3')
         data=self.query()
-        self.assertEqual(data['summary']['knownCostCny'],'114.00')  # 6 pieces remain GT-2026, no size dependency
-        self.assertEqual(data['summary']['missingQuantity'],3)
+        self.assertEqual(data['summary'],original['summary'])
+        self.assertEqual(data['items'],original['items'])
         self.assertEqual(self.call('finance/costs/history?styleCode=OTHER-STYLE',role='finance').json['total'],0)
         self.assertEqual(self.call('finance/costs/history?styleCode=GT-2026',role='finance').json['total'],1)
-        with db.get_connection() as conn:conn.execute("UPDATE products SET style_code='OTHER-STYLE' WHERE id=1")
+        with db.get_connection() as conn:
+            conn.execute("UPDATE products SET style_code='OTHER-STYLE' WHERE id=1")
+            finance_order_styles.migrate(conn.cursor())
         self.assertEqual(self.call('finance/costs/history?styleCode=GT-2026',role='finance').json['total'],1)
-        self.assertEqual(self.query()['summary']['missingQuantity'],9)
+        self.assertEqual(self.query()['items'],original['items'])
+
+    def test_history_only_style_is_searchable_and_first_cost_uses_frozen_orders(self):
+        db._fetch_one("UPDATE products SET style_code='NEW-STYLE' RETURNING id")
+        self.assertIn('GT-2026',self.call('finance/options',role='finance').json['styles'])
+        row=self.call('finance/costs?keyword=GT-2026',role='finance').json['items'][0]
+        self.assertEqual((row['styleCode'],row['active'],row['historicalOnly']),('GT-2026',False,True))
+        self.assertEqual(self.call('finance/costs?category=denim&styleCodes=GT-2026',role='finance').json['total'],0)
+        initial=self.post('costs/preview',self.change(cost='12')).json
+        self.assertTrue(initial['changes'][0]['initialCost'])
+        self.assertEqual(initial['affectedOrders'],3)
+        self.assertEqual(self.post('costs/preview',self.change(code='NEW-STYLE',cost='5')).json['affectedOrders'],0)
+        self.save_cost(cost='12',at='2026-09-19T12:00:00+08:00')
+        old=self.query(styleCodes=['GT-2026'])
+        self.assertEqual(old['summary']['totalCostCny'],'108.00')
+        self.assertTrue(all(line['costMatch']=='首次成本补算' for item in old['items'] for line in item['lines']))
+        self.assertEqual(self.query(styleCodes=['NEW-STYLE'])['summary']['quantity'],0)
+        self.save_cost(cost='18',at='2026-09-20T12:00:00+08:00')
+        self.assertEqual(self.query(styleCodes=['GT-2026'])['items'],old['items'])
+        excel=self.post('costs/export',{})
+        self.assertEqual(excel.status_code,200,excel.json)
+        with_book=load_workbook(BytesIO(excel.data))
+        self.assertEqual([row[0].value for row in with_book['商品成本'].iter_rows(min_row=2)],['NEW-STYLE'])
+        with_book.close()
+        report=self.post('reports/export',{'dateFrom':'2026-09-01','dateTo':'2026-09-30','exchangeRate':'7','styleCodes':['GT-2026']})
+        self.assertEqual(report.status_code,200,report.json)
+        book=load_workbook(BytesIO(report.data))
+        self.assertEqual({row[5].value for row in book['订单明细'].iter_rows(min_row=2)},{'GT-2026'})
+        book.close()
+
+    def test_order_rebuild_remove_and_readd_preserve_binding_but_reorder_uses_current_style(self):
+        response=self.call('orders','POST',self.payload())
+        self.assertEqual(response.status_code,200,response.json)
+        oid=response.json['order']['id']
+        db._fetch_one("UPDATE products SET style_code='NEW-STYLE' WHERE id=1 RETURNING id")
+        db._fetch_one("UPDATE products SET style_code='ADDED-STYLE' WHERE id=2 RETURNING id")
+
+        def save_lines(lines):
+            body=self.call(f'orders/{oid}').json['order']
+            response=self.call(f'orders/{oid}/details','PUT',{**body,'items':lines})
+            self.assertEqual(response.status_code,200,response.json)
+
+        original={'productId':1,'sizeCode':'Tall XL','quantity':2,'unitPrice':25}
+        added={'productId':2,'sizeCode':'M','quantity':1,'unitPrice':20}
+        save_lines([original,added])
+        save_lines([added])
+        save_lines([original,added])
+        current={row['product_id']:row['style_code'] for row in db._fetch_all(
+            'SELECT product_id,style_code FROM finance_order_style_bindings WHERE order_id=%s',(oid,))}
+        self.assertEqual(current,{1:'GT-2026',2:'ADDED-STYLE'})
+
+        draft=self.call(f'orders/{oid}/reorder-draft')
+        self.assertEqual(draft.status_code,200,draft.json)
+        result=self.call('orders','POST',{**draft.json['draft'],'sourceOrderId':oid,
+            'requestId':str(uuid.uuid4()),'ownerConfirmed':True})
+        self.assertEqual(result.status_code,200,result.json)
+        new_id=result.json['order']['id']
+        new={row['product_id']:row['style_code'] for row in db._fetch_all(
+            'SELECT product_id,style_code FROM finance_order_style_bindings WHERE order_id=%s',(new_id,))}
+        self.assertEqual(new,{1:'NEW-STYLE',2:'ADDED-STYLE'})
+
+    def test_storefront_insert_without_finance_privileges_captures_binding(self):
+        role=sql.Identifier('style_binding_store_'+uuid.uuid4().hex[:10])
+        with db._connect() as conn:
+            try:
+                conn.execute(sql.SQL('CREATE ROLE {} NOLOGIN').format(role))
+                conn.execute(sql.SQL('GRANT USAGE ON SCHEMA public TO {}').format(role))
+                conn.execute(sql.SQL('GRANT SELECT,INSERT ON order_items TO {}').format(role))
+                conn.execute(sql.SQL('GRANT USAGE ON SEQUENCE order_items_id_seq TO {}').format(role))
+                conn.execute(sql.SQL('SET LOCAL ROLE {}').format(role))
+                self.assertFalse(conn.execute("SELECT has_table_privilege(current_user,'finance_order_style_bindings','SELECT,INSERT') AS allowed").fetchone()['allowed'])
+                conn.execute("""INSERT INTO order_items(order_id,product_id,product_name,sku,size_code,quantity,unit_price,total_price)
+                    VALUES(1,3,'Store fixture','STORE-FIXTURE','M',1,10,10) RETURNING id""")
+                conn.execute('RESET ROLE')
+                self.assertEqual(conn.execute('SELECT style_code FROM finance_order_style_bindings WHERE order_id=1 AND product_id=3').fetchone()['style_code'],'GT-2026')
+            finally:
+                conn.rollback()
+        self.assertIsNone(db._fetch_one('SELECT 1 FROM finance_order_style_bindings WHERE order_id=1 AND product_id=3'))
 
     def test_style_history_paging_validation_empty_and_read_only(self):
         for n in range(21):self.save_cost(cost=str(n))
@@ -346,8 +429,14 @@ class FinanceTest(unittest.TestCase):
 
     def test_combined_customer_owner_multistyle_filters_only_matching_lines(self):
         db._fetch_one('UPDATE orders SET owner_admin_id=2 WHERE id=1 RETURNING id')
-        db._fetch_one("UPDATE products SET style_code='STYLE-A' WHERE id=1 RETURNING id")
-        db._fetch_one("UPDATE products SET style_code='STYLE-B' WHERE id=2 RETURNING id")
+        with db.get_connection() as conn:
+            # Fixture orders predate the binding migration. Take their current
+            # style assignments as-is, just like the production backfill.
+            conn.execute("UPDATE products SET style_code='STYLE-A' WHERE id=1")
+            conn.execute("UPDATE products SET style_code='STYLE-B' WHERE id=2")
+            conn.execute('TRUNCATE finance_order_style_bindings')
+            conn.execute('DELETE FROM security_schema_versions WHERE version=%s',(finance_order_styles.VERSION,))
+            finance_order_styles.migrate(conn.cursor())
         self.save_cost(code='STYLE-A',cost='10');self.save_cost(code='STYLE-B',cost='5')
         self.assertEqual(self.query()['summary']['totalCostCny'],'75.00')
         r=self.query(customerName='Alex',customerId=1,salespersonIds=[2],styleCodes='STYLE-A，NOT-HERE')

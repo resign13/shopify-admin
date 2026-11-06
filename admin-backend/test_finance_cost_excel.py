@@ -250,6 +250,16 @@ class CostExcelTest(unittest.TestCase):
         self.assertIn('商品已移除', result.json['rows'][0]['message'])
         self.assertFalse(result.json['changes'])
 
+    def test_pre_rename_template_does_not_modify_history_only_style(self):
+        data = self.book(styleCodes='GT-2026')
+        data[excel.SHEET]['D2'] = 8
+        db._fetch_one("UPDATE products SET style_code='NEW-STYLE' RETURNING id")
+        self.assertTrue(self.call('finance/costs?styleCodes=GT-2026',role='finance').json['items'][0]['historicalOnly'])
+        result = self.upload(data)
+        self.assertEqual(result.status_code, 200, result.json)
+        self.assertEqual(result.json['summary']['error'], 1)
+        self.assertFalse(result.json['changes'])
+
     def test_auth_csrf_and_export_upload_quota_boundaries(self):
         data = self.book()
         for role in ('sales', 'warehouse', 'customer'):

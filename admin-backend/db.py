@@ -342,6 +342,8 @@ def _apply_schema_migrations(cur: Any) -> None:
     security_core.migrate(cur)
     import external_api_schema
     external_api_schema.migrate(cur)
+    import finance_order_styles
+    finance_order_styles.migrate(cur)
 
 
 
@@ -363,6 +365,9 @@ def ensure_database_ready() -> None:
         import export_queue
         if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (export_queue.VERSION,)).fetchone():
             raise RuntimeError('Database export queue schema version is not ready')
+        import finance_order_styles
+        if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (finance_order_styles.VERSION,)).fetchone():
+            raise RuntimeError('Database finance order style binding migration is required')
     if os.environ.get('APP_ENV','production') == 'production':
         with _connect() as conn:
             role = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
