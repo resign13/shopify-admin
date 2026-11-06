@@ -11,6 +11,7 @@ import unicodedata
 from flask import g, jsonify, request, send_file
 from psycopg.types.json import Jsonb
 import db
+import finance_order_styles
 import module_permissions
 import style_catalog
 import workbench
@@ -162,7 +163,8 @@ def options():
     return {
         'customers': db._fetch_all('SELECT id,name,company_name AS company FROM store_users ORDER BY name,id'),
         'salespeople': db._fetch_all("SELECT id,name,status FROM admin_users WHERE role='sales' ORDER BY name,id"),
-        'styles': [r['code'] for r in db._fetch_all(f'SELECT DISTINCT {style_catalog.style_sql()} AS code FROM products p ORDER BY code')],
+        'styles': [r['code'] for r in db._fetch_all(f'''SELECT {style_catalog.style_sql()} AS code FROM products p
+          UNION {finance_order_styles.USED_STYLES_SQL} ORDER BY code''')],
         'categories': db._fetch_all('SELECT category_key AS key FROM product_categories ORDER BY sort_order,id'),
     }
 
@@ -177,7 +179,7 @@ def cost_query(args):
     where=[];params=[]
     if codes:where.append('lower(p.style_code)=ANY(%s)');params.append([c.lower() for c in codes])
     if keyword:
-        where.append('EXISTS(SELECT 1 FROM catalog k WHERE k.style_code=p.style_code AND (k.sku ILIKE %s OR k.color_name ILIKE %s OR k.style_code ILIKE %s))')
+        where.append('(p.style_code ILIKE %s OR EXISTS(SELECT 1 FROM catalog k WHERE k.style_code=p.style_code AND (k.sku ILIKE %s OR k.color_name ILIKE %s)))')
         params.extend(['%'+keyword+'%']*3)
     if args.get('category'):
         where.append('EXISTS(SELECT 1 FROM catalog k WHERE k.style_code=p.style_code AND k.category_key=%s)');params.append(args['category'])
@@ -185,8 +187,11 @@ def cost_query(args):
     # Filter and page whole styles in SQL. No title, image, color/size matrix or N+1.
     source=f"""WITH catalog AS (SELECT {style_catalog.style_sql()} AS style_code,p.sku,p.color_name,p.is_active,c.category_key
         FROM products p JOIN product_categories c ON c.id=p.category_id),
-      styles AS (SELECT style_code,bool_or(is_active) AS is_active FROM catalog GROUP BY style_code)
-      SELECT p.style_code,p.is_active,c.cost_cny,COALESCE(c.revision,0) AS revision,c.updated_at
+      catalog_styles AS (SELECT style_code,bool_or(is_active) AS is_active FROM catalog GROUP BY style_code),
+      styles AS (SELECT style_code,is_active,false AS historical_only FROM catalog_styles
+        UNION ALL SELECT h.style_code,false,true FROM ({finance_order_styles.USED_STYLES_SQL}) h
+        WHERE NOT EXISTS(SELECT 1 FROM catalog_styles c WHERE c.style_code=h.style_code))
+      SELECT p.style_code,p.is_active,p.historical_only,c.cost_cny,COALESCE(c.revision,0) AS revision,c.updated_at
       FROM styles p LEFT JOIN finance_style_costs c ON c.style_code=p.style_code"""
     if where:source+=' WHERE '+' AND '.join(where)
     return source,params
@@ -198,7 +203,7 @@ def costs(args):
     source,params=cost_query(args)
     total=db._fetch_one('SELECT count(*) AS n FROM ('+source+') q',params)['n']
     rows=db._fetch_all(source+' ORDER BY p.style_code LIMIT %s OFFSET %s',(*params,size,(page-1)*size))
-    return {'items':[{'styleCode':r['style_code'],'active':r['is_active'],'costCny':money(r['cost_cny']),
+    return {'items':[{'styleCode':r['style_code'],'active':r['is_active'],'historicalOnly':r['historical_only'],'costCny':money(r['cost_cny']),
         'version':str(r['revision']),'updatedAt':db._iso(r['updated_at']) if r['updated_at'] else None} for r in rows],
         'total':total,'page':page,'pageSize':size,'costBasis':COST_BASIS}
 
@@ -235,14 +240,19 @@ def preview(payload,lock=False):
             db._fetch_one('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',('finance-style:'+code,))
     products=db._fetch_all(f'SELECT p.id,{style_catalog.style_sql()} AS style_code FROM products p WHERE {style_catalog.style_sql()}=ANY(%s) ORDER BY p.id'+(' FOR SHARE' if lock else ''),(codes,))
     existing={p['style_code'] for p in products}
+    missing_codes = [code for code in codes if code not in existing]
+    if missing_codes:
+        existing.update(r['style_code'] for r in db._fetch_all(
+            f'SELECT style_code FROM ({finance_order_styles.USED_STYLES_SQL}) h WHERE style_code=ANY(%s)', (missing_codes,)))
     costs={r['style_code']:r for r in db._fetch_all('SELECT * FROM finance_style_costs WHERE style_code=ANY(%s) ORDER BY style_code'+(' FOR UPDATE' if lock else ''),(codes,))}
     initialized={r['style_code'] for r in db._fetch_all('SELECT style_code FROM finance_style_cost_audit WHERE style_code=ANY(%s) AND is_initial',(codes,))}
     initial_codes=[r['styleCode'] for r in changes if r['costCny'] is not None and r['styleCode'] not in initialized]
     # Only an initial amount fills missing historical orders. Later changes,
     # including re-entering a cleared cost, never reprice existing orders.
-    orders=db._fetch_all(f'''SELECT DISTINCT o.id,{style_catalog.style_sql()} AS style_code
-      FROM orders o JOIN order_items i ON i.order_id=o.id JOIN products p ON p.id=i.product_id
-      WHERE {style_catalog.style_sql()}=ANY(%s) AND o.status=ANY(%s)''',(initial_codes,STATES)) if initial_codes else []
+    style = finance_order_styles.ORDER_ITEM_STYLE_SQL
+    orders=db._fetch_all(f'''SELECT DISTINCT o.id,{style} AS style_code
+      FROM orders o JOIN order_items i ON i.order_id=o.id {finance_order_styles.ORDER_ITEM_STYLE_JOINS}
+      WHERE {style}=ANY(%s) AND o.status=ANY(%s)''',(initial_codes,STATES)) if initial_codes else []
     output=[];affected=set()
     for row in changes:
         code=row['styleCode'];old=costs.get(code)
@@ -338,7 +348,7 @@ def _report(payload, paginate=True):
     if payload.get('customerId'): where.append('o.store_user_id=%s');params.append(integer(payload['customerId']))
     if people:
         where.append('(o.owner_admin_id=ANY(%s)'+(' OR o.owner_admin_id IS NULL' if 'unassigned' in people else '')+')');params.append(owners)
-    style=f"CASE WHEN p.id IS NOT NULL THEN {style_catalog.style_sql()} ELSE COALESCE(ch.style_code,'未归类') END"
+    style=finance_order_styles.ORDER_ITEM_STYLE_SQL
     if codes: where.append(f'LOWER({style})=ANY(%s)');params.append([v.lower() for v in codes])
     query=f'''SELECT o.id AS order_id,o.order_no,o.created_at,o.status,o.contact_name,
         o.store_user_id,su.name AS account_name,su.company_name,COALESCE(a.name,'未分配') AS salesperson,
@@ -346,8 +356,7 @@ def _report(payload, paginate=True):
         {style} AS style_code,h.cost_cny,h.effective_at AS cost_effective_at,h.is_initial
       FROM orders o JOIN order_items i ON i.order_id=o.id
       LEFT JOIN store_users su ON su.id=o.store_user_id LEFT JOIN admin_users a ON a.id=o.owner_admin_id
-      LEFT JOIN products p ON p.id=i.product_id
-      LEFT JOIN LATERAL (SELECT style_code FROM finance_cost_history c WHERE c.product_id=i.product_id AND c.size_code=i.size_code ORDER BY effective_date DESC LIMIT 1) ch ON true
+      {finance_order_styles.ORDER_ITEM_STYLE_JOINS}
       LEFT JOIN LATERAL (SELECT c.cost_cny,c.effective_at,c.is_initial FROM finance_style_cost_audit c
         WHERE c.style_code=({style}) AND (c.effective_at<=o.created_at OR c.is_initial)
         ORDER BY c.effective_at DESC,c.id DESC LIMIT 1) h ON true

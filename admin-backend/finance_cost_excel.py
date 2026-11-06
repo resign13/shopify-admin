@@ -214,7 +214,7 @@ def preview_upload():
     rows = parse(uploaded.read(MAX_BYTES + 1))
     codes = list({r['styleCode'] for r in rows if r['styleCode']})
     source, _ = finance.cost_query({})
-    saved = {r['style_code']: r for r in db._fetch_all(source + ' WHERE p.style_code=ANY(%s)', (codes,))} if codes else {}
+    saved = {r['style_code']: r for r in db._fetch_all(source + ' WHERE NOT p.historical_only AND p.style_code=ANY(%s)', (codes,))} if codes else {}
     changes = []
     for row in rows:
         current = saved.get(row['styleCode'])
