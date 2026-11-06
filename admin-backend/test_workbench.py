@@ -19,7 +19,7 @@ import db
 import workbench
 
 
-def _seed():
+def _seed(style_codes):
     with db.get_connection() as conn:
         conn.execute('TRUNCATE finance_style_costs,finance_style_cost_audit,finance_cost_receipts RESTART IDENTITY')
         conn.execute('TRUNCATE security_export_queue,security_file_refs,security_files,security_rate_buckets,security_audit_events,security_request_metrics')
@@ -38,6 +38,8 @@ def _seed():
                  'sizes':['M','L','Tall XL'],'sizePrices':[{'sizeCode':size,'price':29.9,'stock':10} for size in ['M','L','Tall XL']],
                  'image':'/uploads/fixture.jpg','gallery':['/uploads/fixture.jpg']*3,'sizeChartImage':'/uploads/fixture.jpg','descriptionImage':'/uploads/fixture.jpg','featured':index==1}
         product=db.create_product(payload);products.append(product)
+        if index in style_codes:
+            db._fetch_one('UPDATE products SET style_code=%s WHERE id=%s RETURNING id',(style_codes[index],product['id']))
         db.update_product_inventory(product['id'],{}, {'M':12,'L':6,'Tall XL':3})
         db._fetch_one("UPDATE product_size_prices SET pending_inbound=4,pending_inspection=6 WHERE product_id=%s AND size_code='M' RETURNING id",(product['id'],))
         db._fetch_one("UPDATE product_size_prices SET pending_inbound=2,pending_inspection=3 WHERE product_id=%s AND size_code='L' RETURNING id",(product['id'],))
@@ -57,11 +59,11 @@ def _seed():
     return tokens,products
 
 
-def seed():
+def seed(*, style_codes=None):
     # Historical fixtures do not create live notification events.
     with patch.dict(os.environ, {'ORDER_NOTIFICATION_MAINTENANCE':'1'}), db._connect() as conn:
         marker = db.REQUEST_CONNECTION.set(conn)
-        try: return _seed()
+        try: return _seed(style_codes or {})
         finally: db.REQUEST_CONNECTION.reset(marker)
 
 

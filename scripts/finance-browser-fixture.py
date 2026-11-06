@@ -23,12 +23,12 @@ os.environ['ORDER_VOICE_ENABLED'] = '0'
 import test_workbench as fixtures
 
 if __name__ == '__main__':
-    fixtures.seed()
+    # Set the fixture's accounting identity before creating its orders.
+    fixtures.seed(style_codes={2:'GT-OTHER'})
     with fixtures.db.get_connection() as conn:
         conn.execute('TRUNCATE finance_cost_history,finance_cost_versions,finance_cost_audit,finance_cost_receipts,finance_settings,finance_style_costs,finance_style_cost_audit RESTART IDENTITY')
         conn.execute("DELETE FROM product_size_prices WHERE product_id=3 AND size_code='L'")
         conn.execute("DELETE FROM product_sizes WHERE product_id=3 AND size_code='L'")
-        conn.execute("UPDATE products SET style_code='GT-OTHER' WHERE id=2")
     fixtures.db.create_admin_user({'name':'财务测试员','email':'finance@gingtto.test',
         'passwordHash':generate_password_hash('Workbench-Test-2026', method='pbkdf2:sha256:1000'),
         'status':'active','role':'finance'})
