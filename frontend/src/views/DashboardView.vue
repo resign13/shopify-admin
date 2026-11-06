@@ -15,7 +15,7 @@
     <button class="mobile-dashboard-filter" aria-label="经营筛选" :aria-expanded="mobileFilterOpen" aria-controls="mobile-dashboard-filters" @click="mobileFilterOpen = !mobileFilterOpen"><ElIcon><Filter /></ElIcon></button>
   </div>
   <section v-if="!isPhone" class="panel">
-    <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
+    <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId,statuses:appliedGlobal.statuses ? appliedStatusLabel : ''}" :labels="{statuses: '订单状态'}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
       <ElRadioGroup v-model="preset" @change="setPreset"
         ><ElRadioButton value="1">今天</ElRadioButton
         ><ElRadioButton value="7">近 7 天</ElRadioButton
@@ -36,7 +36,7 @@
           :key="item"
           :label="item"
           :value="item" /></ElSelect
-      ><ElSelect v-model="style" clearable filterable placeholder="全部款号" aria-label="款号筛选"
+      ><ElSelect v-model="style" multiple collapse-tags collapse-tags-tooltip clearable filterable placeholder="全部款号" aria-label="款号筛选"
         ><ElOption
           v-for="item in data?.filters.styles"
           :key="item"
@@ -45,7 +45,7 @@
       ><ElSelect v-if="auth.isSuperAdmin" v-model="salespersonId" clearable filterable placeholder="全公司业务员" aria-label="业务员筛选">
         <ElOption label="未分配订单" value="unassigned" />
         <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
-      </ElSelect><ElButton type="primary" :loading="loading" @click="load(true)"
+      </ElSelect><ElSelect v-model="statuses" multiple collapse-tags collapse-tags-tooltip clearable placeholder="全部订单状态" aria-label="订单状态筛选"><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value" /></ElSelect><ElButton type="primary" :loading="loading" @click="load(true)"
         >查询</ElButton
       >
     </ResponsiveFilters>
@@ -54,15 +54,16 @@
       统计范围：{{ appliedRange }} · {{ appliedGlobal.country || "全部国家" }} ·
       {{ appliedGlobal.style || "全部款号"
       }} · {{ scopeLabel
-      }}<span v-if="hasDraftGlobal">；筛选已更改，点击查询应用</span>
+      }} · {{ appliedStatusLabel }}<span v-if="hasDraftGlobal">；筛选已更改，点击查询应用</span>
     </p>
   </section>
   <section v-if="isPhone" v-show="mobileFilterOpen" id="mobile-dashboard-filters" class="mobile-dashboard-inline-filters" aria-label="经营筛选">
     <ElForm label-position="top" @submit.prevent="applyMobileFilters">
       <ElFormItem label="统计日期"><ElDatePicker v-model="dates" type="daterange" value-format="YYYY-MM-DD" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @change="preset = 'custom'" /></ElFormItem>
       <ElFormItem label="国家"><ElSelect v-model="country" clearable filterable placeholder="全部国家"><ElOption v-for="item in data?.filters.countries" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
-      <ElFormItem label="款号"><ElSelect v-model="style" clearable filterable placeholder="全部款号"><ElOption v-for="item in data?.filters.styles" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
+      <ElFormItem label="款号"><ElSelect v-model="style" multiple collapse-tags collapse-tags-tooltip clearable filterable placeholder="全部款号"><ElOption v-for="item in data?.filters.styles" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem v-if="auth.isSuperAdmin" label="业务员"><ElSelect v-model="salespersonId" clearable filterable placeholder="全公司业务员"><ElOption label="未分配订单" value="unassigned"/><ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name"/></ElSelect></ElFormItem>
+      <ElFormItem label="订单状态"><ElSelect v-model="statuses" multiple collapse-tags collapse-tags-tooltip clearable placeholder="全部订单状态" aria-label="订单状态筛选"><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value" /></ElSelect></ElFormItem>
       <div class="mobile-dashboard-filter-actions"><ElButton @click="mobileFilterOpen=false">收起筛选</ElButton><ElButton native-type="submit" type="primary" :loading="loading">查询</ElButton></div>
     </ElForm>
   </section>
@@ -81,7 +82,7 @@
     <div v-if="isPhone" class="mobile-dashboard-summary">
       <article class="mobile-dashboard-hero"><div><span>商品销售额 <small>USD</small></span><span class="mobile-dashboard-scope">{{ scopeLabel }}</span></div><strong>{{ money(data.metrics.amount) }}</strong><p><span>{{ changeText('amount') }}</span>较上一等长周期 · 不含运费</p></article>
       <div class="mobile-dashboard-kpis"><article v-for="item in metrics.filter(m => ['orders','units','customers'].includes(m.key))" :key="item.key"><small>{{ {orders:'有效订单',units:'销售件数',customers:'下单客户'}[item.key] }}</small><strong>{{ number(data.metrics[item.key]) }}</strong><span>{{ changeText(item.key) }}</span></article></div>
-      <details class="mobile-dashboard-additional"><summary>平均每单与统计范围 <span>＋</span></summary><p>平均每单 {{ money(data.metrics.average) }} · {{ appliedRange }} · {{ appliedGlobal.country || '全部国家' }} · {{ appliedGlobal.style || '全部款号' }}</p></details>
+      <details class="mobile-dashboard-additional"><summary>平均每单与统计范围 <span>＋</span></summary><p>平均每单 {{ money(data.metrics.average) }} · {{ appliedRange }} · {{ appliedGlobal.country || '全部国家' }} · {{ appliedGlobal.style || '全部款号' }} · {{ appliedStatusLabel }}</p></details>
     </div>
     <div v-else class="metric-grid">
       <article v-for="metric in metrics" :key="metric.key" class="metric">
@@ -119,7 +120,7 @@
         </div>
         <TrendChart :points="data.trend" :metric="trendMetric" />
       </section>
-      <section v-if="isPhone" class="mobile-dashboard-status"><div class="mobile-section-title"><h2>订单状态</h2><RouterLink to="/orders">查看订单 →</RouterLink></div><div><RouterLink v-for="(label,status) in statusNames" :key="status" :to="{path:'/orders',query:{status,...appliedGlobal}}"><span>{{ label }}</span><strong>{{ number(data.statusCounts[status]) }}</strong></RouterLink></div></section>
+      <section v-if="isPhone" class="mobile-dashboard-status"><div class="mobile-section-title"><h2>订单状态</h2><RouterLink to="/orders">查看订单 →</RouterLink></div><div><RouterLink v-for="(label,status) in statusNames" :key="status" :to="{path:'/orders',query:{...appliedGlobal,statuses:undefined,status}}"><span>{{ label }}</span><strong>{{ number(data.statusCounts[status]) }}</strong></RouterLink></div></section>
       <section v-if="!isPhone" class="panel">
         <div class="panel-title">
           <h2>订单状态</h2>
@@ -142,8 +143,9 @@
                 :to="{
                   path: '/orders',
                   query: {
-                    status,
                     ...appliedGlobal,
+                    statuses: undefined,
+                    status,
                   },
                 }"
                 >{{ label }}</RouterLink
@@ -751,10 +753,11 @@ const data = ref(),
 const preset = ref("30"),
   dates = ref([]),
   country = ref(""),
-  style = ref("");
+  style = ref([]), statuses = ref([]);
 function removeMobileFilter(key) {
   if (key === 'country') country.value = '';
-  if (key === 'style') style.value = '';
+  if (key === 'style') style.value = [];
+  if (key === 'statuses') statuses.value = [];
   if (key === 'salespersonId') salespersonId.value = '';
   load(true);
 }
@@ -807,6 +810,7 @@ const appliedRange = computed(
   () =>
     `${appliedGlobal.value.dateFrom || "—"} 至 ${appliedGlobal.value.dateTo || "—"}`,
 );
+const appliedStatusLabel = computed(() => (appliedGlobal.value.statuses || "").split(",").filter(Boolean).map(value => statusNames[value]).join("、") || "全部订单状态");
 const hasDraftGlobal = computed(
   () => queryKey(globalQuery()) !== queryKey(appliedGlobal.value),
 );
@@ -881,7 +885,8 @@ function globalQuery() {
     dateFrom: dates.value?.[0] || "",
     dateTo: dates.value?.[1] || "",
     country: country.value || "",
-    style: style.value || "",
+    style: [...style.value].sort().join(","),
+    statuses: [...statuses.value].sort().join(","),
     ...(auth.isSuperAdmin ? { salespersonId: salespersonId.value || "" } : {}),
   };
 }
@@ -898,7 +903,8 @@ function readRoute() {
   requestedStyleQuery.value = null;
   salespersonId.value = auth.isSuperAdmin ? scalar(q.salespersonId) : "";
   country.value = scalar(q.country);
-  style.value = scalar(q.style);
+  style.value = scalar(q.style).split(",").filter(Boolean);
+  statuses.value = scalar(q.statuses).split(",").filter(value => value in statusNames);
   dates.value =
     q.dateFrom && q.dateTo
       ? [scalar(q.dateFrom), scalar(q.dateTo)]

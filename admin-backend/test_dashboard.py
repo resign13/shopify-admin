@@ -49,6 +49,26 @@ class DashboardTest(unittest.TestCase):
             (order_id, product['id'], product['sku'], product['sku'], size, quantity, price, price * quantity),
         )
 
+    def test_multiple_styles_and_statuses(self):
+        coat = self.product('COAT')
+        order = self.order(coat, 4, status='paid')
+        self.line(order, self.products[0], 2)
+        self.order(coat, 8, status='shipped')
+        query = dict(style='GT-2026,COAT', statuses='paid,pending_payment')
+        overview = self.data('workbench', **query)
+        self.assertEqual(overview['metrics']['orders'], 3)
+        self.assertEqual(overview['metrics']['units'], 12)
+        self.assertEqual(set(overview['statusCounts']), {'paid','pending_payment'})
+        sales = self.data(**query)
+        self.assertEqual(sales['summary']['units'], 12)
+        self.assertAlmostEqual(sales['summary']['amount'], overview['metrics']['amount'])
+        self.assertEqual(self.data('workbench', style='COAT', statuses='shipped')['metrics']['units'], 8)
+        self.assertEqual(self.data('workbench', style='missing', statuses='paid')['metrics']['orders'], 0)
+        self.assertEqual(self.data('workbench', statuses='cancelled')['metrics']['orders'], 0)
+        self.assertEqual(self.call(statuses='not-a-status').status_code, 400)
+        self.assertEqual(self.call('workbench', statuses='not-a-status').status_code, 400)
+        self.assertEqual(self.data(**query)['summary'], self.data(style='COAT,GT-2026,COAT', statuses='pending_payment,paid,paid')['summary'])
+
     def test_period_country_timezone_and_cancelled_sales(self):
         data = self.data()
         row = data['items'][0]

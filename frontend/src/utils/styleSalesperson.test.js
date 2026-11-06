@@ -62,3 +62,10 @@ test("export uses the successful query snapshot and recovers its loading state",
   assert.match(action, /notifyError\(error\)/);
   assert.match(action, /finally\s*\{\s*styleExporting.value = false/);
 });
+
+test("multi-select filters survive panel and export", () => {
+  const global = {...overview, style:"CS2209,CS5402", statuses:"paid,shipped"};
+  const exported = stylePerformanceExportQuery(stylePerformanceQuery(global, filters, true));
+  assert.equal(exported.style, global.style);
+  assert.equal(exported.statuses, global.statuses);
+});
