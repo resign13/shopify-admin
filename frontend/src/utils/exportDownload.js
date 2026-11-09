@@ -65,9 +65,9 @@ function responseError(response, data) {
 
 export async function downloadFile(fetcher, url, filename, options = {}) {
   const { busyRetry = false, onBusyWait, onBusyResume, onExportReady, onStatusAvailable,
-    onExportUnavailable, onDownloadStart, requestTimeout = 0, ...requestOptions } = options;
+    onExportUnavailable, onDownloadStart, requestTimeout = 0, recoverOrderResult = true, ...requestOptions } = options;
   const ticket = new Headers(requestOptions.headers).get('X-Export-Ticket');
-  const resultPath = busyRetry && /^[0-9a-f-]{36}$/i.test(ticket || '') ? `/api/admin/orders/export-results/${ticket}` : null;
+  const resultPath = busyRetry && recoverOrderResult && /^[0-9a-f-]{36}$/i.test(ticket || '') ? `/api/admin/orders/export-results/${ticket}` : null;
   const readOptions = { method: 'GET', ...(requestOptions.signal ? { signal: requestOptions.signal } : {}) };
   const unavailable = error => {
     const terminal = [400,401,403,404,410].includes(error.status)
@@ -140,6 +140,16 @@ export async function downloadFile(fetcher, url, filename, options = {}) {
     onBusyResume?.();
   }
   saveBlob(blob, filename);
+}
+
+// Inventory, dashboard and finance return the workbook on the admitted
+// request; they do not create a cached order-export result.
+export function downloadQueuedFile(fetcher, url, filename, options = {}) {
+  const headers = new Headers(options.headers);
+  headers.set('X-Export-Ticket', crypto.randomUUID());
+  return downloadFile(fetcher, url, filename, {
+    requestTimeout: REQUEST_TIMEOUT_MS, ...options, headers, busyRetry: true, recoverOrderResult: false,
+  });
 }
 
 export function createOrderExportController(state) {

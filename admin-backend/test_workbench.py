@@ -164,6 +164,9 @@ class WorkbenchTest(unittest.TestCase):
         body={'version':before['version'],'sizeStocks':{'M':11},'pendingInboundBySize':{'L':3}}
         self.assertEqual(self.call('inventory/1','PUT',body,role='warehouse').status_code,200)
         self.assertEqual(self.call('inventory/1','PUT',body).status_code,409)
+        for version in ({}, {'version': '   '}, {'version': 1}):
+            response = self.call('inventory/1','PUT',{'sizeStocks': {'M': 99}, **version})
+            self.assertEqual((response.status_code, response.json['code']), (400, 'inventory_version_required'))
         after=self.detail()
         self.assertEqual(after['stock'],31)
         logs=self.call('audit-logs?page=1&module=inventory&objectId=1').json
@@ -375,10 +378,11 @@ class WorkbenchTest(unittest.TestCase):
         self.assertIn('passwordChanged',text)
 
     def test_audit_failure_rolls_back_business_write(self):
+        version = self.detail()['version']
         with db.get_connection() as conn:
             conn.execute("ALTER TABLE admin_audit_logs ADD CONSTRAINT fixture_failure CHECK(action='IMPOSSIBLE')")
         try:
-            self.assertEqual(self.call('inventory/1','PUT',{'sizeStocks':{'M':22}}).status_code,500)
+            self.assertEqual(self.call('inventory/1','PUT',{'version':version,'sizeStocks':{'M':22}}).status_code,500)
             self.assertEqual(self.detail()['stock'],30)
         finally:
             with db.get_connection() as conn:conn.execute('ALTER TABLE admin_audit_logs DROP CONSTRAINT fixture_failure')

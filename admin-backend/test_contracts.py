@@ -30,6 +30,9 @@ class ContractsTest(unittest.TestCase):
         db._fetch_one("UPDATE products SET sku='CHANGED' WHERE id=1 RETURNING id")
         self.assertEqual(self.call('contracts/1').json['item']['items'][0]['sku'],item['items'][0]['sku'])
         self.assertEqual(self.call('contracts?keyword=万芳').json['total'],1)
+        for keyword in ('test-001', f"HT-{item['id']:06d}", item['items'][0]['sku']):
+            result = self.call('contracts?keyword=' + keyword).json
+            self.assertEqual([(row['id'], row['contractNo']) for row in result['items']], [(item['id'], 'TEST-001')])
         self.assertEqual(self.call('contracts?keyword=no-match').json['total'],0)
     def test_concurrent_retry(self):
         body=self.payload()

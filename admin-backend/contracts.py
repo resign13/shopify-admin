@@ -62,8 +62,8 @@ def listing(args):
     import workbench
     page, size = workbench.paging(args)
     keyword = '%' + str(args.get('keyword', '')).strip() + '%'
-    where = "(factory_name ILIKE %s OR ('HT-' || lpad(id::text,6,'0')) ILIKE %s OR snapshot->>'items' ILIKE %s)"
-    params = (keyword, keyword, keyword)
+    where = "(factory_name ILIKE %s OR ('HT-' || lpad(id::text,6,'0')) ILIKE %s OR snapshot->>'contractNo' ILIKE %s OR snapshot->>'items' ILIKE %s)"
+    params = (keyword,) * 4
     total = db._fetch_one('SELECT count(*) AS total FROM purchase_contracts WHERE ' + where, params)['total']
     rows = db._fetch_all('SELECT * FROM purchase_contracts WHERE ' + where + ' ORDER BY id DESC LIMIT %s OFFSET %s', (*params, size, (page-1)*size))
     return {'items': [serialize(row) for row in rows], 'total': total, 'page': page, 'pageSize': size}

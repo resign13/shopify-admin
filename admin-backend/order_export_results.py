@@ -116,7 +116,7 @@ def authorized(ticket):
         row = db._fetch_one('''SELECT *,clock_timestamp() AS now FROM security_export_queue
             WHERE ticket=%s AND channel='admin' AND account_id=%s AND session_id=%s''',
             (ticket, current['id'], identity['public_id']))
-        if not row:
+        if not row or not export_queue.is_order_route(row['path']):
             abort(404)
         roles = {'admin', 'sales'} if export_queue.is_invoice(row['path']) else {'admin', 'sales', 'warehouse'}
         if (not module_permissions.allows_operation(current, row['path'], row['method'], roles)

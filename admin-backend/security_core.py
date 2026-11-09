@@ -452,17 +452,17 @@ class Security:
             if category == 'export' and row:
                 import export_queue
                 ticket = None
-                if self.channel == 'admin' and export_queue.is_order_route(path):
+                roles = export_queue.queued_roles(path, request.method) if self.channel == 'admin' else None
+                if roles:
                     try:
                         ticket = export_queue.parse_ticket(request.headers.get('X-Export-Ticket'))
                     except ValueError:
                         return self.error(400, 'export_ticket_invalid', '导出排队编号无效，请重新发起。')
                     if ticket:
                         import module_permissions
-                        roles = {'admin', 'sales'} if export_queue.is_invoice(path) else {'admin', 'sales', 'warehouse'}
                         if not module_permissions.allows_operation(row, path, request.method, roles):
                             return self.error(403, 'permission_denied', 'Forbidden')
-                        if not export_queue.is_invoice(path) and row['role'] == 'warehouse' and request.method != 'POST':
+                        if path in export_queue.ORDER_ROUTES and row['role'] == 'warehouse' and request.method != 'POST':
                             response = self.error(405, 'warehouse_export_requires_post', '请使用订单页面的导出按钮进行仓库打单')
                             response.headers['Allow'] = 'POST'
                             return response

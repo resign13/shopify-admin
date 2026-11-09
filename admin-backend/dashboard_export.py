@@ -13,7 +13,7 @@ import workbench
 
 
 RISK_NAMES = {
-    'backordered': '欠货', 'out_of_stock': '无库存', 'no_sales': '周转期无销量',
+    'backordered': '欠货', 'out_of_stock': '无库存', 'no_sales': '周转期无销量', 'historical': '仅历史',
     'critical': '7 天内售罄', 'warning': '7–30 天售罄', 'healthy': '库存健康',
 }
 BASE_COLUMNS = [
@@ -41,6 +41,8 @@ def _local_time(value):
 
 
 def _days(item):
+    if item.get('historicalOnly'):
+        return None
     if item['shortageUnits'] > 0:
         return '欠货待补'
     if item['availableStock'] <= 0:

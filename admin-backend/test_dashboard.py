@@ -135,6 +135,34 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(self.data('style-size-detail', styleCode='GT-2026', productId=1, **params)['items'], [])
         self.assertEqual(self.data(category='outerwear')['total'], 0)
 
+    def test_retired_style_preserves_sales_without_reinstating_stock(self):
+        retired = self.product('AUDIT-HIDDEN', stock=10)
+        self.order(retired, 4)
+        self.order(retired, 7, size='Retired size')
+        self.order(retired, 30, status='cancelled')
+        with application.app.test_client() as client:
+            response = client.open(f"/api/admin/products/{retired['id']}", method='DELETE',
+                                   headers={'Authorization': 'Bearer ' + self.tokens['admin']})
+        self.assertEqual((response.status_code, response.json.get('action')), (200, 'hidden'))
+
+        params = {'style': 'AUDIT-HIDDEN', 'country': 'Germany', 'statuses': 'paid'}
+        overview = self.data('workbench', **params)
+        self.assertIn('AUDIT-HIDDEN', overview['filters']['styles'])
+        self.assertEqual(overview['metrics']['units'], 11)
+        performance = self.data(**params)
+        self.assertEqual(performance['summary']['units'], 11)
+        row, = performance['items']
+        self.assertEqual((row['units'], row['amount'], row['availableStock'], row['risk']), (11, 110, 0, 'historical'))
+        detail = self.data('style-detail', styleCode='AUDIT-HIDDEN', **params)
+        color, = detail['items']
+        self.assertEqual((color['units'], color['stock'], color['risk']), (11, 0, 'historical'))
+        sizes = self.data('style-size-detail', styleCode='AUDIT-HIDDEN', productId=retired['id'], **params)['items']
+        self.assertEqual(sizes, color['sizes'])
+        self.assertEqual({size['sizeCode']: (size['units'], size['stock']) for size in sizes}, {'M': (4, 0), 'Retired size': (7, 0)})
+        self.assertEqual(self.data(**{**params, 'country': 'China'})['total'], 0)
+        self.assertEqual(self.data(**{**params, 'statuses': 'cancelled'})['total'], 0)
+        self.assertEqual(self.data(**params, dateFrom='2026-10-01', dateTo='2026-10-01')['total'], 0)
+
     def test_all_sort_columns_directions_and_nulls_last(self):
         coat = self.product('COAT', stock=7)
         self.order(coat, 4, price=100)

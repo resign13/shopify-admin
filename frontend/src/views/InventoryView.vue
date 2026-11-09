@@ -6,7 +6,7 @@
     description="商品按分类顺序展示，采购入库与独立临时入库分开登记，清晰掌握尺码到货进度。"
     eyebrow="INVENTORY / 商品与库存"
     ><template v-if="isPhone"><MobileActionMenu :label="canEdit ? '库存操作' : '库存排序'"><ElButton v-if="canEdit" @click="mobileSelection = !mobileSelection; clearSelection()">{{ mobileSelection ? '退出选择模式' : '批量入库 / 打回' }}</ElButton><ElButton v-if="canEdit" :loading="exporting" @click="exportFile">导出库存</ElButton><ElButton v-if="canEdit" :loading="importing" @click="input.click()">导入库存</ElButton><ElButton @click="list.sort({prop:'stock',order:'descending'})">现货余额降序</ElButton><ElButton @click="list.sort({prop:'stock',order:'ascending'})">现货余额升序</ElButton><ElButton @click="list.sort({prop:'category',order:'ascending'})">默认分类顺序</ElButton></MobileActionMenu><input v-if="canEdit" ref="input" type="file" accept=".xlsx" hidden @change="previewFile"/></template><template v-else><template v-if="canEdit"
-      ><ElButton :loading="exporting" @click="exportFile">导出库存</ElButton
+      ><ElButton :loading="exporting" @click="exportFile">{{ inventoryExportPosition == null ? "导出库存" : exportQueueLabel(inventoryExportPosition) }}</ElButton
       ><ElButton type="primary" :loading="importing" @click="input.click()"
         >导入库存</ElButton
       ><input
@@ -16,6 +16,7 @@
         hidden
         @change="previewFile" /></template
   ></template></PageHeader>
+  <p v-if="isPhone && inventoryExportPosition != null" class="small-note" role="status">库存导出：{{ exportQueueLabel(inventoryExportPosition) }}</p>
   <div v-if="isPhone" class="m-stock-summary"><div><span>现货余额</span><strong>{{ Number(list.summary.stock || 0).toLocaleString() }}<small>件</small></strong></div><div><span>{{ canEdit ? '欠货待处理' : '零库存尺码' }}</span><strong class="is-amber">{{ canEdit ? list.summary.shortageUnits || 0 : list.summary.zeroSizes || 0 }}<small>{{ canEdit ? '件' : '个' }}</small></strong></div></div>
   <div v-else
     class="metric-grid inventory-overview"
@@ -541,7 +542,8 @@ import {
   save,
   useList,
   useDirty,
-  download,
+  useQueuedDownload,
+  exportQueueLabel,
   notifyError,
   confirm,
   productName,
@@ -790,11 +792,12 @@ async function readLatest() {
 async function adoptLatest() {
   if (await confirm("放弃当前草稿，使用最新数量？")) populate(latest.value);
 }
+const { position: inventoryExportPosition, download: downloadInventory } = useQueuedDownload();
 async function exportFile() {
   if (exporting.value) return;
   exporting.value = true;
   try {
-    await download(
+    await downloadInventory(
       "inventory/export?" +
         new URLSearchParams({ ...list.query, view: "workbench" }),
       "当前库存.xlsx",

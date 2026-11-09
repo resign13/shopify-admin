@@ -64,7 +64,7 @@ class InventoryOperationsTest(unittest.TestCase):
         self.assertEqual(self.call('inventory/1', 'PUT', body).status_code, 200)
         self.assertEqual(self.call('inventory/1', 'PUT', body).status_code, 409)
         self.assertEqual(self.history().json['total'], 1)
-        self.assertEqual(self.call('inventory/999', 'PUT', {'sizeStocks': {'M': 1}}).status_code, 404)
+        self.assertEqual(self.call('inventory/999', 'PUT', {'version': version, 'sizeStocks': {'M': 1}}).status_code, 404)
         self.assertEqual(self.history().json['total'], 1)
 
     def test_history_failure_rolls_back_inventory_audit_and_operation(self):

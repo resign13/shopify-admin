@@ -1,4 +1,4 @@
-import { downloadFile } from '../utils/exportDownload';
+import { downloadFile, downloadQueuedFile } from '../utils/exportDownload';
 import { authenticatedFetch, csrfHeaders } from '../authTransport';
 import { sortStateToQuery } from '../utils/tableSort';
 import { errorMessage, responseError } from '../utils/adminErrors.js';
@@ -77,6 +77,30 @@ export async function copy(value) {
 }
 export function download(path, filename, options = {}) {
   return downloadFile(authenticatedFetch, `${API_BASE}/api/admin/${path}`, filename, options);
+}
+export const exportQueueLabel = position => position > 0 ? `排队中 · 第 ${position} 位` : '等待导出';
+export function useQueuedDownload() {
+  const position = ref(null);
+  let controller;
+  onBeforeUnmount(() => controller?.abort());
+  return {
+    position,
+    async download(path, filename, options = {}) {
+      const request = new AbortController();
+      controller = request;
+      try {
+        await downloadQueuedFile(authenticatedFetch, `${API_BASE}/api/admin/${path}`, filename, {
+          ...options, signal: request.signal,
+          onBusyWait: error => { position.value = error.data?.position ?? 0; },
+          onBusyResume: () => { position.value = null; },
+        });
+      } catch (error) {
+        if (!request.signal.aborted) throw error;
+      } finally {
+        if (controller === request) { controller = null; position.value = null; }
+      }
+    },
+  };
 }
 export function useList(resource, defaults = {}, ignoredKeys = []) {
   const route = useRoute(),

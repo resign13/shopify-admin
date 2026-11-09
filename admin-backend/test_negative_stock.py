@@ -162,9 +162,10 @@ class NegativeStockTest(unittest.TestCase):
         sheet=load_workbook(io.BytesIO(self.workbook())).active
         self.assertEqual(sheet['H2'].value,-9)
         self.assertEqual(sheet['J2'].value,-9)
+        version=self.stock()['version']
         for field in ['contractPendingBySize','pendingInboundBySize','pendingInspectionBySize']:
-            self.assertEqual(self.call('inventory/1','PUT',{'sizeStocks':{},field:{'M':-1}}).status_code,400)
-        self.assertEqual(self.call('inventory/1','PUT',{'sizeStocks':{'M':-2147483649}}).status_code,400)
+            self.assertEqual(self.call('inventory/1','PUT',{'version':version,'sizeStocks':{},field:{'M':-1}}).status_code,400)
+        self.assertEqual(self.call('inventory/1','PUT',{'version':version,'sizeStocks':{'M':-2147483649}}).status_code,400)
         self.set_stock(M=-2147483648,L=0,**{'Tall XL':0})
         self.assertEqual(self.call('orders','POST',self.payload()).status_code,400)
         self.assertEqual(self.balance(),-2147483648)
@@ -231,10 +232,10 @@ class NegativeStockTest(unittest.TestCase):
         self.assertEqual(self.balance(),0)
         receive()
         self.assertEqual(self.balance(),3)
-        before=self.stock()['stock']
-        response=self.call('inventory/1','PUT',{'sizeStocks':{'M':2147483647,'L':1}})
+        before=self.stock()
+        response=self.call('inventory/1','PUT',{'version':before['version'],'sizeStocks':{'M':2147483647,'L':1}})
         self.assertEqual(response.status_code,400,response.json)
-        self.assertEqual(self.stock()['stock'],before)
+        self.assertEqual(self.stock()['stock'],before['stock'])
         self.set_stock(M=-8)
         public=inventory_policy.public_inventory(self.stock())
         color=next(c for c in public['colorOptions'] if c['id']==1)

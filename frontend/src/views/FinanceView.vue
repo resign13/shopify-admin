@@ -2,6 +2,8 @@
   <section v-if="isPhone" class="mobile-finance" data-testid="mobile-finance">
     <header class="mf-heading"><div><h1>财务</h1><p>让每一笔经营，都心中有数</p></div><MobileActionMenu label="更多"><ElButton @click="mobileToolsOpen=true">公共汇率</ElButton><template v-if="tab==='report'"><ElButton :disabled="!result||reportLoading||exporting||reportOutdated" :loading="exporting" @click="exportReport">导出核算 Excel</ElButton></template><template v-else><ElButton :disabled="!appliedCostQuery||costOutdated||costLoading||costExporting" :loading="costExporting" @click="exportCosts">导出成本表</ElButton><ElButton :disabled="saving||costLoading||costExporting" @click="openCostImport">导入成本表</ElButton><ElButton @click="mobileBatchMode=!mobileBatchMode;selected=[]">{{ mobileBatchMode?'结束批量选择':'批量设置成本' }}</ElButton></template><ElButton @click="mobileExplanationOpen=true">核算说明</ElButton></MobileActionMenu></header>
     <nav class="mf-tabs" aria-label="财务视图"><button :class="{active:tab==='report'}" @click="changeTab('report')">成本统计</button><button :class="{active:tab==='costs'}" @click="changeTab('costs')">商品成本</button></nav>
+    <p v-if="reportExportPosition != null" class="small-note" role="status">成本统计导出：{{ exportQueueLabel(reportExportPosition) }}</p>
+    <p v-if="costExportPosition != null" class="small-note" role="status">商品成本导出：{{ exportQueueLabel(costExportPosition) }}</p>
     <ElAlert v-if="rateError||error" :title="rateError||error" type="error" :closable="false" class="mf-alert" />
     <template v-if="tab==='report'">
       <ResponsiveFilters class="mf-report-search" @submit="applyMobileFinanceFilters">
@@ -58,8 +60,8 @@
         </div>
         <ElButton v-if="!rateLoaded" :loading="rateLoading" @click="loadRate()">重新读取汇率</ElButton>
         <ElButton v-else :loading="rateSaving" :disabled="!rateValid||!rateDirty" :title="rateDirty?'保存公共汇率，所有财务账号共用':'当前公共汇率已保存'" @click="saveRate">保存汇率</ElButton>
-        <ElButton v-if="tab==='report'" :disabled="!result||reportLoading||exporting||reportOutdated" :loading="exporting" :title="reportOutdated?'条件或汇率已修改，请重新查询后导出':'导出全部筛选结果，不限当前页'" @click="exportReport">导出 Excel</ElButton>
-        <template v-else><ElButton :disabled="!appliedCostQuery||costOutdated||costLoading||costExporting" :loading="costExporting" :title="costOutdated?'筛选已修改，请先查询':'导出查询结果中仍有启用商品的款号，不含页面草稿'" @click="exportCosts">导出成本表</ElButton><ElButton :disabled="saving||costLoading||costExporting" title="导入前请先保存或撤销页面成本修改" @click="openCostImport">导入成本表</ElButton></template>
+        <ElButton v-if="tab==='report'" :disabled="!result||reportLoading||exporting||reportOutdated" :loading="exporting" :title="reportOutdated?'条件或汇率已修改，请重新查询后导出':'导出全部筛选结果，不限当前页'" @click="exportReport">{{ reportExportPosition == null ? "导出 Excel" : exportQueueLabel(reportExportPosition) }}</ElButton>
+        <template v-else><ElButton :disabled="!appliedCostQuery||costOutdated||costLoading||costExporting" :loading="costExporting" :title="costOutdated?'筛选已修改，请先查询':'导出查询结果中仍有启用商品的款号，不含页面草稿'" @click="exportCosts">{{ costExportPosition == null ? "导出成本表" : exportQueueLabel(costExportPosition) }}</ElButton><ElButton :disabled="saving||costLoading||costExporting" title="导入前请先保存或撤销页面成本修改" @click="openCostImport">导入成本表</ElButton></template>
       </div>
     </div>
     <ElAlert v-if="rateError" :title="rateError" type="error" :closable="false" class="finance-gap" />
@@ -178,8 +180,6 @@ import AdaptiveTable from "../components/AdaptiveTable";
 import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import { useResponsive } from '../composables/responsive';
 const { isPhone } = useResponsive();
-import { authenticatedFetch } from '../authTransport';
-import { responseError } from '../utils/adminErrors.js';
 
 import {computed,onMounted,onBeforeUnmount,reactive,ref} from 'vue';
 import {onBeforeRouteLeave,RouterLink} from 'vue-router';
@@ -187,8 +187,7 @@ import {useAdminAuthStore} from '../stores/auth';
 const auth=useAdminAuthStore();
 import {ElMessage} from 'element-plus';
 import {ArrowDown,ArrowRight,InfoFilled,DataAnalysis,QuestionFilled,Search,Clock,EditPen} from '@element-plus/icons-vue';
-import {api,save,confirm,dateTime,statusNames} from '../composables/workbench';
-import {API_BASE} from '../api';
+import {api,save,confirm,dateTime,statusNames,useQueuedDownload,exportQueueLabel} from '../composables/workbench';
 import FinanceCostImportDialog from '../components/FinanceCostImportDialog.vue';
 import MissingCostPopover from '../components/MissingCostPopover.vue';
 import {financeCostPageSize,financeCostFilters,financeCostKey,financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
@@ -265,13 +264,14 @@ async function loadCosts(page=1,discard=false,existing=false){
     costPage.value=response.page;costTotal.value=response.total;selected.value=[];appliedCostQuery.value=query;
   }catch(e){error.value=errorMessage(e);}finally{costLoading.value=false;}
 }
+const { position: costExportPosition, download: downloadCosts } = useQueuedDownload();
+const { position: reportExportPosition, download: downloadReport } = useQueuedDownload();
+const financeExportOptions = value => ({method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(value)});
 async function exportCosts(){
   if(!appliedCostQuery.value||costOutdated.value||costLoading.value||costExporting.value)return;
   costExporting.value=true;error.value='';
   try{
-    const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/costs/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(appliedCostQuery.value)});
-    if(!response.ok)throw responseError(response.status,await response.json().catch(()=>({})),response.headers.get('Retry-After'),'成本表导出失败');
-    const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='商品成本.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+    await downloadCosts('finance/costs/export', '商品成本.xlsx', financeExportOptions(appliedCostQuery.value));
   }catch(e){error.value=errorMessage(e);}finally{costExporting.value=false;}
 }
 function openCostImport(){
@@ -337,9 +337,8 @@ async function queryReport(page=1,existing=false){
 async function exportReport(){
   if(!result.value||reportOutdated.value||reportLoading.value||exporting.value)return;
   exporting.value=true;error.value='';
-  try{const response=await authenticatedFetch(`${API_BASE}/api/admin/finance/reports/export`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(result.value.filters)});
-    if(!response.ok)throw responseError(response.status,await response.json().catch(()=>({})),response.headers.get('Retry-After'),'导出失败');
-    const url=URL.createObjectURL(await response.blob()),a=document.createElement('a');a.href=url;a.download='财务成本核算.xlsx';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  try{
+    await downloadReport('finance/reports/export', '财务成本核算.xlsx', financeExportOptions(result.value.filters));
   }catch(e){error.value=errorMessage(e);}finally{exporting.value=false;}
 }
 </script>

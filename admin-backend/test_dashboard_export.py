@@ -52,6 +52,14 @@ class DashboardExportTest(unittest.TestCase):
         self.assertEqual(data['summary']['units'], 7)
         self.assertEqual({r['款号'] for r in rows}, {'GT-2026','COAT'})
 
+    def test_retired_style_exports_historical_sales_not_current_inventory(self):
+        retired = self.product('OLD', stock=13)
+        self.order(retired, 5)
+        db._fetch_one('UPDATE products SET is_active=FALSE WHERE id=%s RETURNING id', (retired['id'],))
+        row, = self.records(self.workbook(style='OLD'))
+        self.assertEqual((row['销量（件）'], row['商品金额（USD，不含运费）']), (5, 50))
+        self.assertEqual((row['可用现货'], row['库存状态'], row['预计可售（天）']), (0, '仅历史', None))
+
     def test_full_filtered_result_not_page_with_formats_totals_and_beijing_time(self):
         for index in range(12):
             self.product(f'EXTRA-{index:02}', stock=index)
