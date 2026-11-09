@@ -368,8 +368,9 @@ def ensure_database_ready() -> None:
         import finance_order_styles
         if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (finance_order_styles.VERSION,)).fetchone():
             raise RuntimeError('Database finance order style binding migration is required')
-        if not inventory_overdelivery.stage_sources_ready(conn):
-            raise RuntimeError('Database contract receipt stage provenance migration is required')
+        with conn.cursor() as cur:
+            if not inventory_overdelivery.stage_sources_ready(cur):
+                raise RuntimeError('Database contract receipt stage provenance migration is required')
     if os.environ.get('APP_ENV','production') == 'production':
         with _connect() as conn:
             role = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()

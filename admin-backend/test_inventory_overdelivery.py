@@ -164,6 +164,11 @@ class OverdeliveryTest(unittest.TestCase):
             policy.migrate(cur);policy.migrate(cur)
         self.assertEqual(self.size(),before)
 
+    def test_readonly_runtime_startup_accepts_migrated_ledger(self):
+        # Detached Excel/PDF workers disable runtime migrations before importing app.
+        with patch.dict('os.environ', {'DB_SCHEMA_AUTO_MIGRATE':'0'}):
+            db.ensure_database_ready()
+
     def test_manual_pending_balance_does_not_inflate_original_allowance(self):
         self.prepare();self.save(pendingInspectionBySize={'M':100})
         self.save(pendingInboundBySize={'M':100});self.receive()
