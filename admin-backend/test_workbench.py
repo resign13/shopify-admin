@@ -82,6 +82,51 @@ class WorkbenchTest(unittest.TestCase):
         self.assertEqual(response.status_code,200,response.json)
         return response.json['product']
 
+    def _seed_order_batch(self, count):
+        with patch.dict(os.environ, {'ORDER_NOTIFICATION_MAINTENANCE': '1'}), db.get_connection() as conn:
+            conn.execute("""INSERT INTO orders(order_no,store_user_id,status,contact_name,phone,country,
+                    shipping_address,total_amount,shipping_fee,created_at,updated_at)
+                SELECT 'WB-BATCH-'||lpad(n::text,3,'0'),u.id,
+                    CASE WHEN n%%2=0 THEN 'paid' ELSE 'completed' END,'Batch','123456','Germany',
+                    'Fixture',29.9,0,'2026-09-20 00:00:00+00'::timestamptz + n * interval '1 second',
+                    '2026-09-20 01:00:00+00'::timestamptz + n * interval '1 microsecond'
+                FROM generate_series(1,%s) AS series(n) CROSS JOIN store_users u
+                WHERE u.email='buyer@gingtto.test'""", (count,))
+
+    def test_order_list_reads_page_versions_without_per_order_queries(self):
+        self._seed_order_batch(101)
+        args = {'page': 1, 'pageSize': 100, 'keyword': 'WB-BATCH-', 'direction': 'asc'}
+        expected = db._fetch_all("SELECT id,updated_at::text AS version FROM orders "
+                                 "WHERE order_no LIKE %s ORDER BY created_at ASC,id DESC", ('WB-BATCH-%',))
+        with patch.object(db, '_fetch_all', wraps=db._fetch_all) as fetch_all, \
+                patch.object(db, '_fetch_one', wraps=db._fetch_one) as fetch_one:
+            page = workbench.orders_page(args)
+        self.assertEqual(fetch_all.call_count, 3)
+        fetch_one.assert_not_called()
+        self.assertEqual(page['total'], 101)
+        self.assertEqual(page['statusCounts'], {'paid': 50, 'completed': 51})
+        self.assertEqual([{k: row[k] for k in ('id', 'version')} for row in page['items']], expected[:100])
+        self.assertEqual(page['items'][0]['goodsAmount'], 0)
+        next_page = workbench.orders_page({**args, 'page': 2})
+        self.assertEqual([(r['id'], r['version']) for r in next_page['items']],
+                         [(expected[-1]['id'], expected[-1]['version'])])
+        self.assertEqual(workbench.orders_page({**args, 'page': 3})['items'], [])
+        self.assertNotIn('version', db.list_orders(order_ids=[expected[0]['id']])[0])
+
+    def test_dashboard_queries_only_five_recent_orders_and_counts_all_matches(self):
+        self._seed_order_batch(7)
+        with patch.object(workbench, 'order_ids', wraps=workbench.order_ids) as page_ids, \
+                patch.object(db, 'list_orders', wraps=db.list_orders) as load_orders:
+            response = self.call('dashboard?view=workbench&dateFrom=2026-09-20&dateTo=2026-09-20&statuses=paid,completed')
+        self.assertEqual(response.status_code, 200, response.json)
+        page_ids.assert_called_once()
+        self.assertEqual(page_ids.call_args.args[1:3], (5, 0))
+        load_orders.assert_called_once()
+        self.assertEqual(len(load_orders.call_args.kwargs['order_ids']), 5)
+        self.assertEqual([r['orderNo'] for r in response.json['recentOrders']],
+                         [f'WB-BATCH-{n:03d}' for n in range(7, 2, -1)])
+        self.assertEqual(response.json['statusCounts'], {'paid': 3, 'completed': 4})
+
     def test_pagination_summary_and_permissions(self):
         data=self.call('inventory?page=1&pageSize=25').json
         self.assertEqual(data['total'],3)
@@ -97,6 +142,9 @@ class WorkbenchTest(unittest.TestCase):
         self.assertEqual(self.call('products?page=1',role='warehouse').status_code,403)
         self.assertEqual(self.call('catalog-options',role='warehouse').status_code,200)
         self.assertEqual(self.call('orders?page=1&pageSize=25',role='warehouse').status_code,200)
+        first_order = self.call('orders?page=1&pageSize=25').json['items'][0]
+        self.assertEqual(first_order['goodsAmount'], 89.7)
+        self.assertEqual(first_order['version'], workbench.version('orders', first_order['id']))
         self.assertEqual(self.call('products?page=1&pageSize=999').status_code,400)
 
     def test_dashboard_timezone_cancelled_and_matching_lines(self):
