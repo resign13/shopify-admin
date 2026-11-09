@@ -23,9 +23,9 @@ async (page) => {
   await page.waitForURL(u=>u.pathname==='/products');
   await page.goto(base+'/contracts');await page.getByRole('button',{name:'＋ 新建合同',exact:true}).click();
   const contract=page.getByRole('dialog',{name:'新建采购合同',exact:true});await fits(contract);
-  await contract.getByRole('textbox',{name:'甲方（必填）',exact:true}).fill('手机验收采购方');
-  await contract.getByRole('textbox',{name:'乙方 / 工厂名称（必填）',exact:true}).fill('隔离库工厂');
-  await contract.getByRole('textbox',{name:'合同号（必填）',exact:true}).fill('MOBILE-'+Date.now());
+  await contract.getByRole('textbox',{name:'甲方（选填）',exact:true}).fill('手机验收采购方');
+  await contract.getByRole('textbox',{name:'乙方 / 工厂名称（选填）',exact:true}).fill('隔离库工厂');
+  await contract.getByRole('textbox',{name:'合同号（选填）',exact:true}).fill('MOBILE-'+Date.now());
   await contract.getByPlaceholder('选择交货日期').fill('2026-12-01');await contract.getByPlaceholder('选择交货日期').press('Enter');
   await contract.getByRole('button',{name:'下一步',exact:true}).click();
   await contract.getByRole('button',{name:'选择已有商品',exact:true}).click();

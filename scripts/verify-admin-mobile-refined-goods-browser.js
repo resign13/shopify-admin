@@ -87,9 +87,9 @@ async (page) => {
   await page.getByRole('button', { name: '合同操作', exact: true }).click();
   await page.getByRole('button', { name: '新建采购合同', exact: true }).click();
   const contract = page.getByRole('dialog', { name: '新建采购合同', exact: true });
-  await contract.getByLabel('甲方（必填）', { exact: true }).fill('手机流程验收甲方');
-  await contract.getByLabel('乙方 / 工厂名称（必填）', { exact: true }).fill(`手机验收工厂 ${run}`);
-  await contract.getByLabel('合同号（必填）', { exact: true }).fill(`MOBILE-CONTRACT-${run}`);
+  await contract.getByLabel('甲方（选填）', { exact: true }).fill('手机流程验收甲方');
+  await contract.getByLabel('乙方 / 工厂名称（选填）', { exact: true }).fill(`手机验收工厂 ${run}`);
+  await contract.getByLabel('合同号（选填）', { exact: true }).fill(`MOBILE-CONTRACT-${run}`);
   await contract.getByPlaceholder('选择交货日期').fill('2026-12-20');
   await contract.getByPlaceholder('选择交货日期').press('Tab');
   const upload = input => input.setInputFiles({ name: 'mobile-goods-proof.png', mimeType: 'image/png', buffer: picture });

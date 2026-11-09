@@ -227,6 +227,29 @@ class OverdeliveryTest(unittest.TestCase):
         s = self.size()
         self.assertEqual((s['contractPending'],s['pendingInspection'],s['overdeliveryUsed']), (75,100,0))
 
+    def test_excel_optional_extra_preserves_already_entered_new_balance(self):
+        self.prepare({'M':100},legacy={'M':100})
+        book=load_workbook(io.BytesIO(self.call('inventory/export').data))
+        book.active['O2'],book.active['Y2']=110,10
+        out=io.BytesIO();book.save(out)
+        preview=self.upload('preview',out.getvalue())
+        self.assertEqual(preview.json['errors'],[])
+        self.assertEqual(preview.json['rows'][0]['contractPending'],100)
+        confirmed=self.upload('confirm',out.getvalue(),preview.json['fileHash'])
+        self.assertEqual(confirmed.status_code,200,confirmed.json)
+        s=self.size()
+        self.assertEqual((s['contractPending'],s['pendingInspection'],s['overdeliveryInspection']),(100,110,10))
+
+    def test_active_contract_protects_ordered_size_after_manual_clear(self):
+        self.prepare({'Tall XL':100})
+        self.assertEqual(self.save(contractPendingBySize={'Tall XL':0}).status_code,200)
+        payload=self.product_payload(1)
+        payload['sizes']=[size for size in payload['sizes'] if size!='Tall XL']
+        payload['sizePrices']=[size for size in payload['sizePrices'] if size['sizeCode']!='Tall XL']
+        denied=self.call('products/1','PUT',payload)
+        self.assertEqual(denied.status_code,400,denied.json)
+        self.assertEqual(self.size('Tall XL')['contractPending'],0)
+
     def test_legacy_stages_do_not_spend_first_contract_quantity(self):
         # CS5402: thirteen old inspection pieces existed before a new 70-piece
         # contract. Qualifying/receiving those old pieces must not consume it.
