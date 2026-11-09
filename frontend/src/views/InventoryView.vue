@@ -664,6 +664,7 @@ function populate(item) {
   draft.value = item.sizePrices.map((s) => ({
     ...s,
     registrationBase: { ...s },
+    receiptExtra: null,
     originalStock: s.stock,
     originalPending: s.contractPending,
     originalInbound: s.pendingInbound,

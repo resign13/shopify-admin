@@ -31,6 +31,7 @@ async (page) => {
   await quota.click();
   await row.getByRole('spinbutton',{name:'待验货 M',exact:true}).fill('115');
   await row.getByRole('spinbutton',{name:'待验货 M',exact:true}).press('Tab');
+  if (!(await quota.innerText()).includes('超送 15 件')) throw new Error('Compact overdelivery hint missing');
   await quota.click();
   if (!(await page.locator('.allowance-card:visible .allowance-card__details > div').filter({hasText:'待验货中超量'}).innerText()).includes('15 件')) throw new Error('Draft quota preview is stale');
   if (!(await page.locator('.allowance-card:visible .allowance-card__remaining').innerText()).includes('登记后下一笔最多到货')) throw new Error('Draft is not labelled');
