@@ -9,7 +9,6 @@ from urllib.parse import urlsplit
 from flask import g
 from psycopg.types.json import Jsonb
 import db
-import inventory_overdelivery
 
 
 def migrate(cur):
@@ -17,10 +16,15 @@ def migrate(cur):
         id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         request_id UUID UNIQUE NOT NULL, actor_id BIGINT NOT NULL,
         payload_hash TEXT NOT NULL, factory_name TEXT NOT NULL,
-        delivery_date DATE NOT NULL, quantity BIGINT NOT NULL CHECK(quantity > 0),
+        delivery_date DATE, quantity BIGINT NOT NULL CHECK(quantity > 0),
         snapshot JSONB NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
         CREATE INDEX IF NOT EXISTS purchase_contracts_created ON purchase_contracts(created_at DESC,id DESC);
     """)
+    migrate_optional_delivery(cur)
+
+
+def migrate_optional_delivery(cur):
+    cur.execute('ALTER TABLE purchase_contracts ALTER COLUMN delivery_date DROP NOT NULL')
 
 
 def text(value, label, limit, required=True):
@@ -40,11 +44,12 @@ def image_url(value):
 
 def serialize(row, detail=False):
     result = {'id': row['id'], 'contractNo': f"HT-{row['id']:06d}", 'creatorId': row['actor_id'],
-              'factoryName': row['factory_name'], 'deliveryDate': row['delivery_date'].isoformat(),
+              'factoryName': row['factory_name'], 'deliveryDate': row['delivery_date'].isoformat() if row['delivery_date'] else '',
               'quantity': row['quantity'], 'createdAt': row['created_at'].isoformat()}
-    result.update({k: row['snapshot'].get(k, default) for k,default in [('contractNo',result['contractNo']),('creatorName',''),('cancelled',False),('revision',1)]})
+    result.update({k: row['snapshot'].get(k, default) for k,default in [('creatorName',''),('cancelled',False),('revision',1)]})
     if detail:
         result.update(row['snapshot'])
+    result['contractNo'] = row['snapshot'].get('contractNo') or f"HT-{row['id']:06d}"
     return result
 
 
@@ -79,9 +84,9 @@ def create(payload, existing=None):
         if previous['actor_id'] != g.current_user['id'] or previous['payload_hash'] != digest:
             raise ValueError('提交编号已使用，请重新检查合同列表')
         return {'item': serialize(previous, True), 'replayed': True}
-    party_a = text(payload.get('partyA'), '甲方', 200)
-    party_b = text(payload.get('partyB') or payload.get('factoryName'), '乙方', 200)
-    contract_no = text(payload.get('contractNo'), '合同号', 100)
+    party_a = text(payload.get('partyA', ''), '甲方', 200, False)
+    party_b = text(payload.get('partyB') or payload.get('factoryName') or '', '乙方', 200, False)
+    contract_no = text(payload.get('contractNo', ''), '合同号', 100, False)
     attachments = payload.get('attachments') or []
     if not isinstance(attachments, list) or len(attachments) > 9: raise ValueError('备注附件最多上传9张图片')
     attachments = [image_url(v) for v in attachments]
@@ -90,15 +95,12 @@ def create(payload, existing=None):
     factory = party_b
     note = text(payload.get('note', ''), '合同备注', 5000, False)
     try:
-        delivery = date.fromisoformat(payload.get('deliveryDate', ''))
+        delivery = date.fromisoformat(payload['deliveryDate']) if payload.get('deliveryDate') else None
     except (ValueError, TypeError):
         raise ValueError('请填写有效交货日期')
     items = payload.get('items')
     if not isinstance(items, list) or not 1 <= len(items) <= 100:
         raise ValueError('请选择1至100个商品')
-    if not global_style: global_style = image_url(items[0].get('image', '') if isinstance(items[0], dict) else '')
-    if not global_chart: global_chart = image_url(items[0].get('sizeChartImage', '') if isinstance(items[0], dict) else '')
-    if not global_style or not global_chart: raise ValueError('请上传一张款式图和一张尺码表')
     ids = [positive(item.get('productId'), '商品编号') for item in items if isinstance(item, dict)]
     if len(ids) != len(items) or len(set(ids)) != len(ids):
         raise ValueError('商品数据无效或重复')
@@ -112,8 +114,6 @@ def create(payload, existing=None):
         product = db.get_product_by_id(product_id)
         style_image = global_style
         size_chart = global_chart
-        if not style_image or not size_chart:
-            raise ValueError('请补全每个商品的款式图和尺寸表')
         sizes = db._fetch_all('SELECT size_code,contract_pending FROM product_size_prices WHERE product_id=%s ORDER BY sort_order,id FOR UPDATE', (product_id,))
         amounts = item.get('quantities')
         mapping = item.get('sizeMapping')
@@ -134,8 +134,8 @@ def create(payload, existing=None):
             raise ValueError('每个商品至少填写一个尺码数量')
         snapshots.append({'productId': product_id, 'productCode': product.get('productCode') or product['sku'],
                           'sku': product['sku'], 'title': product['name'].get('zh') or product['name'].get('en'),
-                          'colorName': text(item.get('colorName') or product.get('colorName', ''), '色号', 100),
-                          'colorCode': text(item.get('colorCode') or product.get('colorName', ''), '色号', 100),
+                          'colorName': text(item.get('colorName') or product.get('colorName', ''), '色号', 100, False),
+                          'colorCode': text(item.get('colorCode') or product.get('colorName', ''), '色号', 100, False),
                           'image': style_image,
                           'sizeChartImage': size_chart,
                           'sizes': [s['size_code'] for s in sizes], 'quantities': quantities,
@@ -167,32 +167,25 @@ def apply_delta(before, after):
             for size, qty in item['quantities'].items():
                 key = (int(item['productId']),size)
                 delta[key] = delta.get(key,0) + sign * int(qty)
+    change_pending({key: change for key, change in delta.items() if change})
+
+
+def change_pending(delta, balances=None):
+    if not delta: return
     ids = sorted({key[0] for key in delta})
     db._fetch_all('SELECT id FROM products WHERE id=ANY(%s) ORDER BY id FOR UPDATE',(ids,))
-    with db.get_connection() as conn, conn.cursor() as cur:
-        totals, ledger = inventory_overdelivery.states(cur, ids)
     for (pid,size), change in sorted(delta.items()):
-        if not change: continue
-        row = db._fetch_one('SELECT contract_pending,pending_inspection,pending_inbound FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE',(pid,size))
+        row = db._fetch_one('SELECT contract_pending FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE',(pid,size))
         if not row: raise ValueError(f'商品 {pid} 的库存尺码 {size} 不存在')
+        if balances is not None and row['contract_pending'] != balances[(pid,size)]:
+            from workbench import Conflict
+            raise Conflict('合同未送已变化，请重新核对冲减数量')
         value = row['contract_pending'] + change
         if value < 0:
-            raise ValueError(f'商品 {pid} 尺码 {size} 的合同未送已减少，当前数量不足以回退；请先核对待验货、待入库及入库记录')
+            raise ValueError(f'商品 {pid} 尺码 {size} 的当前未送为 {row["contract_pending"]} 件，冲减数量超出余额')
         if value > 2147483647: raise ValueError('合同未送数量超出允许范围')
-        new_total = totals.get((pid, size), 0)+change
-        used = int(ledger.get((pid, size), {}).get('used', 0))
-        if used > max(0, new_total)*15//100:
-            raise ValueError('合同减少后不足以覆盖已使用的15%超量额度，请先核对累计超量记录')
-        state = inventory_overdelivery.internal(totals.get((pid, size), 0), ledger.get((pid, size)), row, include_stage_sources=True)
-        received = state['contractReceived']
-        if new_total < received:
-            raise ValueError('合同减少后小于已累计接收的合同内数量，请先核对到货记录')
-        # Establish provenance against the PRE-change contract, not legacy
-        # inspection stock left over when this contract is first introduced.
-        if ledger.get((pid, size), {}).get('normal_received') is None:
-            with db.get_connection() as conn, conn.cursor() as cur:
-                inventory_overdelivery.save(cur, pid, size, state)
         db._fetch_one('UPDATE product_size_prices SET contract_pending=%s WHERE product_id=%s AND size_code=%s RETURNING id',(value,pid,size))
+    for pid in ids:
         db._fetch_one('UPDATE products SET updated_at=clock_timestamp() WHERE id=%s RETURNING id',(pid,))
 
 
@@ -205,15 +198,42 @@ def update(contract_id, payload):
     return create(payload, existing=row)['item']
 
 
-def cancel(contract_id, payload=None):
+def cancel_preview(contract_id):
+    item = detail(contract_id)
+    if not item or item['cancelled']: raise ValueError('合同不存在或已取消')
+    balances = {(r['product_id'],r['size_code']):r['contract_pending'] for r in db._fetch_all(
+        'SELECT product_id,size_code,contract_pending FROM product_size_prices WHERE product_id=ANY(%s)',
+        ([p['productId'] for p in item['items']],))}
+    rows = [{'productId': p['productId'], 'sku': p['sku'], 'sizeCode': size, 'ordered': qty,
+             'balance': balances.get((p['productId'],size),0)}
+            for p in item['items'] for size, qty in p['quantities'].items() if qty]
+    return {'revision':item['revision'],'rows':rows}
+
+
+def cancel(contract_id, payload):
     from workbench import Conflict
     row = db._fetch_one('SELECT * FROM purchase_contracts WHERE id=%s FOR UPDATE',(contract_id,))
     if not row: raise ValueError('合同不存在')
     snap=row['snapshot']
     if snap.get('cancelled'): return serialize(row,True)
-    if (payload or {}).get('revision') != snap.get('revision',1): raise Conflict('合同已更新，请重新打开详情核对')
-    apply_delta(snap['items'],[])
+    if payload.get('revision') != snap.get('revision',1): raise Conflict('合同已更新，请重新打开详情核对')
+    lines = payload.get('deductions')
+    if not isinstance(lines, list): raise ValueError('请确认每个尺码本次冲减的未送数量，可选择不冲减')
+    ordered = {(p['productId'],size):qty for p in snap['items'] for size,qty in p['quantities'].items() if qty}
+    delta, balances = {}, {}
+    for line in lines:
+        if not isinstance(line,dict) or type(line.get('productId')) is not int or not isinstance(line.get('sizeCode'),str):
+            raise ValueError('合同冲减尺码格式错误')
+        key = (line['productId'],line['sizeCode'])
+        if key not in ordered or key in balances: raise ValueError('合同冲减尺码无效或重复')
+        amount = db._parse_non_negative_int(line.get('quantity'),'冲减数量')
+        balance = db._parse_non_negative_int(line.get('balance'),'当前未送')
+        if amount > min(ordered[key], balance): raise ValueError(f'{key[1]} 尺码冲减数量超出合同数量或当前未送余额')
+        balances[key] = balance
+        if amount: delta[key] = -amount
+    change_pending(delta,balances)
     snap['cancelled']=True
+    snap['cancelledDeductions'] = [{'productId':pid,'sizeCode':size,'quantity':-qty} for (pid,size),qty in sorted(delta.items())]
     snap['revision']=snap.get('revision',1)+1
     updated=db._fetch_one('UPDATE purchase_contracts SET snapshot=%s WHERE id=%s RETURNING *',(Jsonb(snap),contract_id))
     return serialize(updated,True)

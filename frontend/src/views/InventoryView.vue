@@ -195,22 +195,22 @@
           <div class="registration-rules">
             <strong>库存登记规则</strong>
             <ul>
-              <li><b>待验货：</b>先扣实际合同未送（含旧余额）；超过未送的部分才按原合同累计 15% 校验。点击尺码下的“验货额度”查看明细。</li>
-              <li><b>次品：</b>仅暂存并预留待验货；打回优先处理超量次品，普通次品返合同，已使用超量额度不返还。</li>
+              <li><b>待验货：</b>按实际未送计算单次 15% 上限，不区分来源。旧批多送时，点击尺码下的“验货额度”填写本次超收。</li>
+              <li><b>次品：</b>仅暂存并预留待验货；打回优先冲减超收，只有普通数量退回未送。</li>
               <li><b>合格：</b>增加时扣减可转移的待验货；入库时增加现货并清零合格。</li>
               <li><b>临时待入库：</b>独立登记与入库，不影响采购阶段。</li>
             </ul>
           </div>
         </ElPopover>
       </div>
-      <div v-if="isPhone" class="m-registration" data-testid="mobile-inventory-registration"><nav class="m-registration-sizes" aria-label="登记真实尺码"><button v-for="row in draft" :key="row.sizeCode" :class="{active:mobileRegistrationRow?.sizeCode === row.sizeCode,changed:registrationRowChanged(row)}" @click="registrationSize=row.sizeCode">{{ inventorySizeLabel(row.sizeCode) }}</button></nav><section v-if="mobileRegistrationRow" class="m-registration-card"><div class="m-registration-title"><strong>{{ inventorySizeLabel(mobileRegistrationRow.sizeCode) }} · 登记数量</strong><InventoryInspectionAllowance :row="mobileRegistrationRow"/></div><div class="m-registration-grid"><label v-for="field in mobileStageFields" :key="field.key"><span>{{ field.label }}</span><ElInputNumber :model-value="mobileRegistrationRow[field.key]" :min="field.key === 'stock' ? -2147483648 : 0" :max="2147483647" :precision="0" :controls="false" :aria-label="`${field.label} ${mobileRegistrationRow.sizeCode}`" @change="value => setMobileRegistration(field.key,value)"/><InventoryQuantityChange :value="mobileRegistrationRow[field.key]" :original="mobileRegistrationRow[field.original]"/></label></div></section></div>
+      <div v-if="isPhone" class="m-registration" data-testid="mobile-inventory-registration"><nav class="m-registration-sizes" aria-label="登记真实尺码"><button v-for="row in draft" :key="row.sizeCode" :class="{active:mobileRegistrationRow?.sizeCode === row.sizeCode,changed:registrationRowChanged(row)}" @click="registrationSize=row.sizeCode">{{ inventorySizeLabel(row.sizeCode) }}</button></nav><section v-if="mobileRegistrationRow" class="m-registration-card"><div class="m-registration-title"><strong>{{ inventorySizeLabel(mobileRegistrationRow.sizeCode) }} · 登记数量</strong><InventoryInspectionAllowance :row="mobileRegistrationRow" @extra="value => setReceiptExtra(mobileRegistrationRow,value)"/></div><div class="m-registration-grid"><label v-for="field in mobileStageFields" :key="field.key"><span>{{ field.label }}</span><ElInputNumber :model-value="mobileRegistrationRow[field.key]" :min="field.key === 'stock' ? -2147483648 : 0" :max="2147483647" :precision="0" :controls="false" :aria-label="`${field.label} ${mobileRegistrationRow.sizeCode}`" @change="value => setMobileRegistration(field.key,value)"/><InventoryQuantityChange :value="mobileRegistrationRow[field.key]" :original="mobileRegistrationRow[field.original]"/></label></div></section></div>
       <AdaptiveTable v-else :data="draft" class="registration-table" :row-class-name="({ row }) => registrationRowChanged(row) ? 'registration-row-changed' : ''"
         ><ElTableColumn
           prop="sizeCode"
           label="真实尺码"
           width="108"
           fixed="left"
-        ><template #default="{ row }"><div class="registration-size"><strong>{{ inventorySizeLabel(row.sizeCode) }}</strong><InventoryInspectionAllowance :row="row" /></div></template></ElTableColumn
+        ><template #default="{ row }"><div class="registration-size"><strong>{{ inventorySizeLabel(row.sizeCode) }}</strong><InventoryInspectionAllowance :row="row" @extra="value => setReceiptExtra(row,value)" /></div></template></ElTableColumn
         ><ElTableColumn label="现货余额" min-width="155" align="center"
           ><template #default="{ row }"
             ><div class="registration-quantity"><ElInputNumber
@@ -524,7 +524,7 @@ import ResponsiveFilters from "../components/ResponsiveFilters.vue";
 import AdaptiveTable from "../components/AdaptiveTable";
 import { computed, nextTick, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { inventorySizeLabel } from "../utils/inventorySizes";
-import { registrationError, moveProcurementStage, defectiveReturnPreview, procurementTargets } from "../utils/inventoryStages";
+import { registrationError, moveProcurementStage, defectiveReturnPreview, procurementTargets, procurementPreview } from "../utils/inventoryStages";
 import { sortProductsByCategory } from "../utils/catalogOrder";
 import { queryToSortState } from "../utils/tableSort";
 import { ElMessage } from "element-plus";
@@ -624,7 +624,7 @@ const editing = ref(false),
   exporting = ref(false);
 const { dirty, markClean, canLeave } = useDirty(() => draft.value);
 const changedSizeCount = computed(() => draft.value.filter(registrationRowChanged).length);
-const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '合格', defectivePending: '次品', temporaryInbound: '临时待入库', overdeliveryUsed: '累计使用超量额度', overdeliveryInspection: '待验货超量', overdeliveryQualified: '合格超量' };
+const inventoryFieldLabels = { stock: '现货余额', contractPending: '合同未送', pendingInspection: '待验货', pendingInbound: '合格', defectivePending: '次品', temporaryInbound: '临时待入库', overdeliveryUsed: '历史超收累计', overdeliveryInspection: '待验货超量', overdeliveryQualified: '合格超量' };
 const operationHistory = reactive({ items: [], total: 0, page: 1, loading: false, error: '' });
 let operationController, operationSerial = 0;
 async function loadOperations() {
@@ -664,6 +664,7 @@ function populate(item) {
   draft.value = item.sizePrices.map((s) => ({
     ...s,
     registrationBase: { ...s },
+    receiptExtra: null,
     originalStock: s.stock,
     originalPending: s.contractPending,
     originalInbound: s.pendingInbound,
@@ -728,9 +729,21 @@ async function moveStage(row, stage, value) {
     row[target] = old;
   } else {
     row[source] = candidate[source];
-    for (const key of ['overdeliveryUsed', 'overdeliveryInspection', 'overdeliveryQualified', 'overdeliveryRemaining', 'contractPending']) row[key] = candidate[key];
+    for (const key of ['overdeliveryUsed', 'overdeliveryInspection', 'overdeliveryQualified', 'overdeliveryLimit', 'contractPending', 'receiptExtra']) row[key] = candidate[key];
   }
   error.value = message;
+}
+async function setReceiptExtra(row, value) {
+  const previous = row.receiptExtra;
+  row.receiptExtra = value ?? null;
+  try {
+    Object.assign(row, procurementPreview(row.registrationBase, row.pendingInspection, row.pendingInbound, row.receiptExtra));
+    error.value = "";
+  } catch (e) {
+    await nextTick();
+    row.receiptExtra = previous;
+    error.value = errorMessage(e);
+  }
 }
 async function submit() {
   if (saving.value) return;
@@ -890,8 +903,15 @@ const receipt = ref(),
   receiptConflict = ref(false);
 const receiptField = computed(() => receiptSource.value === 'defective' ? 'defectivePending' : receiptSource.value === 'temporary' ? 'temporaryInbound' : 'pendingInbound');
 const receiptTitle = computed(() => (receiptBatch.value ? '批量' : '') + (receiptSource.value === 'defective' ? '确认次品一键打回' : receiptSource.value === 'temporary' ? '确认临时入库' : '确认一键入库'));
+function defectiveReceiptExplanation(product) {
+  const totals = (product?.sizePrices || []).map(defectiveReturnPreview);
+  const quantity = totals.reduce((sum,row) => sum + row.quantity,0);
+  const extra = totals.reduce((sum,row) => sum + row.extraReturned,0);
+  const normal = quantity-extra;
+  return `待验货减少 ${quantity} 件；${normal ? `普通次品 ${normal} 件退回合同未送` : '合同未送不变'}${extra ? `，超收次品 ${extra} 件不增加未送` : ''}。次品清零，现货、合格和临时待入库不变。`;
+}
 const receiptExplanation = computed(() => receiptSource.value === 'defective'
-  ? '仅处理已保存次品：等量减少待验货、增加合同未送并清零次品。现货、合格和临时待入库不变；打回不做反向撤销，各尺码整笔提交。'
+  ? defectiveReceiptExplanation(receipt.value)
   : receiptSource.value === 'temporary' ? '现货增加、临时待入库清零；合同未送、待验货、次品和合格保持不变，各尺码整笔提交。' : '现货增加、合格清零；合同未送、待验货、次品和临时待入库保持不变，各尺码整笔提交。');
 async function prepareReceipt(row, source = 'normal') {
   if (receiving.value || saving.value) return;

@@ -87,9 +87,9 @@ async (page) => {
   await page.getByRole('button', { name: '合同操作', exact: true }).click();
   await page.getByRole('button', { name: '新建采购合同', exact: true }).click();
   const contract = page.getByRole('dialog', { name: '新建采购合同', exact: true });
-  await contract.getByLabel('甲方（必填）', { exact: true }).fill('手机流程验收甲方');
-  await contract.getByLabel('乙方 / 工厂名称（必填）', { exact: true }).fill(`手机验收工厂 ${run}`);
-  await contract.getByLabel('合同号（必填）', { exact: true }).fill(`MOBILE-CONTRACT-${run}`);
+  await contract.getByLabel('甲方（选填）', { exact: true }).fill('手机流程验收甲方');
+  await contract.getByLabel('乙方 / 工厂名称（选填）', { exact: true }).fill(`手机验收工厂 ${run}`);
+  await contract.getByLabel('合同号（选填）', { exact: true }).fill(`MOBILE-CONTRACT-${run}`);
   await contract.getByPlaceholder('选择交货日期').fill('2026-12-20');
   await contract.getByPlaceholder('选择交货日期').press('Tab');
   const upload = input => input.setInputFiles({ name: 'mobile-goods-proof.png', mimeType: 'image/png', buffer: picture });
@@ -124,7 +124,10 @@ async (page) => {
   await detail.getByRole('button', { name: '取消合同', exact: true }).click();
   const cancelContract = page.getByRole('dialog', { name: '取消合同', exact: true });
   const cancellation = page.waitForResponse(response => response.url().endsWith(`/api/admin/contracts/${contractRecord.id}/cancel`) && response.request().method() === 'POST');
-  await cancelContract.getByRole('button', { name: '确认', exact: true }).click();
+  const deduction = cancelContract.getByRole('spinbutton',{name:`冲减 ${contractRecord.items[0].sku} M`,exact:true});
+  await deduction.fill(String(contractRecord.items[0].quantities.M));
+  await deduction.press('Tab');
+  await cancelContract.getByRole('button', { name: /^确认作废/ }).click();
   check((await cancellation).ok(), 'Dedicated contract cancellation failed');
   check((await api(`inventory/${productId}`)).product.sizePrices.find(row => row.sizeCode === 'M').contractPending === 0, 'Dedicated contract pending did not roll back');
   results.push({ operation: 'real contract three steps, PNG attachments, Excel export, cancel', contractId: contractRecord.id });

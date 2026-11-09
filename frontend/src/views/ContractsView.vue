@@ -54,22 +54,22 @@
     :before-close="close"
   >
     <template v-if="!detail">
-      <nav v-if="isPhone" class="mobile-contract-steps" aria-label="合同步骤"><span v-for="(label,index) in ['工厂与交期','商品与数量','确认合同']" :key="label" :class="{ active: step === index, done: step > index }"><b>{{ step > index ? '✓' : index+1 }}</b>{{ label }}</span></nav>
+      <nav v-if="isPhone" class="mobile-contract-steps" aria-label="合同步骤"><span v-for="(label,index) in ['单据资料','商品与数量','确认合同']" :key="label" :class="{ active: step === index, done: step > index }"><b>{{ step > index ? '✓' : index+1 }}</b>{{ label }}</span></nav>
       <ElSteps v-else :active="step" finish-status="success" simple
-        ><ElStep title="工厂与交期" /><ElStep title="商品与数量" /><ElStep
+        ><ElStep title="单据资料（选填）" /><ElStep title="商品与数量" /><ElStep
           title="确认合同"
       /></ElSteps>
       <ElForm v-if="step === 0" label-position="top" class="section-gap">
-        <ElFormItem label="甲方（必填）"
+        <ElFormItem label="甲方（选填）"
           ><ElInput v-model.trim="form.partyA" maxlength="200"
         /></ElFormItem>
-        <ElFormItem label="乙方 / 工厂名称（必填）"
+        <ElFormItem label="乙方 / 工厂名称（选填）"
           ><ElInput v-model.trim="form.partyB" maxlength="200"
         /></ElFormItem>
-        <ElFormItem label="合同号（必填）"
+        <ElFormItem label="合同号（选填）"
           ><ElInput v-model.trim="form.contractNo" maxlength="100"
         /></ElFormItem>
-        <ElFormItem label="交货时间（必填）"
+        <ElFormItem label="交货时间（选填）"
           ><ElDatePicker
             v-model="form.deliveryDate"
             type="date"
@@ -230,7 +230,7 @@
         v-if="detail && !detail.cancelled"
         type="danger"
         :loading="saving"
-        @click="cancelContract"
+        @click="openCancellation"
         >取消合同</ElButton
       >
       <ElButton
@@ -242,6 +242,24 @@
       ></template
     >
   </ElDrawer>
+  <ElDialog v-model="cancelling" title="取消合同" width="min(680px, 94vw)" append-to-body
+    :close-on-click-modal="false" :show-close="!saving">
+    <p>请按尺码确认本次冲减的未送数量，填 0 仅作废单据。待验货、合格和现货不变。</p>
+    <div v-for="row in cancelRows" :key="`${row.productId}:${row.sizeCode}`" class="contract-cancel-row">
+      <label>
+        <strong>{{ row.sku }} · {{ row.sizeCode }}</strong>
+        <span>合同 {{ row.ordered }} 件，未送 {{ row.balance }} → {{ row.balance - (row.quantity || 0) }}</span>
+        <ElInputNumber v-model="row.quantity" :min="0" :max="Math.min(row.ordered,row.balance)" :precision="0"
+          :aria-label="`冲减 ${row.sku} ${row.sizeCode}`" :disabled="saving" />
+      </label>
+    </div>
+    <ElAlert v-if="cancelError" :title="cancelError" type="error" :closable="false" />
+    <template #footer>
+      <ElButton :disabled="saving" @click="cancelling=false">返回</ElButton>
+      <ElButton v-if="cancelConflict" :disabled="saving" @click="openCancellation">读取最新余额</ElButton>
+      <ElButton type="danger" :loading="saving" :disabled="cancelConflict" @click="cancelContract">确认作废 · 冲减 {{ cancelTotal }} 件</ElButton>
+    </template>
+  </ElDialog>
   <ProductPicker
     v-model:visible="picker"
     :model-value="form.items.map((i) => i.productId)"
@@ -273,13 +291,14 @@ import {
   dateTime,
   productName,
   notifyError,
-  confirm,
 } from "../composables/workbench";
 const { isPhone } = useResponsive();
 const mobileListTools = ref(false);
 const standardSizes = ["S", "M", "L", "XL", "XXL"];
 const editingId = ref(null);
 const productInfo = reactive({});
+const cancelling = ref(false), cancelRows = ref([]), cancelRevision = ref(null), cancelError = ref(''), cancelConflict = ref(false);
+const cancelTotal = computed(() => cancelRows.value.reduce((total,row) => total+(row.quantity||0),0));
 const list = useList("contracts", { keyword: "" }),
   keyword = ref(list.query.keyword),
   open = ref(false),
@@ -388,13 +407,6 @@ async function addMany(rows) {
 }
 function next() {
   error.value = "";
-  if (
-    step.value === 0 &&
-    (!form.partyA || !form.partyB || !form.contractNo || !form.deliveryDate)
-  ) {
-    error.value = "请填写甲方、乙方、合同号和交货日期";
-    return;
-  }
   if (step.value === 1) {
     for (const item of form.items) {
       const selected = Object.values(item.sizeMapping).filter(Boolean);
@@ -421,10 +433,6 @@ function next() {
       error.value = "每个商品至少填写一个尺码数量，数量须为非负整数";
       return;
     }
-  }
-  if (step.value === 1 && (!form.styleImage || !form.sizeChartImage)) {
-    error.value = "请上传统一款式图和统一尺码表";
-    return;
   }
   step.value++;
 }
@@ -509,22 +517,38 @@ async function editContract() {
     notifyError(e);
   }
 }
+async function openCancellation() {
+  if (saving.value) return;
+  saving.value = true;
+  try {
+    const result = await api(`contracts/${detail.value.id}/cancel`);
+    cancelRows.value = result.rows.map(row => ({...row,quantity:0}));
+    cancelRevision.value = result.revision;
+    cancelError.value = "";
+    cancelConflict.value = false;
+    cancelling.value = true;
+  } catch (e) {
+    notifyError(e);
+  } finally {
+    saving.value = false;
+  }
+}
 async function cancelContract() {
-  if (!(await confirm("取消后会回退合同未送数量，确定继续？", "取消合同")))
-    return;
   if (saving.value) return;
   saving.value = true;
   try {
     const r = await save(
       `contracts/${detail.value.id}/cancel`,
-      { revision: detail.value.revision },
+      { revision: cancelRevision.value, deductions: cancelRows.value.map(({productId,sizeCode,balance,quantity}) => ({productId,sizeCode,balance,quantity:quantity||0})) },
       "POST",
     );
     detail.value = r.item;
+    cancelling.value = false;
     ElMessage.success("合同已取消");
     await list.load();
   } catch (e) {
-    notifyError(e);
+    cancelError.value = errorMessage(e);
+    cancelConflict.value = e.status === 409;
   } finally {
     saving.value = false;
   }
@@ -552,6 +576,9 @@ onMounted(async () => {
 });
 </script>
 <style scoped>
+.contract-cancel-row label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 0; }
+.contract-cancel-row label span { flex: 1; min-width: 170px; }
+
 .contract-summary {
   display: flex;
   gap: 20px;

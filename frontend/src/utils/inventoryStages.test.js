@@ -39,7 +39,7 @@ test('inventory selection boxes have larger visuals and 44px click targets witho
 });
 test('defects are an independent saved reserve, not a transfer', () => {
   const row=size(); assert.equal(registrationError([row]), '');
-  assert.deepEqual(defectiveReturnPreview(row), { quantity: 3, contractAfter: 13, inspectionAfter: 5, defectiveAfter: 0 });
+  assert.deepEqual(defectiveReturnPreview(row), { quantity: 3, extraReturned: 0, contractAfter: 13, inspectionAfter: 5, defectiveAfter: 0 });
   assert.equal(row.stock,-5); assert.equal(row.temporaryInbound,7);
   row.defectivePending=9; assert.match(registrationError([row]), /不能超过待验货/);
 });
@@ -68,10 +68,10 @@ test('signed stock and other stages remain integer bounded', () => {
 
 const contractBase = () => ({contractPending:100,pendingInspection:0,pendingInbound:0,
   originalContractQuantity:100,contractReceived:0,overdeliveryLimit:15,overdeliveryUsed:0,overdeliveryInspection:0,overdeliveryQualified:0});
-test('original-contract allowance accepts 115, rejects 116, and never makes pending negative', () => {
+test('live balance allowance accepts 115, rejects 116, and never makes pending negative', () => {
   const base=contractBase();const extra=procurementPreview(base,115,0);
   assert.equal(extra.contractPending,0);assert.equal(extra.overdeliveryUsed,15);assert.equal(extra.overdeliveryInspection,15);
-  assert.throws(()=>procurementPreview(base,116,0),/累计15%/);
+  assert.throws(()=>procurementPreview(base,116,0),/最多登记/);
   assert.equal(procurementPreview({...base,originalContractQuantity:6,contractPending:6,overdeliveryLimit:0},6,0).overdeliveryUsed,0);
 });
 test('qualified transfers preserve provenance; draft undo does not spend quota', () => {
@@ -86,12 +86,18 @@ test('qualified transfers preserve provenance; draft undo does not spend quota',
   assert.equal(procurementPreview(delivered,0,115).overdeliveryQualified,15);
   assert.equal(defectiveReturnPreview({...delivered,defectivePending:20}).contractAfter,5);
 });
-test('actual manual pending is normal, without replenishing spent quota', () => {
-  const base={...contractBase(),contractReceived:100,contractPending:100};
-  assert.equal(procurementPreview(base,100,0).overdeliveryUsed,0);
-  assert.equal(procurementPreview(base,115,0).overdeliveryUsed,15);
-  assert.throws(()=>procurementPreview(base,116,0),/累计15%/);
-  assert.throws(()=>procurementPreview({...base,overdeliveryUsed:15},101,0),/累计15%/);
+test('manual and contract balances share the same limit; historical usage is not a gate', () => {
+  const base={...contractBase(),overdeliveryUsed:15};
+  assert.equal(procurementPreview(base,115,0).overdeliveryUsed,30);
+  assert.throws(()=>procurementPreview(base,116,0),/最多登记/);
+  assert.throws(()=>procurementPreview({...base,contractPending:0},1,0),/最多登记/);
+});
+test('explicit extra preserves a new order already in the balance', () => {
+  const base={...contractBase(),contractPending:200};
+  const preview=procurementPreview(base,110,0,10);
+  assert.equal(preview.contractPending,100);
+  assert.equal(preview.overdeliveryInspection,10);
+  assert.throws(()=>procurementPreview(base,110,0,31),/超收最多 30/);
 });
 test('ZM4744 and ZM4745 legacy quantities debit the visible actual pending balance', () => {
   for (const [pending, inspection, contract, target, limit] of [[175,1,75,101,11],[147,2,60,89,9]]) {
@@ -101,7 +107,7 @@ test('ZM4744 and ZM4745 legacy quantities debit the visible actual pending balan
     assert.equal(moveProcurementStage(row,'inspection',target,inspection),'');
     assert.equal(row.contractPending,contract);
     assert.equal(row.overdeliveryUsed,0);
-    assert.equal(row.overdeliveryRemaining,limit);
+    assert.equal(row.overdeliveryLimit,limit);
   }
 });
 test('stage edits do not silently discard manual contract adjustments', () => {
@@ -138,7 +144,7 @@ test('arrival then qualification sends both final targets on desktop and mobile'
   assert.equal(moveProcurementStage(row,'inbound',60,0),'');
   assert.equal(row.pendingInspection,0);
   assert.equal(row.contractPending,40);
-  assert.deepEqual(procurementTargets([row]),{pendingInspectionBySize:{M:0},pendingInboundBySize:{M:60}});
+  assert.deepEqual(procurementTargets([row]),{pendingInspectionBySize:{M:0},pendingInboundBySize:{M:60},receiptExtraBySize:{}});
   const view=readFileSync(new URL('../views/InventoryView.vue',import.meta.url),'utf8');
   assert.match(view,/\.\.\.procurementTargets\(draft\.value\)/);
 });
@@ -148,5 +154,5 @@ test('paired targets preserve qualification reversals and omit untouched sizes',
     {sizeCode:'M',originalInspection:5,originalInbound:20,pendingInspection:25,pendingInbound:0},
     {sizeCode:'L',originalInspection:0,originalInbound:0,pendingInspection:0,pendingInbound:0},
   ];
-  assert.deepEqual(procurementTargets(rows),{pendingInspectionBySize:{M:25},pendingInboundBySize:{M:0}});
+  assert.deepEqual(procurementTargets(rows),{pendingInspectionBySize:{M:25},pendingInboundBySize:{M:0},receiptExtraBySize:{}});
 });

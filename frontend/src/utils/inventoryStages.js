@@ -9,6 +9,7 @@ export function procurementTargets(rows) {
   return {
     pendingInspectionBySize: Object.fromEntries(changed.map(row => [row.sizeCode, row.pendingInspection])),
     pendingInboundBySize: Object.fromEntries(changed.map(row => [row.sizeCode, row.pendingInbound])),
+    receiptExtraBySize: Object.fromEntries(changed.filter(row => row.receiptExtra != null).map(row => [row.sizeCode, row.receiptExtra])),
   };
 }
 
@@ -36,10 +37,13 @@ export function moveProcurementStage(row, stage, value, old) {
   let extra;
   if (row.registrationBase) {
     try {
-      const previous = procurementPreview(row.registrationBase, stage === 'inspection' ? old : row.pendingInspection, stage === 'inbound' ? old : row.pendingInbound);
+      const previous = procurementPreview(row.registrationBase, stage === 'inspection' ? old : row.pendingInspection, stage === 'inbound' ? old : row.pendingInbound, row.receiptExtra);
       if (previous.contractPending !== row.contractPending)
         throw new Error('请先单独保存合同未送调整，再登记阶段转移数量');
-      extra = procurementPreview(row.registrationBase, nextInspection, stage === 'inbound' ? value : row.pendingInbound);
+      const qualified = stage === 'inbound' ? value : row.pendingInbound;
+      const arrival = receiptArrival(row.registrationBase, nextInspection, qualified);
+      const receiptExtra = arrival > 0 ? row.receiptExtra : null;
+      extra = { ...procurementPreview(row.registrationBase, nextInspection, qualified, receiptExtra), receiptExtra };
       nextSource = stage === 'inspection' ? extra.contractPending : nextInspection;
     } catch (e) {
       row[target] = old;
@@ -61,27 +65,34 @@ export function defectiveReturnPreview(size) {
   const extra = Math.min(size.defectivePending || 0, size.overdeliveryInspection || 0);
   return {
     quantity: size.defectivePending || 0,
+    extraReturned: extra,
     contractAfter: size.contractPending + (size.defectivePending || 0) - extra,
     inspectionAfter: size.pendingInspection - (size.defectivePending || 0),
     defectiveAfter: 0,
   };
 }
 
-// Preview the same stage totals as the server. The database alone tracks
-// the contract-vs-legacy split inside ordinary units.
-export function procurementPreview(base, inspection, qualified) {
+export const balanceAllowance = pending => Math.floor(pending * 15 / 100);
+export const receiptArrival = (base, inspection, qualified) =>
+  inspection + qualified - base.pendingInspection - base.pendingInbound;
+
+export function procurementPreview(base, inspection, qualified, explicitExtra) {
   let p = base.contractPending, i = base.pendingInspection, b = base.pendingInbound;
   let used = base.overdeliveryUsed || 0, ei = base.overdeliveryInspection || 0, eb = base.overdeliveryQualified || 0;
-  const limit = base.overdeliveryLimit || 0, arrival = inspection + qualified - i - b;
+  const limit = balanceAllowance(p), arrival = receiptArrival(base, inspection, qualified);
   if (qualified < b) {
     const extra = Math.min(eb, b-qualified);
     eb -= extra; ei += extra; i += b-qualified;
   }
   if (arrival > 0) {
-    const normal = Math.min(arrival, p);
-    const extra = arrival-normal;
-    if (used+extra > limit) throw new Error(`超出原合同数量累计15%额度：允许超量 ${limit}，已用 ${used}，本次超量 ${extra}`);
+    const extra = explicitExtra ?? Math.max(0, arrival-p);
+    const normal = arrival-extra;
+    if (!Number.isInteger(extra) || extra < 0 || extra > arrival) throw new Error('本次超收须在 0 与本次实际到货之间');
+    if (extra > limit || normal > p)
+      throw new Error(`按当前未送 ${p} 件，超收最多 ${limit} 件，本次最多登记 ${p+limit} 件；正常到货不超过当前未送`);
     p -= normal; ei += extra; used += extra;
+  } else if (explicitExtra) {
+    throw new Error('只有新增到货时可登记本次超收');
   } else if (arrival < 0) {
     const extra = Math.min(ei, -arrival);
     ei -= extra; p += -arrival-extra;
@@ -95,5 +106,5 @@ export function procurementPreview(base, inspection, qualified) {
     throw new Error('本次转移超过上一阶段可用数量');
   if (Math.max(p, inspection, qualified, used) > MAX_QUANTITY) throw new Error('数量超出允许范围');
   return { contractPending: p, overdeliveryUsed: used, overdeliveryInspection: ei, overdeliveryQualified: eb,
-    overdeliveryRemaining: Math.max(0, limit-used) };
+    overdeliveryLimit: balanceAllowance(p) };
 }

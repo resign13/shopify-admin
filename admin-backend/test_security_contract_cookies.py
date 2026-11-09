@@ -72,7 +72,10 @@ class ContractCookieTest(unittest.TestCase):
         self.assertEqual(exported.headers['Cache-Control'], 'no-store')
         self.assertEqual(len(load_workbook(io.BytesIO(exported.data)).active._images), 2)
         self.assertEqual(self.inventory(), after)
-        cancelled = client.post('/api/admin/contracts/' + str(item['id']) + '/cancel', json={'revision': item['revision']}, headers=headers)
+        cancel_path = f'/api/admin/contracts/{item["id"]}/cancel'
+        preview = client.get(cancel_path, headers=headers).json
+        deductions = [{**line,'quantity':line['ordered']} for line in preview['rows']]
+        cancelled = client.post(cancel_path, json={'revision':item['revision'],'deductions':deductions}, headers=headers)
         self.assertEqual(cancelled.status_code, 200, cancelled.json)
         self.assertEqual(self.inventory(), before)
 

@@ -248,7 +248,7 @@ jobs:
           if grep -q '^### Error' "$RUNNER_TEMP/department-result.log"; then exit 1; fi
           grep -q '"extraGrantSavedAndPersisted":true' "$RUNNER_TEMP/department-result.log"
           playwright-cli -s=departmentci close
-      - name: Isolated cumulative overdelivery browser lifecycle
+      - name: Isolated live balance overdelivery browser lifecycle
         if: matrix.suite == 'operations'
         env:
           PGHOST: 127.0.0.1
@@ -273,7 +273,7 @@ jobs:
           grep -q '"narrowScreen":true' "$RUNNER_TEMP/inventory-ui-result.log"
           playwright-cli -s=overdeliveryci run-code --filename scripts/verify-inventory-overdelivery-browser.js | tee "$RUNNER_TEMP/overdelivery-result.log"
           grep -q '"accepted115":true' "$RUNNER_TEMP/overdelivery-result.log"
-          grep -q '"spentQuotaNotRenewed":true' "$RUNNER_TEMP/overdelivery-result.log"
+          grep -q '"zeroBalanceNoCarry":true' "$RUNNER_TEMP/overdelivery-result.log"
           python scripts/verify-inventory-overdelivery.py admin-backend
           playwright-cli -s=overdeliveryci close
       - name: Isolated product weights browser lifecycle

@@ -27,13 +27,14 @@ async (page) => {
   await quota.focus(); await quota.press('Enter');
   await page.locator('.allowance-card:visible').waitFor();
   if (!(await page.locator('.allowance-card:visible').innerText()).includes('100 件')) throw new Error('Original contract is missing');
-  if (!(await page.locator('.allowance-card:visible .allowance-card__remaining').innerText()).includes('15')) throw new Error('Initial remaining allowance is missing');
+  if (!(await page.locator('.allowance-card:visible .allowance-card__remaining').innerText()).includes('115')) throw new Error('Initial registration limit is missing');
   await quota.click();
   await row.getByRole('spinbutton',{name:'待验货 M',exact:true}).fill('115');
   await row.getByRole('spinbutton',{name:'待验货 M',exact:true}).press('Tab');
+  if (!(await quota.innerText()).includes('超送 15 件')) throw new Error('Compact overdelivery hint missing');
   await quota.click();
-  if (!(await page.locator('.allowance-card:visible .allowance-card__details > div').filter({hasText:'累计已用'}).innerText()).includes('15 件')) throw new Error('Draft quota preview is stale');
-  if (!(await page.locator('.allowance-card:visible .allowance-card__remaining').innerText()).includes('登记后剩余额度')) throw new Error('Draft is not labelled');
+  if (!(await page.locator('.allowance-card:visible .allowance-card__details > div').filter({hasText:'待验货中超量'}).innerText()).includes('15 件')) throw new Error('Draft quota preview is stale');
+  if (!(await page.locator('.allowance-card:visible .allowance-card__remaining').innerText()).includes('登记后下一笔最多到货')) throw new Error('Draft is not labelled');
   await quota.click();
   if (!(await row.locator('.quantity-change__delta.increase').innerText()).includes('+115')) throw new Error('Increase marker missing');
   if (!(await row.locator('.quantity-change__delta.decrease').innerText()).includes('-100')) throw new Error('Decrease marker missing');
@@ -47,7 +48,7 @@ async (page) => {
   const zero=dialog.getByRole('button',{name:'验货额度 Tall XL',exact:true});
   await zero.click();
   await page.locator('.allowance-card:visible').waitFor();
-  if (!(await page.locator('.allowance-card:visible').innerText()).includes('尚无采购合同额度')) throw new Error('No-contract explanation missing');
+  if (!(await page.locator('.allowance-card:visible').innerText()).includes('按实际未送计算')) throw new Error('No-contract explanation missing');
   await zero.click();
   await page.waitForFunction(() => [...document.querySelectorAll('.allowance-card')].every(el => !el.offsetWidth));
   await page.screenshot({path:'output/playwright/inventory-registration-desktop.png'});

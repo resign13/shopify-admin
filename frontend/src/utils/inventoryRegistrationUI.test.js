@@ -43,7 +43,7 @@ test('allowance details are accessible by click and retain all quota fields with
   assert.doesNotMatch(view, /overdelivery-note/);
   assert.match(allowance, /<ElPopover trigger="click"/);
   assert.match(allowance, /:aria-label="`验货额度 \$\{row.sizeCode\}`"/);
-  for (const field of ['originalContractQuantity', 'overdeliveryLimit', 'overdeliveryUsed', 'overdeliveryRemaining', 'overdeliveryInspection']) {
+  for (const field of ['contractPending', 'overdeliveryInspection', 'receiptExtra']) {
     assert.match(allowance, new RegExp(`row\\.${field}`));
   }
   // Desktop retains six fixed columns; the phone renders those same six fields

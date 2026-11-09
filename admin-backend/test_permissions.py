@@ -154,7 +154,10 @@ class ModulePermissionsTest(unittest.TestCase):
         edited={**payload,'note':'Finance update','revision':item['revision']}
         updated=self.call(path,'PUT',edited,role='finance')
         self.assertEqual(updated.status_code,200,updated.json)
-        cancelled=self.call(path+'/cancel','POST',{'revision':updated.json['item']['revision']},role='finance')
+        preview=self.call(path+'/cancel',role='finance')
+        self.assertEqual(preview.status_code,200,preview.json)
+        deductions=[{**line,'quantity':line['ordered']} for line in preview.json['rows']]
+        cancelled=self.call(path+'/cancel','POST',{'revision':updated.json['item']['revision'],'deductions':deductions},role='finance')
         self.assertEqual(cancelled.status_code,200,cancelled.json)
         self.assertEqual(db._fetch_all('SELECT size_code,stock,contract_pending FROM product_size_prices WHERE product_id=1 ORDER BY id'),before)
         logs=db._fetch_all("SELECT actor FROM admin_audit_logs WHERE module='contracts'")

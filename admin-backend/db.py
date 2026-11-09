@@ -371,6 +371,10 @@ def ensure_database_ready() -> None:
         with conn.cursor() as cur:
             if not inventory_overdelivery.stage_sources_ready(cur):
                 raise RuntimeError('Database contract receipt stage provenance migration is required')
+            cur.execute("""SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+                AND table_name='purchase_contracts' AND column_name='delivery_date' AND is_nullable='YES'""")
+            if not cur.fetchone():
+                raise RuntimeError('Database optional contract delivery date migration is required')
     if os.environ.get('APP_ENV','production') == 'production':
         with _connect() as conn:
             role = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
@@ -481,10 +485,10 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
     galleries = {product_id: [] for product_id in product_ids}
     sizes = {product_id: [] for product_id in product_ids}
     size_prices = {product_id: [] for product_id in product_ids}
-    totals, ledger = {}, {}
+    ledger = {}
     if include_contract_pending:
         with get_connection() as conn, conn.cursor() as cur:
-            totals, ledger = inventory_overdelivery.states(cur, product_ids)
+            ledger = inventory_overdelivery.states(cur, product_ids)
 
     for row in translation_rows:
         product_id = int(row["product_id"])
@@ -512,7 +516,7 @@ def _build_product_bundles(product_ids: list[int], *, include_contract_pending: 
             size_price["temporaryInbound"] = int(row["temporary_inbound"])
             size_price["defectivePending"] = int(row["defective_pending"])
             key = (int(row['product_id']), row['size_code'])
-            size_price.update(inventory_overdelivery.internal(totals.get(key, 0), ledger.get(key), row))
+            size_price.update(inventory_overdelivery.internal(row, ledger.get(key)))
         size_prices[int(row["product_id"])].append(size_price)
     return names, summaries, descriptions, galleries, sizes, size_prices
 
@@ -840,6 +844,10 @@ def _write_product_details(cur: Any, product_id: int, payload: dict[str, Any]) -
     existing_defective = {str(row["size_code"]): int(row["defective_pending"]) for row in existing_size_rows}
     normalized_size_prices = _normalize_size_prices(payload.get("sizePrices"), payload.get("sizes", []))
     next_size_codes = {item["sizeCode"] for item in normalized_size_prices}
+    if set(existing_contract_pending) - next_size_codes:
+        referenced = {size for (_,size), qty in inventory_overdelivery.contract_totals(cur, [product_id]).items() if qty}
+        if referenced - next_size_codes:
+            raise ValueError('有效采购合同订购的尺码不可删除或改名：' + ', '.join(sorted(referenced-next_size_codes)))
     cur.execute('SELECT size_code FROM inventory_overdelivery WHERE product_id=%s AND (used>0 OR normal_received>0)', (product_id,))
     protected_overdelivery = {r['size_code'] for r in cur.fetchall()}
     if protected_overdelivery - next_size_codes:
@@ -1103,6 +1111,7 @@ def update_product_inventory(
     pending_inspection_by_size: dict[str, Any] | None = None,
     temporary_inbound_by_size: dict[str, Any] | None = None,
     defective_pending_by_size: dict[str, Any] | None = None,
+    receipt_extra_by_size: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     normalized: dict[str, int] = {}
     for size_code, stock_value in (size_stocks or {}).items():
@@ -1125,6 +1134,7 @@ def update_product_inventory(
     inspection = {str(k): _parse_non_negative_int(v,"待验货") for k,v in (pending_inspection_by_size or {}).items()}
     temporary = {str(k): _parse_non_negative_int(v, "临时待入库") for k,v in (temporary_inbound_by_size or {}).items()}
     defective = {str(k): _parse_non_negative_int(v, "次品") for k,v in (defective_pending_by_size or {}).items()}
+    receipt_extra = {str(k): _parse_non_negative_int(v, "本次超收") for k,v in (receipt_extra_by_size or {}).items()}
     if not normalized and not normalized_contract_pending and not normalized_inbound and not inspection and not temporary and not defective:
         raise ValueError("Missing field: sizeStocks")
 
@@ -1149,27 +1159,28 @@ def update_product_inventory(
                 raise ValueError("Product has no size inventory")
 
             existing_sizes = [str(row["size_code"]) for row in rows]
-            unknown_sizes = [
-                size for size in set(normalized) | set(normalized_contract_pending) | set(normalized_inbound) | set(inspection) | set(temporary) | set(defective) if size not in existing_sizes
-            ]
+            requested = set(normalized) | set(normalized_contract_pending) | set(normalized_inbound) | set(inspection) | set(temporary) | set(defective) | set(receipt_extra)
+            unknown_sizes = sorted(requested - set(existing_sizes))
             if unknown_sizes:
                 raise ValueError(f"Unknown sizes: {', '.join(unknown_sizes)}")
 
-            totals, ledger = inventory_overdelivery.states(cur, [product_id])
+            ledger = inventory_overdelivery.states(cur, [product_id])
 
             for row in rows:
                 size_code = row['size_code']
+                if size_code not in requested: continue
                 stock = normalized.get(size_code, row['stock'])
                 updates = {}
-                for values,key in [(normalized_contract_pending,'contractPending'),(normalized_inbound,'pendingInbound'),(inspection,'pendingInspection')]:
+                for values,key in [(normalized_contract_pending,'contractPending'),(normalized_inbound,'pendingInbound'),(inspection,'pendingInspection'),(receipt_extra,'receiptExtra')]:
                     if size_code in values: updates[key]=values[size_code]
                 key = (product_id, size_code)
-                state_row = inventory_overdelivery.attach(row, totals.get(key, 0), ledger.get(key))
+                state_row = inventory_overdelivery.attach(row, ledger.get(key))
                 pending, inspect, inbound, excess = inventory_overdelivery.transition(state_row, updates)
                 next_defective = defective.get(size_code, row['defective_pending'])
                 validate_defective_reservation(next_defective, inspect, size_code)
                 cur.execute("UPDATE product_size_prices SET stock=%s,contract_pending=%s,pending_inspection=%s,pending_inbound=%s,temporary_inbound=%s,defective_pending=%s WHERE product_id=%s AND size_code=%s", (stock,pending,inspect,inbound,temporary.get(size_code,row['temporary_inbound']),next_defective,product_id,size_code))
-                inventory_overdelivery.save(cur, product_id, size_code, excess)
+                if any(value != state_row[field] for field,value in excess.items()):
+                    inventory_overdelivery.save(cur, product_id, size_code, excess)
 
             cur.execute(
                 "SELECT COALESCE(SUM(stock), 0) AS total_stock FROM product_size_prices WHERE product_id = %s",
@@ -1205,6 +1216,7 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
             ordered_rows = sorted(rows, key=lambda row: (int(row["productId"]), str(row["sizeCode"])))
             cur.execute("SELECT id FROM products WHERE id=ANY(%s) ORDER BY id FOR UPDATE", (sorted({int(row['productId']) for row in ordered_rows}),))
             cur.fetchall()
+            ledger = inventory_overdelivery.states(cur, sorted({int(r['productId']) for r in ordered_rows}))
             for row in ordered_rows:
                 product_id = int(row["productId"])
                 size_code = str(row["sizeCode"])
@@ -1244,74 +1256,17 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 if mismatches:
                     raise ValueError(f"Identity changed for {product_id} / {size_code}: {', '.join(mismatches)}")
 
-                current_stock = int(current["stock"] or 0)
-                current_pending = int(current["contract_pending"] or 0)
-                original_stock = int(row["originalStock"])
-                original_pending = int(row["originalContractPending"])
-                next_stock = inventory_policy.parse_stock(row["stock"])
-                next_pending = int(row["contractPending"])
-                stock_changed = next_stock != original_stock
-                pending_changed = next_pending != original_pending
-                # A file that was already applied has current == next. Treat
-                # that case as a no-op while still rejecting a third value.
-                if stock_changed and current_stock not in (original_stock, next_stock):
-                    raise ValueError(f"Inventory conflict for {product_id} / {size_code}")
-                if pending_changed and current_pending not in (original_pending, next_pending):
-                    raise ValueError(f"Contract pending conflict for {product_id} / {size_code}")
-
-                current_inbound = int(current['pending_inbound'])
-                inbound_changed = 'pendingInbound' in row and row['pendingInbound'] != row['originalPendingInbound']
-                next_inbound = int(row['pendingInbound']) if inbound_changed else current_inbound
-                if inbound_changed and current_inbound not in (int(row['originalPendingInbound']), next_inbound):
-                    raise ValueError(f"合格数量冲突：{product_id} / {size_code}")
-                totals, ledger = inventory_overdelivery.states(cur, [product_id])
-                state = inventory_overdelivery.internal(totals.get((product_id,size_code),0), ledger.get((product_id,size_code)),
-                                                        current, include_stage_sources=True)
-                stages_already_applied = all(int(current[col]) == row[key] for col,key in [('contract_pending','contractPending'),('pending_inspection','pendingInspection'),('pending_inbound','pendingInbound')])
-                if not stages_already_applied:
-                    row.pop('_stagePrepared', None)
-                    prepare_inventory_import(row, state)
-                fields=[('contractPending','originalContractPending','contract_pending'),('pendingInspection','originalPendingInspection','pending_inspection'),('pendingInbound','originalPendingInbound','pending_inbound')]
-                moving = any(row[k] != row[o] for k,o,_ in fields)
-                if moving and not all(int(current[col]) == row[o] for k,o,col in fields):
-                    if not all(int(current[col]) == row[k] for k,o,col in fields): raise ValueError('库存阶段数量冲突，请重新导出')
-                next_pending=row['contractPending'];next_inbound=row['pendingInbound']
-                pending_changed=next_pending != original_pending
-                inbound_changed=next_inbound != int(row['originalPendingInbound'])
-                final_inspection = row['pendingInspection'] if row['pendingInspection'] != row['originalPendingInspection'] else int(current['pending_inspection'])
-                validate_defective_reservation(current['defective_pending'], final_inspection, size_code)
-                assignments: list[str] = []
-                params: list[Any] = []
-                if 'temporaryInbound' in row and row['temporaryInbound'] != row['originalTemporaryInbound']:
-                    next_temporary = _parse_non_negative_int(row['temporaryInbound'], '临时待入库')
-                    original_temporary = _parse_non_negative_int(row['originalTemporaryInbound'], '原始临时待入库')
-                    if int(current['temporary_inbound']) not in (original_temporary, next_temporary):
-                        raise ValueError(f"临时待入库数量冲突：{product_id} / {size_code}")
-                    if int(current['temporary_inbound']) != next_temporary:
-                        assignments.append('temporary_inbound = %s'); params.append(next_temporary)
-                if stock_changed and current_stock != next_stock:
-                    assignments.append("stock = %s")
-                    params.append(next_stock)
-                if pending_changed and current_pending != next_pending:
-                    assignments.append("contract_pending = %s")
-                    params.append(next_pending)
-                if inbound_changed and current_inbound != next_inbound:
-                    assignments.append("pending_inbound = %s")
-                    params.append(next_inbound)
-                if row['pendingInspection'] != row['originalPendingInspection'] and int(current['pending_inspection']) != row['pendingInspection']:
-                    assignments.append('pending_inspection = %s');params.append(row['pendingInspection'])
-                if assignments:
-                    if not stages_already_applied:
-                        inventory_overdelivery.save(cur, product_id, size_code, row['_overdelivery'])
-                    params.extend([product_id, size_code])
-                    cur.execute(
-                        f"UPDATE product_size_prices SET {', '.join(assignments)} "
-                        "WHERE product_id = %s AND size_code = %s",
-                        tuple(params),
-                    )
+                state = inventory_overdelivery.attach(current, ledger.get((product_id,size_code)))
+                changes, markers = inventory_import_changes(row, state)
+                if changes:
+                    if markers and any(value != state[field] for field,value in markers.items()):
+                        inventory_overdelivery.save(cur, product_id, size_code, markers)
+                    assignments = ', '.join(f'{IMPORT_FIELDS[k][1]} = %s' for k in changes)
+                    cur.execute(f"UPDATE product_size_prices SET {assignments} WHERE product_id=%s AND size_code=%s",
+                                (*changes.values(),product_id,size_code))
                     affected_products.add(product_id)
                     updated_rows += 1
-                    updated_fields += len(assignments)
+                    updated_fields += len(changes)
 
             for product_id in sorted(affected_products):
                 cur.execute('SELECT COALESCE(SUM(stock),0) AS total FROM product_size_prices WHERE product_id=%s', (product_id,))
@@ -1340,6 +1295,8 @@ def delete_product(product_id: int) -> dict[str, Any] | None:
             if not row:
                 conn.commit()
                 return None
+            if any(inventory_overdelivery.contract_totals(cur, [product_id]).values()):
+                raise ValueError('商品被有效采购合同引用，请先核对并作废合同；商品保持原状态')
 
             has_related_orders = False
             action = "deleted"
@@ -2209,9 +2166,13 @@ def delete_admin_sessions_for_user(user_id: int) -> None:
     security_core.revoke(sys.modules[__name__], 'admin', user_id=user_id)
 
 
-def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None, include_weight: bool = False, include_stock: bool = False) -> list[dict[str, Any]]:
+def list_orders(
+    *, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None,
+    include_weight: bool = False, include_stock: bool = False, include_version: bool = False,
+) -> list[dict[str, Any]]:
     weight_column = ", psp.weight_grams AS current_weight_grams" if include_weight else ""
     stock_column = ", psp.stock AS current_stock" if include_stock else ""
+    version_column = ", o.updated_at::text AS version" if include_version else ""
     weight_join = "LEFT JOIN product_size_prices psp ON psp.product_id=p.id AND psp.size_code=oi.size_code AND oi.size_code<>''" if include_weight or include_stock else ""
     query = f"""
         SELECT
@@ -2223,7 +2184,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           wp.printed_at AS warehouse_printed_at,
           wp.printed_by_name AS warehouse_printed_by_name,
           o.created_at,
-          o.updated_at,
+          o.updated_at{version_column},
           o.status,
           o.store_user_id,
           o.owner_admin_id,
@@ -2306,6 +2267,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                 "warehousePrintedBy": row["warehouse_printed_by_name"] or "",
                 "createdAt": _iso(row["created_at"]),
                 "updatedAt": _iso(row["updated_at"]),
+                **({"version": row["version"]} if include_version else {}),
                 "status": row["status"],
                 "cancelNote": row["cancellation_note"] if row["status"] == 'cancelled' else '',
                 "ownerAdminId": row["owner_admin_id"],
@@ -2631,17 +2593,41 @@ def validate_defective_reservation(defective, inspection, size_code=''):
         raise ValueError(f'{size_code} 次品不能超过待验货；已保存次品须预留，不能转为合格')
 
 
-def inventory_stages(current, updates):
-    return inventory_overdelivery.transition(current, updates)[:3]
+IMPORT_FIELDS = {
+    'stock': ('originalStock', 'stock', '现货'),
+    'contractPending': ('originalContractPending', 'contract_pending', '合同未送'),
+    'pendingInspection': ('originalPendingInspection', 'pending_inspection', '待验货'),
+    'pendingInbound': ('originalPendingInbound', 'pending_inbound', '合格'),
+    'temporaryInbound': ('originalTemporaryInbound', 'temporary_inbound', '临时待入库'),
+}
+IMPORT_STAGES = ('contractPending','pendingInspection','pendingInbound')
 
 
-def prepare_inventory_import(row, state=None):
-    if row.get('_stagePrepared'): return
-    originals = {'contract_pending':row['originalContractPending'], 'pending_inspection':row['originalPendingInspection'], 'pending_inbound':row['originalPendingInbound']}
-    changes={k:row[k] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')] if row[k] != row[o]}
-    originals.update(state or {})
-    p,i,b,extra=inventory_overdelivery.transition(originals,changes)
-    row.update(contractPending=p,pendingInspection=i,pendingInbound=b,_stagePrepared=True,_overdelivery=extra)
+def inventory_import_changes(row, current):
+    """Preview and confirm evaluate only the workbook's original edit intent."""
+    edits = {k:row[k] for k,(original,_,_) in IMPORT_FIELDS.items() if k in row and row[k] != row[original]}
+    changes = {}
+    stage_edits = {k:v for k,v in edits.items() if k in IMPORT_STAGES}
+    markers = None
+    for key, value in edits.items():
+        original, field, label = IMPORT_FIELDS[key]
+        if current[field] not in (row[original],value):
+            raise ValueError(f'{label}已变更，请重新导出')
+        if current[field] != value:
+            changes[key] = value
+    if row.get('receiptExtra', 0) and not ({'pendingInspection','pendingInbound'} & stage_edits.keys()):
+        raise ValueError('只有新增到货时可登记本次超收')
+    if {'pendingInspection','pendingInbound'} & changes.keys():
+        if any(current[IMPORT_FIELDS[k][1]] != row[IMPORT_FIELDS[k][0]] for k in IMPORT_STAGES):
+            raise ValueError('库存阶段数量已变化，请重新导出')
+        if 'receiptExtra' in row:
+            stage_edits['receiptExtra'] = row['receiptExtra']
+        pending, inspection, qualified, markers = inventory_overdelivery.transition(current, stage_edits)
+        validate_defective_reservation(current['defective_pending'], inspection, row['sizeCode'])
+        for key, value in zip(IMPORT_STAGES,(pending,inspection,qualified)):
+            if current[IMPORT_FIELDS[key][1]] != value:
+                changes[key] = value
+    return changes, markers
 
 
 def _bind_product_media(product_id, payload):
