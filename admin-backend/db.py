@@ -2209,9 +2209,13 @@ def delete_admin_sessions_for_user(user_id: int) -> None:
     security_core.revoke(sys.modules[__name__], 'admin', user_id=user_id)
 
 
-def list_orders(*, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None, include_weight: bool = False, include_stock: bool = False) -> list[dict[str, Any]]:
+def list_orders(
+    *, user_id: int | None = None, limit: int | None = None, order_ids: list[int] | None = None,
+    include_weight: bool = False, include_stock: bool = False, include_version: bool = False,
+) -> list[dict[str, Any]]:
     weight_column = ", psp.weight_grams AS current_weight_grams" if include_weight else ""
     stock_column = ", psp.stock AS current_stock" if include_stock else ""
+    version_column = ", o.updated_at::text AS version" if include_version else ""
     weight_join = "LEFT JOIN product_size_prices psp ON psp.product_id=p.id AND psp.size_code=oi.size_code AND oi.size_code<>''" if include_weight or include_stock else ""
     query = f"""
         SELECT
@@ -2223,7 +2227,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
           wp.printed_at AS warehouse_printed_at,
           wp.printed_by_name AS warehouse_printed_by_name,
           o.created_at,
-          o.updated_at,
+          o.updated_at{version_column},
           o.status,
           o.store_user_id,
           o.owner_admin_id,
@@ -2306,6 +2310,7 @@ def list_orders(*, user_id: int | None = None, limit: int | None = None, order_i
                 "warehousePrintedBy": row["warehouse_printed_by_name"] or "",
                 "createdAt": _iso(row["created_at"]),
                 "updatedAt": _iso(row["updated_at"]),
+                **({"version": row["version"]} if include_version else {}),
                 "status": row["status"],
                 "cancelNote": row["cancellation_note"] if row["status"] == 'cancelled' else '',
                 "ownerAdminId": row["owner_admin_id"],
