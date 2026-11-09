@@ -201,7 +201,7 @@
             :disabled="stylePerformanceLoading || !stylePerformance.total || !!stylePerformanceError"
             title="导出当前已查询条件下的全部款号，不限当前页"
             @click="exportStylePerformance"
-            >导出 Excel</ElButton
+            >{{ styleExportPosition == null ? "导出 Excel" : exportQueueLabel(styleExportPosition) }}</ElButton
           >
         </div>
       </div>
@@ -736,7 +736,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
 import { stylePerformanceQuery, stylePerformanceExportQuery, isPersonalStyleScope } from "../utils/styleSalesperson";
-import { api, download, notifyError, money, dateTime, statusNames } from "../composables/workbench";
+import { api, useQueuedDownload, exportQueueLabel, notifyError, money, dateTime, statusNames } from "../composables/workbench";
 const TrendChart = defineAsyncComponent(
   () => import("../components/TrendChart.vue"),
 );
@@ -768,6 +768,7 @@ const stylePerformance = ref({ items: null, summary: {} });
 const stylePerformanceLoading = ref(false),
   stylePerformanceError = ref("");
 const styleExporting = ref(false);
+const { position: styleExportPosition, download: downloadStyles } = useQueuedDownload();
 const styleSalespersonId = ref("");
 const styleKeyword = ref(""),
   styleCategory = ref(""),
@@ -821,6 +822,7 @@ function riskName(value) {
   return (
     {
       backordered: "欠货",
+      historical: "仅历史",
       out_of_stock: "无库存",
       no_sales: "周转期无销量",
       critical: "7 天内售罄",
@@ -833,6 +835,7 @@ function riskType(value) {
   return (
     {
       backordered: "danger",
+      historical: "info",
       out_of_stock: "danger",
       no_sales: "info",
       critical: "danger",
@@ -842,6 +845,7 @@ function riskType(value) {
   );
 }
 function daysText(item) {
+  if (item?.historicalOnly) return "—";
   if (Number(item?.shortageUnits || 0) > 0) return "欠货待补";
   if (!item || Number(item.availableStock ?? item.stock ?? 0) <= 0) return "无库存";
   if (!Number(item.velocityUnits || 0) || item.estimatedDays == null)
@@ -1030,7 +1034,7 @@ async function exportStylePerformance() {
   const query = stylePerformanceExportQuery(appliedStyleQuery.value);
   styleExporting.value = true;
   try {
-    await download(
+    await downloadStyles(
       "dashboard/style-performance/export?" + new URLSearchParams(query),
       `款号商品表现_${query.dateFrom}_${query.dateTo}.xlsx`,
       { requestTimeout: 60000 },

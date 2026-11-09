@@ -56,9 +56,18 @@ def _dashboard_window(args, default_days: int = 30):
     return start, end, (end - start).days + 1
 
 
-def _style_catalog_parts(args, style_code: str | None = None):
+def _style_history_exists(args, start, end):
+    where, params = _style_sales_join(args, start, end)
+    return (f"EXISTS(SELECT 1 FROM order_items h JOIN orders o ON o.id=h.order_id WHERE h.product_id=p.id AND {where})", params)
+
+
+def _style_catalog_parts(args, start, end, style_code: str | None = None):
     style_sql = _style_code_sql('p')
-    where, params = ['(p.is_active = TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))'], []
+    inventory_visible = '(p.is_active = TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))'
+    history, params = _style_history_exists(args, start, end)
+    # Include sold retired variants for the selected reporting windows, but do
+    # not turn their retired inventory into active stock.
+    where = [f'({inventory_visible} OR {history})']
     if styles := filter_values(args, 'style'):
         where.append(f"({style_sql}=ANY(%s) OR COALESCE(NULLIF(p.product_code,''),p.sku)=ANY(%s))")
         params.extend([styles] * 2)
@@ -78,6 +87,7 @@ def _style_catalog_parts(args, style_code: str | None = None):
       product_catalog AS (
         SELECT
           p.id,
+          {inventory_visible} AS inventory_visible,
           {style_sql} AS style_code,
           p.product_code,
           p.sku,
@@ -132,7 +142,8 @@ def _style_row(row):
     if isinstance(result.get('lastSoldAt'), datetime):
         result['lastSoldAt'] = db._iso(result['lastSoldAt'])
     if 'velocityUnits' in result:
-        result['risk'] = ('backordered' if result.get('shortageUnits', 0) > 0 else
+        result['risk'] = ('historical' if result.get('historicalOnly') else
+                          'backordered' if result.get('shortageUnits', 0) > 0 else
                           'out_of_stock' if result.get('availableStock', result['stock']) <= 0 else
                           'no_sales' if result['velocityUnits'] == 0 else
                           'critical' if result['estimatedDays'] <= 7 else
@@ -151,13 +162,13 @@ def style_performance(args, *, paginate=True):
     page_size = int(args.get('pageSize', 10) or 10) if paginate else 10
     if page < 1 or page_size not in {10, 25, 50}:
         raise ValueError('款号分页参数无效')
-    catalog_cte, catalog_params = _style_catalog_parts(args)
+    catalog_cte, catalog_params = _style_catalog_parts(args, min(start, end-timedelta(days=velocity_days-1)), end)
     window_join, window_params = _style_sales_join(args, start, end)
     velocity_join, velocity_params = _style_sales_join(args, start, end, days=velocity_days)
     metrics_sql = f"""
       WITH {catalog_cte},
       style_catalog AS (
-        SELECT pc.style_code, MAX(pc.name) AS name,
+        SELECT pc.style_code, MAX(pc.name) AS name, NOT BOOL_OR(pc.inventory_visible) AS historical_only,
                COUNT(DISTINCT pc.id) AS color_sku_count,
                COUNT(psp.id) AS size_count,
                COUNT(*) FILTER (WHERE psp.stock=0) AS empty_size_count,
@@ -171,7 +182,7 @@ def style_performance(args, *, paginate=True):
                COALESCE(SUM(psp.temporary_inbound),0) AS temporary_inbound,
                COALESCE(SUM(psp.defective_pending),0) AS defective_pending
         FROM product_catalog pc
-        LEFT JOIN product_size_prices psp ON psp.product_id=pc.id
+        LEFT JOIN product_size_prices psp ON psp.product_id=pc.id AND pc.inventory_visible
         GROUP BY pc.style_code
       ),
       window_sales AS (
@@ -193,7 +204,7 @@ def style_performance(args, *, paginate=True):
         GROUP BY pc.style_code
       ),
       metrics AS (
-        SELECT c.style_code, c.name, c.color_sku_count, c.size_count, c.empty_size_count,
+        SELECT c.style_code, c.name, c.color_sku_count, c.size_count, c.empty_size_count, c.historical_only,
                c.stock, c.available_stock, c.shortage_units, c.shortage_size_count, c.contract_pending, c.pending_inspection, c.pending_inbound, c.temporary_inbound, c.defective_pending,
                COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount,
                COALESCE(w.orders,0) AS orders, COALESCE(w.customers,0) AS customers,
@@ -205,13 +216,14 @@ def style_performance(args, *, paginate=True):
         LEFT JOIN window_sales w ON w.style_code=c.style_code
         LEFT JOIN velocity_sales v ON v.style_code=c.style_code
       )
-      SELECT style_code AS "styleCode", name, units, amount, orders, customers,
+      SELECT style_code AS "styleCode", name, units, amount, orders, customers, historical_only AS "historicalOnly",
              velocity_units AS "velocityUnits", average_daily_units AS "averageDailyUnits",
              estimated_days AS "estimatedDays", stock, available_stock AS "availableStock", shortage_units AS "shortageUnits", shortage_size_count AS "shortageSizeCount", contract_pending AS "contractPending",
              pending_inspection AS "pendingInspection", pending_inbound AS "pendingInbound", temporary_inbound AS "temporaryInbound", defective_pending AS "defectivePending",
              color_sku_count AS "colorSkuCount", size_count AS "sizeCount",
              empty_size_count AS "emptySizeCount", last_sold_at AS "lastSoldAt",
-             CASE WHEN shortage_units>0 THEN 'backordered'
+             CASE WHEN historical_only THEN 'historical'
+                  WHEN shortage_units>0 THEN 'backordered'
                   WHEN available_stock=0 THEN 'out_of_stock'
                   WHEN velocity_units=0 THEN 'no_sales'
                   WHEN estimated_days <= 7 THEN 'critical'
@@ -277,7 +289,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
     velocity_days = int(args.get('velocityWindow', 7) or 7)
     if velocity_days not in {7, 30}:
         raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
-    catalog_cte, catalog_params = _style_catalog_parts(args, style_code)
+    catalog_cte, catalog_params = _style_catalog_parts(args, min(start, end-timedelta(days=velocity_days-1)), end, style_code)
     window_join, window_params = _style_sales_join(args, start, end)
     velocity_join, velocity_params = _style_sales_join(args, start, end, days=velocity_days)
     product_filter = ' WHERE pc.id=%s' if product_id is not None else ''
@@ -286,7 +298,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
       WITH {catalog_cte},
       color_catalog AS (
         SELECT pc.id, pc.style_code, pc.product_code, pc.sku, pc.color_name, pc.color_hex,
-               pc.main_image_url, pc.name, pc.category_id, pc.category_sort_order, COUNT(psp.id) AS size_count,
+               pc.main_image_url, pc.name, pc.category_id, pc.category_sort_order, NOT pc.inventory_visible AS historical_only, COUNT(psp.id) AS size_count,
                COUNT(*) FILTER (WHERE psp.stock=0) AS empty_size_count,
                COALESCE(SUM(psp.stock),0) AS stock,
                COALESCE(SUM(GREATEST(psp.stock,0)),0) AS available_stock,
@@ -298,9 +310,9 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
                COALESCE(SUM(psp.temporary_inbound),0) AS temporary_inbound,
                COALESCE(SUM(psp.defective_pending),0) AS defective_pending
         FROM product_catalog pc
-        LEFT JOIN product_size_prices psp ON psp.product_id=pc.id
+        LEFT JOIN product_size_prices psp ON psp.product_id=pc.id AND pc.inventory_visible
         {product_filter}
-        GROUP BY pc.id,pc.style_code,pc.product_code,pc.sku,pc.color_name,pc.color_hex,pc.main_image_url,pc.name,pc.category_id,pc.category_sort_order
+        GROUP BY pc.id,pc.style_code,pc.product_code,pc.sku,pc.color_name,pc.color_hex,pc.main_image_url,pc.name,pc.category_id,pc.category_sort_order,pc.inventory_visible
       ),
       window_sales AS (
         SELECT pc.id, SUM(i.quantity) AS units, SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount,
@@ -316,7 +328,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
         GROUP BY pc.id
       )
       SELECT c.id AS "productId", c.product_code AS "productCode", c.sku, c.color_name AS "colorName",
-             c.color_hex AS "colorHex", c.main_image_url AS image, c.name, c.size_count AS "sizeCount",
+             c.color_hex AS "colorHex", c.main_image_url AS image, c.name, c.size_count AS "sizeCount", c.historical_only AS "historicalOnly",
              c.empty_size_count AS "emptySizeCount", c.stock, c.available_stock AS "availableStock", c.shortage_units AS "shortageUnits", c.shortage_size_count AS "shortageSizeCount", c.contract_pending AS "contractPending",
              c.pending_inspection AS "pendingInspection", c.pending_inbound AS "pendingInbound", c.temporary_inbound AS "temporaryInbound", c.defective_pending AS "defectivePending",
              COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount, COALESCE(w.orders,0) AS orders,
@@ -365,34 +377,40 @@ def _style_size_rows(args, style_code: str, product_id: int | None = None):
         raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
     window_join, window_params = _style_sales_join(args, start, end)
     velocity_join, velocity_params = _style_sales_join(args, start, end, days=velocity_days)
-    catalog_cte, catalog_params = _style_catalog_parts(args, style_code)
+    catalog_cte, catalog_params = _style_catalog_parts(args, min(start, end-timedelta(days=velocity_days-1)), end, style_code)
     product_filter = ' WHERE p.id=%s' if product_id is not None else ''
     sql = f"""
       WITH {catalog_cte},
       window_sales AS (
-        SELECT i.product_id, i.size_code, SUM(i.quantity) AS units, SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount
+        SELECT i.product_id, COALESCE(i.size_code,'') AS size_code, SUM(i.quantity) AS units, SUM(CASE WHEN o.currency='CNY' THEN ROUND(i.total_price/o.exchange_rate,2) ELSE i.total_price END) AS amount
         FROM product_catalog pc JOIN order_items i ON i.product_id=pc.id JOIN orders o ON o.id=i.order_id
-        WHERE {window_join} GROUP BY i.product_id,i.size_code
+        WHERE {window_join} GROUP BY i.product_id,COALESCE(i.size_code,'')
       ),
       velocity_sales AS (
-        SELECT i.product_id, i.size_code, SUM(i.quantity) AS units
+        SELECT i.product_id, COALESCE(i.size_code,'') AS size_code, SUM(i.quantity) AS units
         FROM product_catalog pc JOIN order_items i ON i.product_id=pc.id JOIN orders o ON o.id=i.order_id
-        WHERE {velocity_join} GROUP BY i.product_id,i.size_code
+        WHERE {velocity_join} GROUP BY i.product_id,COALESCE(i.size_code,'')
+      ),
+      size_keys AS (
+        SELECT s.product_id,s.size_code FROM product_size_prices s JOIN product_catalog pc ON pc.id=s.product_id AND pc.inventory_visible
+        UNION SELECT product_id,size_code FROM window_sales
+        UNION SELECT product_id,size_code FROM velocity_sales
       )
       SELECT p.id AS "productId", p.product_code AS "productCode", p.color_name AS "colorName",
-             s.size_code AS "sizeCode", s.stock, GREATEST(s.stock,0) AS "availableStock", GREATEST(-s.stock::bigint,0) AS "shortageUnits", (s.stock<0)::int AS "shortageSizeCount", s.contract_pending AS "contractPending",
+             k.size_code AS "sizeCode", s.id IS NULL AS "historicalOnly", s.stock, GREATEST(s.stock,0) AS "availableStock", GREATEST(-s.stock::bigint,0) AS "shortageUnits", (s.stock<0)::int AS "shortageSizeCount", s.contract_pending AS "contractPending",
              s.pending_inspection AS "pendingInspection", s.pending_inbound AS "pendingInbound", s.temporary_inbound AS "temporaryInbound", s.defective_pending AS "defectivePending",
              COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount,
              COALESCE(v.units,0) AS "velocityUnits",
              ROUND(COALESCE(v.units,0)::numeric / %s, 2) AS "averageDailyUnits",
-             CASE WHEN COALESCE(v.units,0)=0 OR s.stock<=0 THEN NULL
+             CASE WHEN COALESCE(v.units,0)=0 OR COALESCE(s.stock,0)<=0 THEN NULL
                   ELSE ROUND(s.stock::numeric / (v.units::numeric / %s), 1) END AS "estimatedDays"
       FROM product_catalog p
-      JOIN product_size_prices s ON s.product_id=p.id
-      LEFT JOIN window_sales w ON w.product_id=p.id AND w.size_code=s.size_code
-      LEFT JOIN velocity_sales v ON v.product_id=p.id AND v.size_code=s.size_code
+      JOIN size_keys k ON k.product_id=p.id
+      LEFT JOIN product_size_prices s ON s.product_id=p.id AND s.size_code=k.size_code AND p.inventory_visible
+      LEFT JOIN window_sales w ON w.product_id=p.id AND w.size_code=k.size_code
+      LEFT JOIN velocity_sales v ON v.product_id=p.id AND v.size_code=k.size_code
       {product_filter}
-      ORDER BY p.category_sort_order,p.category_id,p.id,s.sort_order,s.id
+      ORDER BY p.category_sort_order,p.category_id,p.id,s.sort_order,s.id,k.size_code
     """
     params = [*catalog_params, *window_params, *velocity_params, velocity_days, velocity_days]
     if product_id is not None:
@@ -551,7 +569,8 @@ def atomic_admin_call(func, args, kwargs):
             g.current_user = {**g.current_user,**current}
             if kwargs.get('order_id') and request.path.startswith('/api/admin/orders/'):
                 sales_ownership.assert_access(kwargs['order_id'], lock=True)
-            if not request.path.endswith('/receive') and not (request.path.startswith('/api/admin/inventory/') and request.path.endswith('/defective/return')):
+            # Inventory registration checks its required version under the product lock.
+            if request.endpoint != 'update_inventory_route' and not request.path.endswith('/receive') and not (request.path.startswith('/api/admin/inventory/') and request.path.endswith('/defective/return')):
                 check_versions(request.get_json(silent=True) or {})
             response = make_response(func(*args, **kwargs))
             if response.status_code >= 400:
@@ -1087,6 +1106,7 @@ def dashboard(args):
     recent_orders=_order_page_items(recent_args, 5)
     if statuses := filter_values(args, 'statuses'):
         status_counts = {k:v for k,v in status_counts.items() if k in statuses}
+    history, history_params = _style_history_exists(args, start, end)
     return {'metrics':metrics,'previous':previous,'trend':points,
             'topProducts':[{**r,'amount':float(r['amount'])} for r in top],
             'topProductsByAmount':[{**r,'amount':float(r['amount'])} for r in top_amount],
@@ -1094,6 +1114,6 @@ def dashboard(args):
             'recentOrders':recent_orders,'statusCounts':status_counts,
             'snapshot':{**{k:int(v) for k,v in inventory.items()},'statuses':{r['status']:r['count'] for r in global_counts}},
             'filters':{'countries':[r['country'] for r in db._fetch_all("SELECT DISTINCT country FROM orders o WHERE "+owner_clause+" AND country IS NOT NULL ORDER BY country",tuple(owner_params))],
-                       'styles':[r['style'] for r in db._fetch_all(f"SELECT style FROM (SELECT DISTINCT ON ({_style_code_sql('p')}) {_style_code_sql('p')} AS style,pc.sort_order,pc.id AS category_id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE ORDER BY {_style_code_sql('p')},pc.sort_order,pc.id) ranked ORDER BY sort_order,category_id,style")],
+                       'styles':[r['style'] for r in db._fetch_all(f"SELECT style FROM (SELECT DISTINCT ON ({_style_code_sql('p')}) {_style_code_sql('p')} AS style,pc.sort_order,pc.id AS category_id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE OR {history} ORDER BY {_style_code_sql('p')},pc.sort_order,pc.id) ranked ORDER BY sort_order,category_id,style",tuple(history_params))],
                        'categories':[dict(r) for r in db._fetch_all("SELECT pc.category_key AS key,COALESCE(NULLIF(pct.label,''),pc.category_key) AS label FROM product_categories pc LEFT JOIN product_category_translations pct ON pct.category_id=pc.id AND pct.lang_code='zh' WHERE pc.is_active=TRUE ORDER BY pc.sort_order,pc.id")]},
             'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'updatedAt':datetime.now(timezone.utc).isoformat()}

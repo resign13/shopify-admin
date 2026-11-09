@@ -2346,6 +2346,8 @@ def confirm_inventory_import() -> Any:
 @require_roles("admin", "sales", "warehouse")
 def update_inventory_route(product_id: int) -> Any:
     payload = request.get_json(silent=True) or {}
+    if not isinstance(payload, dict) or not isinstance(payload.get('version'), str) or not payload['version'].strip():
+        return jsonify({'code':'inventory_version_required','message':'缺少库存版本，请重新读取当前库存后保存。'}), 400
     size_stocks = payload.get("sizeStocks")
     if not isinstance(size_stocks, dict) or (not size_stocks and not payload.get("contractPendingBySize") and not payload.get("pendingInboundBySize") and not payload.get("pendingInspectionBySize") and not payload.get("temporaryInboundBySize") and not payload.get("defectivePendingBySize")):
         return jsonify({"message": "Missing field: sizeStocks"}), 400
@@ -2365,9 +2367,11 @@ def update_inventory_route(product_id: int) -> Any:
         extra = payload.get('receiptExtraBySize')
         if extra is not None and not isinstance(extra, dict):
             raise ValueError('本次超收数量格式错误')
-        locked = workbench.db._fetch_one('SELECT id FROM products WHERE id=%s FOR UPDATE', (product_id,))
+        locked = workbench.db._fetch_one('SELECT updated_at::text AS version FROM products WHERE id=%s FOR UPDATE', (product_id,))
         if not locked:
             return jsonify({"message": "Product not found"}), 404
+        if locked['version'] != payload['version']:
+            raise workbench.Conflict('库存已被其他操作更新。当前草稿已保留，请读取最新数据并核对后保存。')
         before = get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
         product = update_product_inventory(product_id, size_stocks, contract_pending_by_size, inbound, inspection, temporary, defective, extra)
     except ValueError as error:

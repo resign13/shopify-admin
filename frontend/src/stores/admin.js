@@ -187,12 +187,12 @@ export const useAdminStore = defineStore('admin-data', {
       const data = await request('/api/admin/inventory', { headers: authHeaders(auth.sessionId) })
       this.inventoryItems = data.items
     },
-    async saveInventory(productId, sizeStocks, contractPendingBySize = {}) {
+    async saveInventory(productId, version, sizeStocks, contractPendingBySize = {}) {
       const auth = useAdminAuthStore()
       const data = await request(`/api/admin/inventory/${productId}`, {
         method: 'PUT',
         headers: authHeaders(auth.sessionId),
-        body: JSON.stringify({ sizeStocks, contractPendingBySize }),
+        body: JSON.stringify({ version, sizeStocks, contractPendingBySize }),
       })
       const updated = data.product
       const syncList = (items) => {

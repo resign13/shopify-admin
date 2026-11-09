@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { downloadFile, createOrderExportController } from '../src/utils/exportDownload.js';
+import { downloadFile, downloadQueuedFile, createOrderExportController } from '../src/utils/exportDownload.js';
 
 const failure = (status, code, retryAfter = '5') => new Response(JSON.stringify({ code, message: 'server message', extra: 7 }), {
   status, headers: { 'Content-Type': 'application/json', 'Retry-After': retryAfter },
@@ -65,6 +65,32 @@ test('no automatic retry for ordinary rate limit, other status, or network error
   let count = 0;
   await assert.rejects(downloadFile(async () => { count++; throw new Error('offline'); }, '/x', 'x', { busyRetry: true }), /下载失败，请检查网络后重试/);
   assert.equal(count, 1);
+});
+
+test('queued synchronous export keeps its POST filters and ticket without order recovery', async () => {
+  const browser = fakeBrowser();
+  try {
+    const url = '/api/admin/finance/reports/export';
+    const body = JSON.stringify({ dateFrom: '2026-09-18', dateTo: '2026-09-18' });
+    const positions = [], tickets = [];
+    await downloadQueuedFile(async (path, request) => {
+      assert.equal(path, url);
+      assert.equal(request.method, 'POST');
+      assert.equal(request.body, body);
+      assert.equal(request.headers.get('Content-Type'), 'application/json');
+      tickets.push(request.headers.get('X-Export-Ticket'));
+      if (tickets.length === 1) return new Response(JSON.stringify({ code: 'export_queued', position: 2 }), { status: 429, headers: { 'Retry-After': '5' } });
+      return new Response(new Uint8Array([80, 75]));
+    }, url, '成本统计.xlsx', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
+      onBusyWait: error => positions.push(error.data.position),
+      onStatusAvailable: () => assert.fail('synchronous exports have no order result'),
+    });
+    assert.match(tickets[0], /^[0-9a-f-]{36}$/i);
+    assert.deepEqual(tickets, [tickets[0], tickets[0]]);
+    assert.deepEqual(positions, [2]);
+    assert.equal(browser.calls[1].download, '成本统计.xlsx');
+  } finally { browser.restore(); }
 });
 
 test('invalid JSON export responses show Chinese while preserving HTTP metadata', async () => {

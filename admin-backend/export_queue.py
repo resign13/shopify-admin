@@ -1,4 +1,4 @@
-"""Persistent admission tickets for the admin order-export FIFO."""
+"""Persistent admission tickets shared by queued admin Excel exports."""
 import json
 import re
 import uuid
@@ -11,6 +11,12 @@ QUEUE_LIMIT = 10
 # Fixed PostgreSQL advisory-lock namespace for short admission transactions.
 MUTEX = 549728836142681785
 ORDER_ROUTES = {'/api/admin/orders/export', '/api/admin/orders/export-by-sheet'}
+SYNC_ROUTES = {
+    ('GET', '/api/admin/inventory/export'): {'admin', 'sales', 'warehouse'},
+    ('GET', '/api/admin/dashboard/style-performance/export'): {'admin', 'sales'},
+    ('POST', '/api/admin/finance/costs/export'): {'admin', 'sales', 'warehouse', 'finance'},
+    ('POST', '/api/admin/finance/reports/export'): {'admin', 'sales', 'warehouse', 'finance'},
+}
 
 
 def is_invoice(path):
@@ -19,6 +25,12 @@ def is_invoice(path):
 
 def is_order_route(path):
     return path in ORDER_ROUTES or is_invoice(path)
+
+
+def queued_roles(path, method):
+    if is_order_route(path):
+        return {'admin', 'sales'} if is_invoice(path) else {'admin', 'sales', 'warehouse'}
+    return SYNC_ROUTES.get((method,path))
 
 
 def migrate(cur):

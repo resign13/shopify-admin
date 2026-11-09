@@ -56,6 +56,47 @@ class ExportQueueTest(unittest.TestCase):
             locks.execute("SELECT pg_advisory_unlock(hashtextextended('export:global:1',0))")
         self.assertEqual(len(self.calls), 2)
 
+    def test_sync_workbooks_join_same_queue_without_order_result(self):
+        exports = [
+            ('GET', '/api/admin/inventory/export', None),
+            ('GET', '/api/admin/dashboard/style-performance/export?dateFrom=2026-09-18&dateTo=2026-09-18', None),
+            ('POST', '/api/admin/finance/costs/export', {}),
+            ('POST', '/api/admin/finance/reports/export', {'dateFrom': '2026-09-18', 'dateTo': '2026-09-18', 'exchangeRate': '6.68'}),
+        ]
+        order_ticket = str(uuid.uuid4())
+        tickets = [str(uuid.uuid4()) for _ in exports]
+        client = application.app.test_client()
+
+        def request_export(index, role='admin'):
+            method, path, body = exports[index]
+            return client.open(path, method=method, json=body, headers={
+                'Authorization': 'Bearer ' + self.tokens[role], 'X-Export-Ticket': tickets[index],
+            })
+
+        with db._connect(autocommit=True, coordination=True) as locks:
+            try:
+                for slot in (0, 1):
+                    locks.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))', (f'export:global:{slot}',))
+                self.assertEqual(request_export(1, 'warehouse').status_code, 403)
+                self.assertEqual(self.call(self.admin, order_ticket).json['position'], 1)
+                for index in range(len(exports)):
+                    response = request_export(index)
+                    self.assertEqual(response.status_code, 429, response.json)
+                    self.assertEqual((response.json['code'], response.json['position']), ('export_queued', index + 2))
+                status = client.get('/api/admin/orders/export-results/' + tickets[0],
+                                    headers={'Authorization': 'Bearer ' + self.tokens['admin']})
+                self.assertEqual(status.status_code, 404)
+                locks.execute("SELECT pg_advisory_unlock(hashtextextended('export:global:0',0))")
+                self.assertEqual(request_export(0).json['position'], 2)
+                self.assertEqual(self.call(self.admin, order_ticket).status_code, 200)
+                for index in range(len(exports)):
+                    response = request_export(index)
+                    self.assertEqual(response.status_code, 200, response.json)
+                    self.assertEqual(response.data[:2], b'PK')
+            finally:
+                for slot in (0, 1):
+                    locks.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))', (f'export:global:{slot}',))
+
     def test_queue_limit_expiry_and_reentry(self):
         tickets = [str(uuid.uuid4()) for _ in range(11)]
         with db._connect(autocommit=True, coordination=True) as locks:

@@ -38,6 +38,7 @@ async (page) => {
   await page.getByRole('tooltip',{name:/本次核算缺失成本的款号 GT-OTHER 3 件/}).waitFor();
   await page.keyboard.press('Escape');
   await page.setViewportSize({width:1920,height:1000});
+  await page.locator('.finance-summary').waitFor({state:'visible'});
   assert(await page.locator('.finance-summary>article').count()===3,'Only three monetary summaries');
   assert((await page.locator('.report-missing').textContent()).trim()==='3 件成本未设置 · 完整成本与毛利待补全','Missing costs remain visible, not zero');
   const initialPartialDownload=page.waitForEvent('download');await page.getByRole('button',{name:'导出 Excel',exact:true}).click();
