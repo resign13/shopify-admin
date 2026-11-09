@@ -723,7 +723,7 @@ def receive_inventory(product_id, payload, *, source='normal'):
         if not amount: continue
         db._fetch_one(f'UPDATE product_size_prices SET stock=stock+{field},{field}=0 WHERE product_id=%s AND size_code=%s RETURNING id',(product_id,row['size_code']))
         if source == 'normal':
-            db._fetch_one('UPDATE inventory_overdelivery SET qualified=0 WHERE product_id=%s AND size_code=%s RETURNING product_id', (product_id, row['size_code']))
+            db._fetch_one('UPDATE inventory_overdelivery SET qualified=0,contract_qualified=0 WHERE product_id=%s AND size_code=%s RETURNING product_id', (product_id, row['size_code']))
         changes.append({'sizeCode':row['size_code'],'quantity':amount,'stockBefore':row['stock'],'stockAfter':row['stock']+amount,
                         'contractBefore':row['contract_pending'],'contractAfter':row['contract_pending'],
                         'inspectionBefore':row['pending_inspection'],'inspectionAfter':row['pending_inspection'],

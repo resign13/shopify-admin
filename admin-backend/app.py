@@ -1356,7 +1356,7 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
     from openpyxl.comments import Comment
     worksheet['I1'].comment = Comment('转移待验货或合格时可保持此列原值，系统会自动按阶段差额计算合同未送；若同时填写此列，须与自动计算结果一致。', 'GINGTTO')
     worksheet['M1'].comment = Comment('填写合格目标数量。增加量从待验货扣减；单独修改此列时系统自动计算待验货余额，一键入库另行操作。', 'GINGTTO')
-    worksheet['O1'].comment = Comment('填写待验货目标数量。普通数量扣合同未送；超量按原合同总数量累计15%（向下取整），合同未送不扣负。与合格同时修改时，两列均为最终余额。只读额度以数据库为准，打回不返还超量额度。', 'GINGTTO')
+    worksheet['O1'].comment = Comment('填写待验货目标数量。先扣实际合同未送（含旧余额）；超过未送的部分才按原合同累计15%校验（向下取整）。与合格同时修改时，两列均为最终余额。只读额度以数据库为准，打回不返还超量额度。', 'GINGTTO')
     worksheet['Q1'].comment = Comment('独立临时待入库目标数量，不扣减采购阶段、不增加现货；保存后另行点击临时入库。', 'GINGTTO')
     worksheet['S1'].comment = Comment('只读：在库存页面登记次品并一键打回；修改本列不会写入。已登记次品预留待验货，不可转为合格。', 'GINGTTO')
     worksheet.column_dimensions['S'].width = 20

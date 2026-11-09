@@ -32,9 +32,12 @@ with db._connect() as conn:
     expected={'product_id':('bigint','NO'),'size_code':('character varying','NO'),
               'used':('integer','NO'),'inspection':('integer','NO'),'qualified':('integer','NO'),
               'normal_received':('bigint','YES')}
+    admin=args.backend=='admin-backend'
+    if admin:
+        expected.update(contract_inspection=('integer','YES'),contract_qualified=('integer','YES'))
     if any(types.get(k)!=v for k,v in expected.items()):raise RuntimeError('Overdelivery ledger schema incompatible')
     checks=conn.execute("SELECT contype,convalidated FROM pg_constraint WHERE conrelid='inventory_overdelivery'::regclass").fetchall()
-    if (sum(c['contype']=='c' and c['convalidated'] for c in checks)<5
+    if (sum(c['contype']=='c' and c['convalidated'] for c in checks)<(7 if admin else 5)
         or not any(c['contype']=='p' for c in checks) or not any(c['contype']=='f' for c in checks)):
         raise RuntimeError('Overdelivery ledger constraints missing')
     rows=conn.execute('SELECT e.*,s.pending_inspection,s.pending_inbound FROM inventory_overdelivery e LEFT JOIN product_size_prices s ON s.product_id=e.product_id AND s.size_code=e.size_code').fetchall()
@@ -46,6 +49,10 @@ with db._connect() as conn:
             or row['inspection']+row['qualified']>row['used']
             or row['used']>min(policy.MAX_QUANTITY,totals.get((row['product_id'],row['size_code']),0)*15//100)):
             raise RuntimeError('Cumulative overdelivery/source invariant failed')
+        if admin and ((ci := row['contract_inspection'] or 0) + row['inspection'] > row['pending_inspection']
+                      or (cb := row['contract_qualified'] or 0) + row['qualified'] > row['pending_inbound']
+                      or ci+cb > (row['normal_received'] or 0)):
+            raise RuntimeError('Contract stage source exceeds recorded receipt')
     public_boundary(public_inventory(db.list_products()))
     verified=['ledger-schema','validated-constraints','cumulative-allowance','stage-provenance','public-field-boundary']
     if args.backend=='admin-backend':

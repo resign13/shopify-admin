@@ -173,7 +173,7 @@ def apply_delta(before, after):
         totals, ledger = inventory_overdelivery.states(cur, ids)
     for (pid,size), change in sorted(delta.items()):
         if not change: continue
-        row = db._fetch_one('SELECT contract_pending,pending_inbound FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE',(pid,size))
+        row = db._fetch_one('SELECT contract_pending,pending_inspection,pending_inbound FROM product_size_prices WHERE product_id=%s AND size_code=%s FOR UPDATE',(pid,size))
         if not row: raise ValueError(f'商品 {pid} 的库存尺码 {size} 不存在')
         value = row['contract_pending'] + change
         if value < 0:
@@ -183,7 +183,7 @@ def apply_delta(before, after):
         used = int(ledger.get((pid, size), {}).get('used', 0))
         if used > max(0, new_total)*15//100:
             raise ValueError('合同减少后不足以覆盖已使用的15%超量额度，请先核对累计超量记录')
-        state = inventory_overdelivery.internal(totals.get((pid, size), 0), ledger.get((pid, size)), row)
+        state = inventory_overdelivery.internal(totals.get((pid, size), 0), ledger.get((pid, size)), row, include_stage_sources=True)
         received = state['contractReceived']
         if new_total < received:
             raise ValueError('合同减少后小于已累计接收的合同内数量，请先核对到货记录')
