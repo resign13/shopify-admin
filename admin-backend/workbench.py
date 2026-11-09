@@ -977,21 +977,32 @@ def order_ids(args, limit=None, offset=0, status=True, owner_id=None):
     return [row['id'] for row in db._fetch_all(query, tuple(params))]
 
 
-def orders_page(args, owner_id=None):
-    page, size = paging(args)
+def _order_status_counts(args, owner_id=None):
     where, params = order_where(args, status=False, owner_id=owner_id)
     counts = db._fetch_all('SELECT o.status,COUNT(*) AS count FROM orders o JOIN store_users su ON su.id=o.store_user_id WHERE '+where+' GROUP BY o.status', tuple(params))
-    status_counts = {row['status']: row['count'] for row in counts}
-    total = status_counts.get(args['status'], 0) if args.get('status') not in {None,'','all'} else sum(status_counts.values())
-    if statuses := filter_values(args, 'statuses'):
-        total = sum(n for key,n in status_counts.items() if key in statuses and (args.get('status') in {None,'','all'} or key == args['status']))
-    ids = order_ids(args, size, (page-1)*size, owner_id=owner_id)
-    items = db.list_orders(order_ids=ids)
+    return {row['status']: row['count'] for row in counts}
+
+
+def _order_page_items(args, limit, offset=0, owner_id=None):
+    ids = order_ids(args, limit, offset, owner_id=owner_id)
+    if not ids:
+        return []
+    # Keep the optimistic-lock token in the same read as the order data.
+    items = db.list_orders(order_ids=ids, include_version=True)
     positions = {v:i for i,v in enumerate(ids)}
     items.sort(key=lambda item: positions[item['id']])
     for item in items:
-        item['version'] = version('orders', item['id'])
         item['goodsAmount'] = round(sum(float(row['totalPrice']) for row in item['items']), 2)
+    return items
+
+
+def orders_page(args, owner_id=None):
+    page, size = paging(args)
+    status_counts = _order_status_counts(args, owner_id=owner_id)
+    total = status_counts.get(args['status'], 0) if args.get('status') not in {None,'','all'} else sum(status_counts.values())
+    if statuses := filter_values(args, 'statuses'):
+        total = sum(n for key,n in status_counts.items() if key in statuses and (args.get('status') in {None,'','all'} or key == args['status']))
+    items = _order_page_items(args, size, (page-1)*size, owner_id=owner_id)
     return {'items': items, 'total': total, 'page': page, 'pageSize': size, 'statusCounts': status_counts}
 
 
@@ -1071,14 +1082,16 @@ def dashboard(args):
     owner_clause, owner_params = sales_ownership.clause(args.get('_ownerId'))
     global_counts=db._fetch_all('SELECT status,COUNT(*) AS count FROM orders o WHERE '+owner_clause+' GROUP BY status', tuple(owner_params))
     inventory={} if args.get('_ownerId') is not None else db._fetch_one('SELECT COALESCE(SUM(s.stock),0) AS stock,COALESCE(SUM(GREATEST(s.stock,0)),0) AS "availableStock",COALESCE(SUM(GREATEST(-s.stock::bigint,0)),0) AS "shortageUnits",COUNT(*) FILTER(WHERE s.stock<0) AS "shortageSizeCount",COALESCE(SUM(s.contract_pending),0) AS pending,COALESCE(SUM(s.pending_inspection),0) AS inspection,COALESCE(SUM(s.temporary_inbound),0) AS "temporaryInbound",COALESCE(SUM(s.defective_pending),0) AS "defectivePending",COALESCE(SUM(s.pending_inbound),0) AS inbound,COUNT(*) FILTER(WHERE s.stock=0) AS empty FROM product_size_prices s JOIN products p ON p.id=s.product_id WHERE p.is_active=TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0))')
-    filtered_counts=orders_page({**dict(args),'dateFrom':start.isoformat(),'dateTo':end.isoformat(),'page':1,'pageSize':25})
+    recent_args={**dict(args),'dateFrom':start.isoformat(),'dateTo':end.isoformat()}
+    status_counts=_order_status_counts(recent_args)
+    recent_orders=_order_page_items(recent_args, 5)
     if statuses := filter_values(args, 'statuses'):
-        filtered_counts['statusCounts'] = {k:v for k,v in filtered_counts['statusCounts'].items() if k in statuses}
+        status_counts = {k:v for k,v in status_counts.items() if k in statuses}
     return {'metrics':metrics,'previous':previous,'trend':points,
             'topProducts':[{**r,'amount':float(r['amount'])} for r in top],
             'topProductsByAmount':[{**r,'amount':float(r['amount'])} for r in top_amount],
             'countries':[{**r,'amount':float(r['amount'])} for r in countries],
-            'recentOrders':filtered_counts['items'][:5],'statusCounts':filtered_counts['statusCounts'],
+            'recentOrders':recent_orders,'statusCounts':status_counts,
             'snapshot':{**{k:int(v) for k,v in inventory.items()},'statuses':{r['status']:r['count'] for r in global_counts}},
             'filters':{'countries':[r['country'] for r in db._fetch_all("SELECT DISTINCT country FROM orders o WHERE "+owner_clause+" AND country IS NOT NULL ORDER BY country",tuple(owner_params))],
                        'styles':[r['style'] for r in db._fetch_all(f"SELECT style FROM (SELECT DISTINCT ON ({_style_code_sql('p')}) {_style_code_sql('p')} AS style,pc.sort_order,pc.id AS category_id FROM products p JOIN product_categories pc ON pc.id=p.category_id WHERE p.is_active=TRUE ORDER BY {_style_code_sql('p')},pc.sort_order,pc.id) ranked ORDER BY sort_order,category_id,style")],
