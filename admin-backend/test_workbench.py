@@ -182,7 +182,7 @@ class WorkbenchTest(unittest.TestCase):
         before=self.detail()
         self.assertEqual(stage(pendingInboundBySize={'M':21}).status_code,400)
         self.assertEqual(self.detail()['sizePrices'],before['sizePrices'])
-        self.assertEqual(stage(pendingInspectionBySize={'M':91}).status_code,400)
+        self.assertEqual(stage(pendingInspectionBySize={'M':103}).status_code,400)
         r=self.call('inventory/1/receive','POST',{'version':self.detail()['version'],'requestId':str(uuid.uuid4())})
         self.assertEqual(r.status_code,200,r.json)
         size=self.detail()['sizePrices'][0]

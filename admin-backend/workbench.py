@@ -723,7 +723,7 @@ def receive_inventory(product_id, payload, *, source='normal'):
         if not amount: continue
         db._fetch_one(f'UPDATE product_size_prices SET stock=stock+{field},{field}=0 WHERE product_id=%s AND size_code=%s RETURNING id',(product_id,row['size_code']))
         if source == 'normal':
-            db._fetch_one('UPDATE inventory_overdelivery SET qualified=0,contract_qualified=0 WHERE product_id=%s AND size_code=%s RETURNING product_id', (product_id, row['size_code']))
+            db._fetch_one('UPDATE inventory_overdelivery SET qualified=0 WHERE product_id=%s AND size_code=%s AND qualified<>0 RETURNING product_id', (product_id, row['size_code']))
         changes.append({'sizeCode':row['size_code'],'quantity':amount,'stockBefore':row['stock'],'stockAfter':row['stock']+amount,
                         'contractBefore':row['contract_pending'],'contractAfter':row['contract_pending'],
                         'inspectionBefore':row['pending_inspection'],'inspectionAfter':row['pending_inspection'],
@@ -755,8 +755,8 @@ def return_defective_inventory(product_id, payload):
         raise ValueError('商品不存在')
     rows = db._fetch_all('SELECT size_code,contract_pending,pending_inspection,pending_inbound,defective_pending FROM product_size_prices WHERE product_id=%s ORDER BY size_code FOR UPDATE', (product_id,))
     with db.get_connection() as conn, conn.cursor() as cur:
-        totals, ledger = inventory_overdelivery.states(cur, [product_id])
-    rows = [inventory_overdelivery.attach(r, totals.get((product_id,r['size_code']),0), ledger.get((product_id,r['size_code']))) for r in rows]
+        ledger = inventory_overdelivery.states(cur, [product_id])
+    rows = [inventory_overdelivery.attach(r, ledger.get((product_id,r['size_code']))) for r in rows]
     if not any(row['defective_pending'] for row in rows):
         raise ValueError('没有待打回的次品')
     before = db.get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)

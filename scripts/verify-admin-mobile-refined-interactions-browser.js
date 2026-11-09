@@ -59,7 +59,14 @@ async (page) => {
     // Landscape is the unchanged tablet/PC editor; its actual save footer must fit.
     await page.setViewportSize({width:852,height:393});await visit('/orders');
     await page.getByRole('button',{name:'＋ 新增订单',exact:true}).click();
-    const editor=page.getByRole('dialog',{name:'新增订单',exact:true});await editor.waitFor();await page.waitForLoadState('networkidle');await settle(editor);
+    const editor=page.getByRole('dialog',{name:'新增订单',exact:true});await editor.waitFor();
+    // Vue can render the dialog before the overlay's first transition frame.
+    // Wait for the drawer's overlay to finish entering, then assert real bounds.
+    await page.waitForFunction(node => {
+      const overlay=node.closest('.el-overlay');
+      return overlay && !Array.from(overlay.classList).some(name => name.startsWith('el-drawer-fade-enter-'))
+        && !node.getAnimations().some(animation => animation.playState === 'running');
+    },await editor.elementHandle(),{timeout:5000});
     check(await editor.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=-1&&r.right<=innerWidth+1;}),'Landscape order drawer exceeds viewport');
     check(await editor.getByRole('button',{name:'创建待付款订单',exact:true}).evaluate(el=>{const r=el.getBoundingClientRect();return r.top>=0&&r.bottom<=innerHeight+1;}),'Landscape hides actual order save action');
     await editor.getByRole('button',{name:'取消',exact:true}).click();await editor.waitFor({state:'hidden'});

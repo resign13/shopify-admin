@@ -124,7 +124,10 @@ async (page) => {
   await detail.getByRole('button', { name: '取消合同', exact: true }).click();
   const cancelContract = page.getByRole('dialog', { name: '取消合同', exact: true });
   const cancellation = page.waitForResponse(response => response.url().endsWith(`/api/admin/contracts/${contractRecord.id}/cancel`) && response.request().method() === 'POST');
-  await cancelContract.getByRole('button', { name: '确认', exact: true }).click();
+  const deduction = cancelContract.getByRole('spinbutton',{name:`冲减 ${contractRecord.items[0].sku} M`,exact:true});
+  await deduction.fill(String(contractRecord.items[0].quantities.M));
+  await deduction.press('Tab');
+  await cancelContract.getByRole('button', { name: /^确认作废/ }).click();
   check((await cancellation).ok(), 'Dedicated contract cancellation failed');
   check((await api(`inventory/${productId}`)).product.sizePrices.find(row => row.sizeCode === 'M').contractPending === 0, 'Dedicated contract pending did not roll back');
   results.push({ operation: 'real contract three steps, PNG attachments, Excel export, cancel', contractId: contractRecord.id });

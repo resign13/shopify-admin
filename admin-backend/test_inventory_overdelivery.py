@@ -1,4 +1,4 @@
-"""Cumulative contract tolerance regression. All writes use guarded *_test fixtures."""
+"""Unified undelivered-balance regression. All writes use guarded *_test fixtures."""
 import io
 import json
 from pathlib import Path
@@ -57,18 +57,15 @@ class OverdeliveryTest(unittest.TestCase):
         self.assertEqual(self.size()['overdeliveryQualified'],0)
         self.assertTrue(self.receive(body=body).json['replayed'])
 
-    def test_split_batches_share_original_allowance_after_receipt(self):
+
+    def test_each_arrival_recomputes_from_live_balance(self):
         self.prepare()
-        for amount in [50,50]:
-            self.assertEqual(self.save(pendingInspectionBySize={'M':amount}).status_code,200)
-            self.assertEqual(self.save(pendingInboundBySize={'M':amount}).status_code,200)
-            self.receive()
-        self.assertEqual(self.size()['contractPending'],0)
-        self.assertEqual(self.save(pendingInspectionBySize={'M':10}).status_code,200)
-        self.save(pendingInboundBySize={'M':10});self.receive()
-        self.assertEqual(self.save(pendingInspectionBySize={'M':6}).status_code,400)
-        self.assertEqual(self.save(pendingInspectionBySize={'M':5}).status_code,200)
-        self.assertEqual(self.size()['overdeliveryUsed'],15)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':90}).status_code,200)
+        self.assertEqual((self.size()['contractPending'],self.size()['overdeliveryLimit']),(10,1))
+        self.assertEqual(self.save(pendingInspectionBySize={'M':102}).status_code,400)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':101}).status_code,200)
+        self.assertEqual((self.size()['contractPending'],self.size()['overdeliveryUsed']),(0,1))
+        self.assertEqual(self.save(pendingInspectionBySize={'M':102}).status_code,400)
 
     def test_return_extra_first_never_replenishes_allowance(self):
         self.prepare();self.save(pendingInspectionBySize={'M':115})
@@ -90,16 +87,16 @@ class OverdeliveryTest(unittest.TestCase):
         self.assertEqual((self.size()['overdeliveryInspection'],self.size()['overdeliveryQualified']),(10,5))
         self.assertEqual(self.save(pendingInboundBySize={'M':0},pendingInspectionBySize={'M':0},defectivePendingBySize={'M':0}).status_code,200)
         self.assertEqual((self.size()['contractPending'],self.size()['overdeliveryUsed']),(100,15))
-        self.assertEqual(self.save(pendingInspectionBySize={'M':101}).status_code,400)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':101}).status_code,200)
 
-    def test_rounding_size_isolation_and_no_contract_no_allowance(self):
+    def test_rounding_size_isolation_and_manual_balance_allowance(self):
         self.prepare({'M':6,'L':7})
         self.assertEqual(self.save(pendingInspectionBySize={'M':7}).status_code,400)
         self.assertEqual(self.save(pendingInspectionBySize={'L':8}).status_code,200)
         self.assertEqual(self.size('L')['overdeliveryUsed'],1)
         self.assertEqual(self.save(contractPendingBySize={'Tall XL':100}).status_code,200)
-        self.assertEqual(self.size('Tall XL')['overdeliveryLimit'],0)
-        self.assertEqual(self.save(pendingInspectionBySize={'Tall XL':101}).status_code,400)
+        self.assertEqual(self.size('Tall XL')['overdeliveryLimit'],15)
+        self.assertEqual(self.save(pendingInspectionBySize={'Tall XL':101}).status_code,200)
 
     def test_multi_size_rollback_and_concurrency(self):
         self.prepare({'M':100,'L':100});before=self.detail()
@@ -117,15 +114,16 @@ class OverdeliveryTest(unittest.TestCase):
             self.assertEqual(self.save(pendingInspectionBySize={'M':115}).status_code,400)
         self.assertEqual(self.detail(),before)
 
-    def test_contract_edit_cannot_shrink_spent_budget_and_increase_grants_only_delta(self):
-        contract=self.prepare();self.save(pendingInspectionBySize={'M':115})
-        self.save(pendingInspectionBySize={'M':0})
+
+    def test_contract_edit_applies_delta_even_with_historical_extra(self):
+        contract=self.prepare()
+        self.assertEqual(self.save(pendingInspectionBySize={'M':115}).status_code,200)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':0}).status_code,200)
         body={**contract,'requestId':str(uuid.uuid4()),'revision':contract['revision']}
         body['items'][0]['quantities']['M']=90
-        self.assertEqual(self.call('contracts/1','PUT',body).status_code,400)
-        body['items'][0]['quantities']['M']=200
-        r=self.call('contracts/1','PUT',body);self.assertEqual(r.status_code,200,r.json)
-        self.assertEqual((self.size()['originalContractQuantity'],self.size()['overdeliveryRemaining']),(200,15))
+        r=self.call('contracts/1','PUT',body)
+        self.assertEqual(r.status_code,200,r.json)
+        self.assertEqual((self.size()['contractPending'],self.size()['overdeliveryLimit'],self.size()['overdeliveryUsed']),(90,13,15))
 
     def test_product_edits_preserve_ledger_and_customer_omits_fields(self):
         self.prepare();self.save(pendingInspectionBySize={'M':115})
@@ -140,11 +138,11 @@ class OverdeliveryTest(unittest.TestCase):
         payload=self.product_payload(1);payload['sizes']=['L','Tall XL'];payload['sizePrices']=[s for s in payload['sizePrices'] if s['sizeCode']!='M']
         self.assertEqual(self.call('products/1','PUT',payload).status_code,400)
 
-    def test_excel_v6_and_legacy_cumulative_limit(self):
+    def test_excel_v7_and_legacy_balance_limit(self):
         self.prepare()
         raw=self.call('inventory/export').data
         book=load_workbook(io.BytesIO(raw)); sheet=book.active
-        self.assertEqual(sheet['A2'].value,'inventory-v6');self.assertEqual(sheet['T2'].value,100)
+        self.assertEqual(sheet['A2'].value,'inventory-v7');self.assertEqual(sheet['T2'].value,115)
         sheet['O2']=115;sheet['T2']=999999;sheet['U2']=999999
         out=io.BytesIO();book.save(out)
         r=self.upload('preview',out.getvalue());self.assertEqual(r.status_code,200,r.json)
@@ -152,7 +150,7 @@ class OverdeliveryTest(unittest.TestCase):
         r=self.upload('confirm',out.getvalue(),r.json['fileHash'])
         self.assertEqual(r.status_code,200,r.json);self.assertEqual(self.size()['overdeliveryUsed'],15)
         book=load_workbook(io.BytesIO(self.call('inventory/export').data));sheet=book.active
-        sheet['O2']=116;sheet.delete_cols(20,5)
+        sheet['O2']=116;sheet.delete_cols(20,6)
         for row in range(2,sheet.max_row+1):sheet.cell(row,1,'inventory-v5')
         out=io.BytesIO();book.save(out)
         r=self.upload('preview',out.getvalue());self.assertTrue(r.json['errors'])
@@ -169,16 +167,19 @@ class OverdeliveryTest(unittest.TestCase):
         with patch.dict('os.environ', {'DB_SCHEMA_AUTO_MIGRATE':'0'}):
             db.ensure_database_ready()
 
-    def test_manual_pending_balance_does_not_inflate_original_allowance(self):
-        self.prepare();self.save(pendingInspectionBySize={'M':100})
-        self.save(pendingInboundBySize={'M':100});self.receive()
-        self.save(contractPendingBySize={'M':100})
+
+    def test_manual_and_contract_share_allowance_and_full_defect_return(self):
+        self.assertEqual(self.save(contractPendingBySize={'M':100}).status_code,200)
+        db._fetch_one("UPDATE product_size_prices SET pending_inspection=0,pending_inbound=0 WHERE product_id=1 AND size_code='M' RETURNING id")
+        before=self.size()['stock']
         self.assertEqual(self.save(pendingInspectionBySize={'M':116}).status_code,400)
-        self.assertEqual(self.save(pendingInspectionBySize={'M':115}).status_code,200)
-        size = self.size()
-        self.assertEqual((size['contractPending'],size['originalContractQuantity'],size['contractReceived'],size['overdeliveryUsed']),
-                         (0,100,100,15))
-        self.assertEqual(self.save(pendingInspectionBySize={'M':116}).status_code,400)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':115},defectivePendingBySize={'M':115}).status_code,200)
+        self.assertEqual(self.size()['contractPending'],0)
+        result=self.receive('defective')
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(result.json['changes'][0]['extraReturned'],15)
+        s=self.size()
+        self.assertEqual((s['contractPending'],s['pendingInspection'],s['defectivePending'],s['stock']),(100,0,0,before))
 
     def test_zm4744_and_zm4745_legacy_pending_is_received_without_a_duplicate_contract(self):
         contract = self.prepare({'M':75,'L':60}, legacy={'M':100,'L':87})
@@ -189,36 +190,29 @@ class OverdeliveryTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         for code, pending, inspection, limit in [('M',75,101,11),('L',60,89,9)]:
             s = self.size(code)
-            self.assertEqual((s['contractPending'],s['pendingInspection'],s['contractReceived'],s['overdeliveryUsed'],s['overdeliveryRemaining'],s['stock']),
-                             (pending,inspection,0,0,limit,stocks[code]))
+            self.assertEqual((s['contractPending'],s['pendingInspection'],s['overdeliveryUsed'],s['overdeliveryLimit'],s['stock']),
+                             (pending,inspection,0,limit,stocks[code]))
             self.assertNotIn('contractInspection', s)
         # A real contract with no arrivals is still cancellable; the old
         # inspection stage must survive independently, with no second add.
-        cancelled = self.call('contracts/1/cancel','POST',{'revision':contract['revision']})
+        cancelled = self.call('contracts/1/cancel','POST',{'revision':contract['revision'],'deductions':[
+            {'productId':1,'sizeCode':'M','balance':75,'quantity':75},
+            {'productId':1,'sizeCode':'L','balance':60,'quantity':60}]})
         self.assertEqual(cancelled.status_code, 200, cancelled.json)
         self.assertEqual([(self.size(k)['contractPending'],self.size(k)['pendingInspection']) for k in ('M','L')],
                          [(0,101),(0,89)])
 
-    def test_returns_and_qualification_keep_legacy_separate_from_prior_formal_receipts(self):
-        self.prepare({'M':75})
-        self.assertEqual(self.save(pendingInspectionBySize={'M':20}).status_code,200)
-        self.assertEqual(self.save(pendingInboundBySize={'M':20}).status_code,200)
-        self.assertEqual(self.save(contractPendingBySize={'M':155}).status_code,200)
-        self.assertEqual(self.save(pendingInspectionBySize={'M':100},defectivePendingBySize={'M':5}).status_code,200)
+
+    def test_explicit_extra_does_not_spend_new_contract_balance(self):
+        self.prepare({'M':100},legacy={'M':100})
+        self.assertEqual(self.save(pendingInspectionBySize={'M':110},receiptExtraBySize={'M':31}).status_code,400)
+        result=self.save(pendingInspectionBySize={'M':110},receiptExtraBySize={'M':10})
+        self.assertEqual(result.status_code,200,result.json)
+        s=self.size()
+        self.assertEqual((s['contractPending'],s['pendingInspection'],s['overdeliveryInspection']),(100,110,10))
+        self.assertEqual(self.save(defectivePendingBySize={'M':10}).status_code,200)
         self.assertEqual(self.receive('defective').status_code,200)
-        s = self.size()
-        self.assertEqual((s['contractPending'],s['pendingInspection'],s['pendingInbound'],s['contractReceived']), (60,95,20,20))
-        self.assertEqual(self.save(pendingInboundBySize={'M':0}).status_code,200)
-        self.assertEqual(self.save(pendingInspectionBySize={'M':95}).status_code,200)
-        s = self.size()
-        self.assertEqual((s['contractPending'],s['pendingInspection'],s['contractReceived']), (80,95,0))
-        self.assertEqual(self.save(pendingInspectionBySize={'M':175}).status_code,200)
-        self.assertEqual(self.save(pendingInboundBySize={'M':175}).status_code,200)
-        self.assertEqual(self.receive().status_code,200)
-        s = self.size()
-        self.assertEqual((s['contractPending'],s['pendingInspection'],s['pendingInbound'],s['contractReceived']), (0,0,0,75))
-        ledger = db._fetch_one("SELECT contract_inspection,contract_qualified FROM inventory_overdelivery WHERE product_id=1 AND size_code='M'")
-        self.assertEqual(ledger, {'contract_inspection':0,'contract_qualified':0})
+        self.assertEqual(self.size()['contractPending'],100)
 
     def test_excel_moves_existing_pending_without_using_new_contract_or_extra_quota(self):
         self.prepare({'M':75}, legacy={'M':100})
@@ -231,7 +225,7 @@ class OverdeliveryTest(unittest.TestCase):
         result = self.upload('confirm', out.getvalue(), preview.json['fileHash'])
         self.assertEqual(result.status_code,200,result.json)
         s = self.size()
-        self.assertEqual((s['contractPending'],s['pendingInspection'],s['contractReceived'],s['overdeliveryUsed']), (75,100,0,0))
+        self.assertEqual((s['contractPending'],s['pendingInspection'],s['overdeliveryUsed']), (75,100,0))
 
     def test_legacy_stages_do_not_spend_first_contract_quantity(self):
         # CS5402: thirteen old inspection pieces existed before a new 70-piece
@@ -243,31 +237,39 @@ class OverdeliveryTest(unittest.TestCase):
               'items':[{'productId':1,'quantities':{'M':70}}]}
         result=self.call('contracts','POST',body)
         self.assertEqual(result.status_code,200,result.json)
-        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(70,0))
+        self.assertEqual(self.size()['contractPending'],70)
         self.assertEqual(self.save(pendingInboundBySize={'M':13}).status_code,200)
         self.assertEqual(self.receive().status_code,200)
-        self.assertEqual(self.size()['contractReceived'],0)
+        self.assertNotIn('contractReceived',self.size())
         # Absolute target corrections are reversible, and never charge old stock.
         for amount, pending in [(60,10),(68,2),(0,70),(70,0)]:
             result=self.save(pendingInspectionBySize={'M':amount})
             self.assertEqual(result.status_code,200,result.json)
-            self.assertEqual((self.size()['pendingInspection'],self.size()['contractPending'],self.size()['contractReceived']),(amount,pending,amount))
+            self.assertEqual((self.size()['pendingInspection'],self.size()['contractPending']),(amount,pending))
 
-    def test_missing_counter_uses_contract_balance_not_legacy_inspection(self):
-        for inspection,qualified in [(13,0),(0,13),(7,6)]:
-            row={'contract_pending':70,'pending_inspection':inspection,'pending_inbound':qualified}
-            self.assertEqual(policy.internal(70,{'normal_received':None},row)['contractReceived'],0)
-            self.assertEqual(policy.internal(70,{'normal_received':20},row)['contractReceived'],20)
-        self.assertEqual(policy.internal(70,None,{'contract_pending':60,'pending_inspection':13})['contractReceived'],10)
 
-    def test_contract_extension_preserves_real_received_counter(self):
+    def test_stock_only_workbook_ignores_new_inspection_stage(self):
+        self.prepare()
+        book=load_workbook(io.BytesIO(self.call('inventory/export').data))
+        book.active['H2']=11
+        out=io.BytesIO();book.save(out)
+        self.assertEqual(self.save(pendingInspectionBySize={'M':20}).status_code,200)
+        preview=self.upload('preview',out.getvalue())
+        self.assertEqual(preview.json['errors'],[])
+        self.assertEqual(preview.json['summary']['changedFieldCount'],1)
+        result=self.upload('confirm',out.getvalue(),preview.json['fileHash'])
+        self.assertEqual(result.status_code,200,result.json)
+        s=self.size()
+        self.assertEqual((s['stock'],s['contractPending'],s['pendingInspection']),(11,80,20))
+
+    def test_contract_extension_adds_only_delta_to_real_pending(self):
         contract=self.prepare({'M':70})
         self.assertEqual(self.save(pendingInspectionBySize={'M':20}).status_code,200)
         body={**contract,'requestId':str(uuid.uuid4()),'revision':contract['revision']}
         body['items'][0]['quantities']['M']=100
         result=self.call('contracts/1','PUT',body)
         self.assertEqual(result.status_code,200,result.json)
-        self.assertEqual((self.size()['contractReceived'],self.size()['contractPending']),(20,80))
+        self.assertEqual((self.size()['pendingInspection'],self.size()['contractPending']),(20,80))
 
     def test_contract_adds_to_pending_and_does_not_count_other_color_or_old_qualified(self):
         db._fetch_one("UPDATE product_size_prices SET contract_pending=12,pending_inspection=7,pending_inbound=6 WHERE product_id=1 AND size_code='M' RETURNING id")
@@ -277,13 +279,13 @@ class OverdeliveryTest(unittest.TestCase):
               'items':[{'productId':1,'quantities':{'M':70,'L':10}}]}
         result=self.call('contracts','POST',body)
         self.assertEqual(result.status_code,200,result.json)
-        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(82,0))
+        self.assertEqual(self.size()['contractPending'],82)
         self.assertEqual((self.size()['pendingInspection'],self.size()['pendingInbound']),(7,6))
         self.assertEqual(db.get_product_by_id(2,include_contract_pending=True),other)
         # Editing unrelated stock must not initialize the counter from old WIP.
         self.assertEqual(self.save(sizeStocks={'M':20}).status_code,200)
-        self.assertEqual(self.size()['contractReceived'],0)
-        cancel=self.call('contracts/1/cancel','POST',{'revision':result.json['item']['revision']})
+        self.assertNotIn('contractReceived',self.size())
+        cancel=self.call('contracts/1/cancel','POST',{'revision':result.json['item']['revision'],'deductions':[{'productId':1,'sizeCode':'M','balance':82,'quantity':70},{'productId':1,'sizeCode':'L','balance':16,'quantity':10}]})
         self.assertEqual(cancel.status_code,200,cancel.json)
         self.assertEqual(self.size()['contractPending'],12)
 
@@ -291,13 +293,13 @@ class OverdeliveryTest(unittest.TestCase):
         self.prepare({'M':70})
         db._fetch_one("UPDATE product_size_prices SET pending_inspection=13 WHERE product_id=1 AND size_code='M' RETURNING id")
         db._fetch_one("UPDATE inventory_overdelivery SET normal_received=NULL WHERE product_id=1 AND size_code='M' RETURNING product_id")
-        self.assertEqual(self.size()['contractReceived'],0)
+        self.assertNotIn('contractReceived',self.size())
         self.assertEqual(self.save(sizeStocks={'M':20}).status_code,200)
-        self.assertEqual(self.size()['contractReceived'],0)
+        self.assertNotIn('contractReceived',self.size())
         self.assertEqual(self.save(pendingInboundBySize={'M':13}).status_code,200)
         self.assertEqual(self.receive().status_code,200)
         self.assertEqual(self.save(pendingInspectionBySize={'M':68}).status_code,200)
-        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(2,68))
+        self.assertEqual(self.size()['contractPending'],2)
 
     def test_combined_arrival_and_qualification_matches_preview_and_is_atomic(self):
         self.prepare({'M':70,'L':7})
@@ -305,7 +307,7 @@ class OverdeliveryTest(unittest.TestCase):
         # Paired absolute targets are essential when inspection ends at zero.
         result=self.save(contractPendingBySize={'M':10},pendingInspectionBySize={'M':0},pendingInboundBySize={'M':60})
         self.assertEqual(result.status_code,200,result.json)
-        self.assertEqual((self.size()['contractPending'],self.size()['pendingInspection'],self.size()['pendingInbound'],self.size()['contractReceived']),(10,0,60,60))
+        self.assertEqual((self.size()['contractPending'],self.size()['pendingInspection'],self.size()['pendingInbound']),(10,0,60))
         saved=self.detail()
         result=self.save(pendingInspectionBySize={'M':8,'L':9},pendingInboundBySize={'M':60,'L':0})
         self.assertEqual(result.status_code,400)
@@ -314,7 +316,7 @@ class OverdeliveryTest(unittest.TestCase):
         self.assertEqual(stale.status_code,409)
         self.assertEqual(self.detail(),saved)
         self.assertEqual(self.save(pendingInspectionBySize={'M':0},pendingInboundBySize={'M':0}).status_code,200)
-        self.assertEqual((self.size()['contractPending'],self.size()['contractReceived']),(70,0))
+        self.assertEqual(self.size()['contractPending'],70)
 
     def test_first_contract_failure_rolls_back_initialized_counters(self):
         db._fetch_one('UPDATE product_size_prices SET contract_pending=0 WHERE product_id=1 RETURNING id')
@@ -334,6 +336,9 @@ class OverdeliveryTest(unittest.TestCase):
         self.save(pendingInspectionBySize={'M':0},sizeStocks={'M':0,'L':0,'Tall XL':0})
         self.assertEqual(self.save(contractPendingBySize={'M':0}).status_code,200)
         db._fetch_one('DELETE FROM order_items WHERE product_id=1 RETURNING id')
+        self.assertEqual(self.call('products/1','DELETE').status_code,400)
+        self.assertTrue(db._fetch_one('SELECT is_active FROM products WHERE id=1')['is_active'])
+        self.assertEqual(self.call('contracts/1/cancel','POST',{'revision':1,'deductions':[]}).status_code,200)
         result=self.call('products/1','DELETE')
         self.assertEqual(result.status_code,200,result.json)
         self.assertFalse(db._fetch_one('SELECT is_active FROM products WHERE id=1')['is_active'])
@@ -357,35 +362,33 @@ class ReachablePolicyTest(unittest.TestCase):
         # Exhaustive real transitions, not a second copy of the policy algorithm.
         # Includes corrections, qualified reversals, receipts and defect returns.
         names=('contract_pending','pending_inspection','pending_inbound','overdeliveryUsed',
-               'overdeliveryInspection','overdeliveryQualified','contractReceived')
-        start=(7,0,0,0,0,0,0);pending=[start];seen={start};transitions=0
-        def accept(values, previous):
+               'overdeliveryInspection','overdeliveryQualified')
+        start=(7,0,0,0,0,0);pending=[(start,0)];seen={start};transitions=0
+        def accept(values, previous, depth, stock_added=0):
             nonlocal transitions
-            p,i,b,u,ei,eb,received=values
+            p,i,b,u,ei,eb=values
             self.assertTrue(all(v>=0 for v in values),values)
             self.assertLessEqual(ei,i);self.assertLessEqual(eb,b)
-            self.assertLessEqual(ei+eb,u);self.assertLessEqual(u,1)
+            self.assertLessEqual(ei+eb,u)
             self.assertGreaterEqual(u,previous[3])
-            self.assertEqual(p+received,7)
-            self.assertLessEqual(i+b-ei-eb,received)
+            self.assertEqual(p+i+b-ei-eb+stock_added,previous[0]+previous[1]+previous[2]-previous[4]-previous[5])
             transitions+=1
-            if values not in seen:seen.add(values);pending.append(values)
+            if depth < 4 and values not in seen:seen.add(values);pending.append((values,depth+1))
         while pending:
-            previous=pending.pop();row=dict(zip(names,previous))
-            row.update(originalContractQuantity=7,overdeliveryLimit=1)
+            previous,depth=pending.pop();row=dict(zip(names,previous))
             for ni in range(9):
                 for nb in range(9):
                     try:p,i,b,state=policy.transition(row,{'pendingInspection':ni,'pendingInbound':nb})
                     except ValueError:continue
-                    accept((p,i,b,state['overdeliveryUsed'],state['overdeliveryInspection'],state['overdeliveryQualified'],state['contractReceived']),previous)
+                    accept((p,i,b,state['overdeliveryUsed'],state['overdeliveryInspection'],state['overdeliveryQualified']),previous,depth)
             if row['pending_inbound']:
                 values=list(previous);values[2]=0;values[5]=0
-                accept(tuple(values),previous)
+                accept(tuple(values),previous,depth,previous[2]-previous[5])
             for quantity in range(1,row['pending_inspection']+1):
                 state=policy.return_preview(row,quantity)
                 accept((state['contractAfter'],state['inspectionAfter'],row['pending_inbound'],
-                        state['overdeliveryUsed'],state['overdeliveryInspection'],state['overdeliveryQualified'],state['contractReceived']),previous)
-        self.assertGreater(len(seen),100);self.assertGreater(transitions,8000)
+                        state['overdeliveryUsed'],state['overdeliveryInspection'],state['overdeliveryQualified']),previous,depth)
+        self.assertGreater(len(seen),50);self.assertGreater(transitions,1000)
 
 
 if __name__=='__main__': unittest.main()

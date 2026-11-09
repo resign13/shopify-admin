@@ -62,7 +62,7 @@ async (page) => {
   }
   await row.getByRole('spinbutton').nth(2).fill('116');
   await row.getByRole('spinbutton').nth(2).press('Tab');
-  await page.getByText(/超出原合同数量累计15%额度/).waitFor();
+  await page.getByText(/本次最多登记/).waitFor();
   if (await row.getByRole('spinbutton').nth(2).inputValue()!=='0') throw new Error('116 was not rejected');
   await row.getByRole('spinbutton').nth(2).fill('115');
   await row.getByRole('spinbutton').nth(2).press('Tab');
@@ -73,12 +73,13 @@ async (page) => {
   await page.getByRole('button',{name:'保存修改',exact:true}).click();
   await page.getByRole('checkbox',{name:'选择当前行',exact:true}).first().locator('..').click();
   await page.getByRole('button',{name:'一键打回',exact:true}).click();
+  await page.getByText(/普通次品 5 件退回合同未送，超收次品 15 件不增加未送/).waitFor();
   await page.getByRole('button',{name:'确认打回',exact:true}).click();
   row=await open();
   if (await row.getByRole('spinbutton').nth(2).inputValue()!=='95') throw new Error('Expected saved return balance');
   await row.getByRole('spinbutton').nth(2).fill('101');
   await row.getByRole('spinbutton').nth(2).press('Tab');
-  await page.getByText(/超出原合同数量累计15%额度/).waitFor();
+  await page.getByText(/本次最多登记/).waitFor();
   if (await row.getByRole('spinbutton').nth(2).inputValue()!=='95') throw new Error('Rejected value was not restored');
   await row.getByRole('spinbutton').nth(2).fill('100');
   await row.getByRole('spinbutton').nth(2).press('Tab');
@@ -95,11 +96,25 @@ async (page) => {
   row=await open();
   if (await row.getByRole('spinbutton').nth(0).inputValue()!=='110') throw new Error('Receipt stock mismatch');
   await row.getByRole('button',{name:'验货额度 M',exact:true}).click();
-  const spent = page.locator('.allowance-card:visible .allowance-card__details > div').filter({hasText:'累计已用'});
-  await spent.waitFor();
-  if (!(await spent.innerText()).includes('15 件')) throw new Error('Receipt reset spent allowance');
+  const allowance = page.locator('.allowance-card:visible .allowance-card__remaining');
+  await allowance.waitFor();
+  if (!(await allowance.innerText()).includes('0')) throw new Error('Zero balance unexpectedly carried quota forward');
   await row.getByRole('button',{name:'验货额度 M',exact:true}).click();
-  await page.getByRole('dialog').evaluate(node => Promise.all(node.getAnimations({subtree:true}).map(animation => animation.finished.catch(()=>{}))));
   await page.screenshot({path:'output/overdelivery-browser-verified.png'});
-  return {desktopAndMobileFinalTargets:true,blankInputRestored:true,combinedTransferAndReversal:true,accepted115:true,rejected116:true,reopened:true,extraReturn:true,spentQuotaNotRenewed:true,normalReplacement:true,qualifiedAndReceipt:true};
+
+  const pending = row.getByRole('spinbutton',{name:'合同未送 M',exact:true});
+  await pending.fill('200'); await pending.press('Tab');
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  row=await open();
+  const arriving=row.getByRole('spinbutton',{name:'待验货 M',exact:true});
+  await arriving.fill('110'); await arriving.press('Tab');
+  await row.getByRole('button',{name:'验货额度 M',exact:true}).click();
+  const explicit = page.getByRole('spinbutton',{name:'本次超收 M',exact:true});
+  await explicit.fill('10'); await explicit.press('Tab');
+  if (await row.getByRole('spinbutton',{name:'合同未送 M',exact:true}).inputValue()!=='100') throw new Error('Explicit old-batch extra consumed new balance');
+  await row.getByRole('button',{name:'验货额度 M',exact:true}).click();
+  await page.getByRole('button',{name:'保存修改',exact:true}).click();
+  row=await open();
+  if (await row.getByRole('spinbutton',{name:'合同未送 M',exact:true}).inputValue()!=='100') throw new Error('Saved explicit extra differs from preview');
+  return {desktopAndMobileFinalTargets:true,blankInputRestored:true,combinedTransferAndReversal:true,accepted115:true,rejected116:true,reopened:true,extraReturn:true,zeroBalanceNoCarry:true,explicitExtraPreservesNewPending:true,normalReplacement:true,qualifiedAndReceipt:true};
 }

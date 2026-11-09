@@ -43,7 +43,7 @@ class ContractsTest(unittest.TestCase):
             self.assertEqual(self.call(method='POST',body=body).status_code,400);self.assertEqual(self.inventory(),before)
         for row in [{'productId':2,'quantities':{'WRONG':2}},{'productId':1,'quantities':{'M':2}},{'productId':9999,'quantities':{'M':2}}]:
             body=self.payload();body['items'].append(row);self.assertEqual(self.call(method='POST',body=body).status_code,400)
-        body=self.payload();body['sizeChartImage']=''
+        body=self.payload();body['sizeChartImage']='invalid-url'
         self.assertEqual(self.call(method='POST',body=body).status_code,400)
         self.assertEqual(self.call().json['total'],0);self.assertEqual(db._fetch_one("SELECT count(*) AS n FROM admin_audit_logs WHERE module='contracts'")['n'],0)
     def test_permissions(self):
@@ -70,17 +70,19 @@ class ContractsTest(unittest.TestCase):
         self.assertEqual(self.inventory()[0]['contract_pending'],20)
         self.assertEqual(self.call('contracts/1','PUT',body).status_code,409)
         revision=r.json['item']['revision']
-        r=self.call('contracts/1/cancel','POST',{'revision':revision})
+        preview=self.call('contracts/1/cancel').json
+        body={'revision':revision,'deductions':[{**line,'quantity':line['ordered']} for line in preview['rows']]}
+        r=self.call('contracts/1/cancel','POST',body)
         self.assertEqual(r.status_code,200,r.json)
         self.assertEqual(self.inventory(),before)
-        self.assertEqual(self.call('contracts/1/cancel','POST',{'revision':revision}).status_code,200)
+        self.assertEqual(self.call('contracts/1/cancel','POST',body).status_code,200)
         self.assertEqual(self.inventory(),before)
 
     def test_cancel_insufficient_pending_rolls_back(self):
         self.call(method='POST',body=self.payload())
         db._fetch_one("UPDATE product_size_prices SET contract_pending=4 WHERE product_id=1 AND size_code='M' RETURNING id")
         before=self.inventory()
-        r=self.call('contracts/1/cancel','POST',{'revision':1})
+        r=self.call('contracts/1/cancel','POST',{'revision':1,'deductions':[{'productId':1,'sizeCode':'M','balance':4,'quantity':5}]})
         self.assertEqual(r.status_code,400,r.json)
         self.assertEqual(self.inventory(),before)
         self.assertFalse(self.call('contracts/1').json['item']['cancelled'])
@@ -95,3 +97,18 @@ class ContractsTest(unittest.TestCase):
         self.assertEqual(self.call().json['items'][0]['contractNo'],'TEST-001')
         body=self.payload();body['items'][0].update(quantities={'S':1},sizeMapping={})
         self.assertEqual(self.call(method='POST',body=body).status_code,400)
+
+    def test_optional_documents_and_partial_cancel_with_live_balance(self):
+        body={'requestId':str(uuid.uuid4()),'items':[{'productId':1,'quantities':{'M':75}}]}
+        created=self.call(method='POST',body=body)
+        self.assertEqual(created.status_code,200,created.json)
+        item=created.json['item']
+        self.assertEqual((item['deliveryDate'],item['contractNo'],self.inventory()[0]['contract_pending']),('','HT-000001',87))
+        self.assertEqual(self.call('contracts/1/export').status_code,200)
+        payload={'revision':item['revision'],'deductions':[{'productId':1,'sizeCode':'M','balance':87,'quantity':10}]}
+        self.assertEqual(self.call('contracts/1/cancel','POST',{'revision':item['revision']}).status_code,400)
+        db._fetch_one("UPDATE product_size_prices SET contract_pending=86 WHERE product_id=1 AND size_code='M' RETURNING id")
+        self.assertEqual(self.call('contracts/1/cancel','POST',payload).status_code,409)
+        payload['deductions'][0]['balance']=86
+        self.assertEqual(self.call('contracts/1/cancel','POST',payload).status_code,200)
+        self.assertEqual(self.inventory()[0]['contract_pending'],76)

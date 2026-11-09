@@ -1214,7 +1214,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
     return output
 
 
-INVENTORY_TEMPLATE_VERSION = "inventory-v6"
+INVENTORY_TEMPLATE_VERSION = "inventory-v7"
 INVENTORY_HEADERS = [
     "模板版本",
     "商品ID",
@@ -1246,7 +1246,10 @@ INVENTORY_HEADER_VERSIONS = {
     "inventory-v5": INVENTORY_HEADERS.copy(),
 }
 INVENTORY_HEADERS.extend(['原合同数量（只读）', '超量额度（只读）', '累计超量（只读）', '待验货超量（只读）', '合格超量（只读）'])
-INVENTORY_HEADER_VERSIONS['inventory-v6'] = INVENTORY_HEADERS
+INVENTORY_HEADER_VERSIONS['inventory-v6'] = INVENTORY_HEADERS.copy()
+INVENTORY_HEADERS[19:] = ['单次最多到货（只读）', '可超收数量（只读）', '历史超收（只读）',
+                          '待验货超量（只读）', '合格超量（只读）', '本次超收（选填）']
+INVENTORY_HEADER_VERSIONS['inventory-v7'] = INVENTORY_HEADERS
 INVENTORY_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 INVENTORY_MAX_ROWS = 20_000
 INVENTORY_MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
@@ -1305,7 +1308,7 @@ def inventory_export_rows(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "sizeCode": size_code,
                     "stock": int(size.get("stock") or 0),
                     "contractPending": int(size.get("contractPending") or 0),
-                    **{k: int(size.get(k) or 0) for k in ['originalContractQuantity','overdeliveryLimit','overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']},
+                    **{k: int(size.get(k) or 0) for k in ['overdeliveryLimit','overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']},
                     "pendingInbound": int(size.get("pendingInbound") or 0),
                     "pendingInspection": int(size.get("pendingInspection") or 0),
                     "temporaryInbound": int(size.get("temporaryInbound") or 0),
@@ -1349,14 +1352,16 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
                 row["temporaryInbound"],
                 row["temporaryInbound"],
                 row["defectivePending"],
-                *[row[k] for k in ['originalContractQuantity','overdeliveryLimit','overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']],
+                row['contractPending'] + row['overdeliveryLimit'],
+                *[row[k] for k in ['overdeliveryLimit','overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']],
+                None,
             ]
         )
 
     from openpyxl.comments import Comment
     worksheet['I1'].comment = Comment('转移待验货或合格时可保持此列原值，系统会自动按阶段差额计算合同未送；若同时填写此列，须与自动计算结果一致。', 'GINGTTO')
     worksheet['M1'].comment = Comment('填写合格目标数量。增加量从待验货扣减；单独修改此列时系统自动计算待验货余额，一键入库另行操作。', 'GINGTTO')
-    worksheet['O1'].comment = Comment('填写待验货目标数量。先扣实际合同未送（含旧余额）；超过未送的部分才按原合同累计15%校验（向下取整）。与合格同时修改时，两列均为最终余额。只读额度以数据库为准，打回不返还超量额度。', 'GINGTTO')
+    worksheet['O1'].comment = Comment('填写待验货目标数量。按提交前的实际未送计算单次15%上限（向下取整），不区分合同或手工。与合格同时修改时，两列均为最终余额。Y列可选填本次超收，超收不扣未送。', 'GINGTTO')
     worksheet['Q1'].comment = Comment('独立临时待入库目标数量，不扣减采购阶段、不增加现货；保存后另行点击临时入库。', 'GINGTTO')
     worksheet['S1'].comment = Comment('只读：在库存页面登记次品并一键打回；修改本列不会写入。已登记次品预留待验货，不可转为合格。', 'GINGTTO')
     worksheet.column_dimensions['S'].width = 20
@@ -1372,8 +1377,8 @@ def build_inventory_export(items: list[dict[str, Any]]) -> BytesIO:
         for cell in row:
             cell.alignment = Alignment(vertical="center", wrap_text=cell.column in (3, 4, 5, 6))
     if worksheet.max_row > 1:
-        worksheet.auto_filter.ref = f"B1:X{worksheet.max_row}"
-    for column in ('T','U','V','W','X'):
+        worksheet.auto_filter.ref = f"B1:Y{worksheet.max_row}"
+    for column in ('T','U','V','W','X','Y'):
         worksheet.column_dimensions[column].width = 22
 
     output = BytesIO()
@@ -1505,6 +1510,8 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
                     inbound_fields.update(pendingInspection=_excel_quantity(cells[14], "待验货"), originalPendingInspection=_excel_quantity(cells[15], "原始待验货"))
                 if len(header) >= 18:
                     inbound_fields.update(temporaryInbound=_excel_quantity(cells[16], "临时待入库"), originalTemporaryInbound=_excel_quantity(cells[17], "原始临时待入库"))
+                if header_version == 'inventory-v7' and cells[24].value not in (None, ''):
+                    inbound_fields['receiptExtra'] = _excel_quantity(cells[24], '本次超收')
                 parsed.append(
                     {
                         **inbound_fields,
@@ -1530,68 +1537,27 @@ def parse_inventory_workbook(raw: bytes, snapshot: list[dict[str, Any]]) -> tupl
         workbook.close()
 
 
-def inventory_import_payload(raw: bytes) -> dict[str, Any]:
+def inventory_import_payload(raw: bytes):
+    import db as inventory_db
     snapshot = list_products(include_contract_pending=True, include_inactive=True)
     parsed, errors = parse_inventory_workbook(raw, snapshot)
     current = {(int(item['id']), str(size['sizeCode'])): size for item in snapshot for size in item.get('sizePrices', [])}
-    for index, row in enumerate(parsed, start=2):
+    rows, changed_rows, changed_fields = [], 0, 0
+    for row in parsed:
         size = current[(row['productId'], row['sizeCode'])]
-        effective = dict(size)
-        for field, original in [('stock','originalStock'),('contractPending','originalContractPending'),('pendingInbound','originalPendingInbound'),('pendingInspection','originalPendingInspection'),('temporaryInbound','originalTemporaryInbound')]:
-            if field in row and row[field] != row[original]:
-                if size[field] not in (row[original], row[field]):
-                    errors.append({'row':row.get('rowNumber',index),'message':f"{row['sku']} / {row['sizeCode']}：{field} 已在线上变更"})
-                effective[field] = row[field]
+        state = {**size, **{col:size[key] for key,(_,col,_) in inventory_db.IMPORT_FIELDS.items()},
+                 'defective_pending':size.get('defectivePending',0)}
+        changes = {}
         try:
-            import db as inventory_db
-            if all(size[k] == row[k] for k in ['contractPending','pendingInspection','pendingInbound']):
-                row.update(_stagePrepared=True, _overdelivery={k:size[k] for k in ['overdeliveryUsed','overdeliveryInspection','overdeliveryQualified']})
-            else:
-                inventory_db.prepare_inventory_import(row, size)
-            final_inspection = row['pendingInspection'] if row['pendingInspection'] != row['originalPendingInspection'] else size['pendingInspection']
-            inventory_db.validate_defective_reservation(size.get('defectivePending', 0), final_inspection, row['sizeCode'])
-            moving = any(row[k] != row[o] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')])
-            if moving and any(size[k] != row[o] for k,o in [('contractPending','originalContractPending'),('pendingInspection','originalPendingInspection'),('pendingInbound','originalPendingInbound')]):
-                if any(size[k] != row[k] for k in ['contractPending','pendingInspection','pendingInbound']): raise ValueError('库存阶段数量已变化，请重新导出')
+            changes, _ = inventory_db.inventory_import_changes(row,state)
         except ValueError as exc:
-            errors.append({'row':row.get('rowNumber',index),'message':str(exc)})
-    changed_rows = [
-        row
-        for row in parsed
-        if row["stock"] != row["originalStock"]
-        or row["contractPending"] != row["originalContractPending"]
-        or row.get("pendingInbound") != row.get("originalPendingInbound")
-        or row.get("pendingInspection") != row.get("originalPendingInspection")
-        or row.get("temporaryInbound") != row.get("originalTemporaryInbound")
-    ]
-    return {
-        "fileHash": hashlib.sha256(raw).hexdigest(),
-        "rows": [
-            {
-                **row,
-                "stockChanged": row["stock"] != row["originalStock"],
-                "contractPendingChanged": row["contractPending"] != row["originalContractPending"],
-                "pendingInboundChanged": row.get("pendingInbound") != row.get("originalPendingInbound"),
-                "pendingInspectionChanged": row.get("pendingInspection") != row.get("originalPendingInspection"),
-                "temporaryInboundChanged": row.get("temporaryInbound") != row.get("originalTemporaryInbound"),
-            }
-            for row in parsed
-        ],
-        "errors": errors,
-        "summary": {
-            "rowCount": len(parsed),
-            "changedRowCount": len(changed_rows),
-            "changedFieldCount": sum(
-                int(row["stock"] != row["originalStock"])
-                + int(row["contractPending"] != row["originalContractPending"])
-                + int(row.get("pendingInbound") != row.get("originalPendingInbound"))
-                + int(row.get("pendingInspection") != row.get("originalPendingInspection"))
-                + int(row.get("temporaryInbound") != row.get("originalTemporaryInbound"))
-                for row in changed_rows
-            ),
-            "productCount": len({int(row["productId"]) for row in parsed}),
-        },
-    }
+            errors.append({'row':row['rowNumber'],'message':f"{row['sku']} / {row['sizeCode']}：{exc}"})
+        rows.append({**row, **changes, **{k+'Changed': k in changes for k in inventory_db.IMPORT_FIELDS}})
+        changed_rows += bool(changes)
+        changed_fields += len(changes)
+    return {'fileHash':hashlib.sha256(raw).hexdigest(), 'rows':rows, 'errors':errors,
+            'summary':{'rowCount':len(parsed),'changedRowCount':changed_rows,'changedFieldCount':changed_fields,
+                       'productCount':len({r['productId'] for r in parsed})}}, parsed
 
 
 HOME_SECTION_KEYS = ("bestSeller", "newArrival", "specialPrice")
@@ -2342,7 +2308,7 @@ def _inventory_upload_bytes() -> bytes:
 def preview_inventory_import() -> Any:
     try:
         raw = _inventory_upload_bytes()
-        payload = inventory_import_payload(raw)
+        payload, rows = inventory_import_payload(raw)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     return jsonify(payload)
@@ -2362,13 +2328,13 @@ def confirm_inventory_import() -> Any:
         processed = workbench.db._fetch_one('SELECT result FROM inventory_import_receipts WHERE file_hash=%s', (actual_hash,))
         if processed:
             return jsonify({'message':'此文件已经导入，不会重复修改','updatedProducts':0,'updatedRows':0,'updatedFields':0,'fileHash':actual_hash,'alreadyProcessed':True})
-        payload = inventory_import_payload(raw)
+        payload, rows = inventory_import_payload(raw)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     if payload["errors"]:
         return jsonify({"message": "导入文件存在错误，请修正后重新预览", **payload}), 400
     try:
-        result = apply_inventory_import(payload["rows"])
+        result = apply_inventory_import(rows)
         workbench.db._fetch_one('INSERT INTO inventory_import_receipts(file_hash,result) VALUES(%s,%s) RETURNING file_hash',(actual_hash,workbench.Jsonb(result)))
     except ValueError as error:
         return jsonify({"message": str(error)}), 409
@@ -2396,11 +2362,14 @@ def update_inventory_route(product_id: int) -> Any:
         if temporary is not None and not isinstance(temporary, dict): raise ValueError('临时待入库数量格式错误')
         defective = payload.get('defectivePendingBySize')
         if defective is not None and not isinstance(defective, dict): raise ValueError('次品数量格式错误')
+        extra = payload.get('receiptExtraBySize')
+        if extra is not None and not isinstance(extra, dict):
+            raise ValueError('本次超收数量格式错误')
         locked = workbench.db._fetch_one('SELECT id FROM products WHERE id=%s FOR UPDATE', (product_id,))
         if not locked:
             return jsonify({"message": "Product not found"}), 404
         before = get_product_by_id(product_id, include_contract_pending=True, include_inactive=True)
-        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size, inbound, inspection, temporary, defective)
+        product = update_product_inventory(product_id, size_stocks, contract_pending_by_size, inbound, inspection, temporary, defective, extra)
     except ValueError as error:
         return jsonify({"message": str(error)}), 400
     if not product:
@@ -3460,11 +3429,16 @@ def contract_update_route(contract_id):
     return jsonify({'item': contracts.update(contract_id, request.get_json() or {})})
 
 
-@app.post('/api/admin/contracts/<int:contract_id>/cancel')
+@app.route('/api/admin/contracts/<int:contract_id>/cancel', methods=['GET','POST'])
 @require_auth
 @require_roles('admin', 'sales')
 def contract_cancel_route(contract_id):
     import contracts
+    if request.method == 'GET':
+        try:
+            return jsonify(contracts.cancel_preview(contract_id))
+        except ValueError as error:
+            return jsonify({'message':str(error)}), 400
     return jsonify({'item': contracts.cancel(contract_id, request.get_json() or {})})
 
 

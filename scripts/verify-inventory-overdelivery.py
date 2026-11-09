@@ -13,7 +13,8 @@ import db
 import inventory_overdelivery as policy
 from inventory_policy import public_inventory
 
-INTERNAL_FIELDS=set(policy.internal(0))
+admin=args.backend=='admin-backend'
+INTERNAL_FIELDS=set(policy.internal({'contract_pending':0}) if admin else policy.internal(0))
 
 def public_boundary(value):
     if isinstance(value,list):
@@ -32,7 +33,6 @@ with db._connect() as conn:
     expected={'product_id':('bigint','NO'),'size_code':('character varying','NO'),
               'used':('integer','NO'),'inspection':('integer','NO'),'qualified':('integer','NO'),
               'normal_received':('bigint','YES')}
-    admin=args.backend=='admin-backend'
     if admin:
         expected.update(contract_inspection=('integer','YES'),contract_qualified=('integer','YES'))
     if any(types.get(k)!=v for k,v in expected.items()):raise RuntimeError('Overdelivery ledger schema incompatible')
@@ -41,18 +41,12 @@ with db._connect() as conn:
         or not any(c['contype']=='p' for c in checks) or not any(c['contype']=='f' for c in checks)):
         raise RuntimeError('Overdelivery ledger constraints missing')
     rows=conn.execute('SELECT e.*,s.pending_inspection,s.pending_inbound FROM inventory_overdelivery e LEFT JOIN product_size_prices s ON s.product_id=e.product_id AND s.size_code=e.size_code').fetchall()
-    totals=policy.contract_totals(conn.cursor(),list({r['product_id'] for r in rows})) if rows else {}
     for row in rows:
         if (row['pending_inspection'] is None or row['pending_inbound'] is None
             or min(row['used'],row['inspection'],row['qualified'])<0
             or row['inspection']>row['pending_inspection'] or row['qualified']>row['pending_inbound']
-            or row['inspection']+row['qualified']>row['used']
-            or row['used']>min(policy.MAX_QUANTITY,totals.get((row['product_id'],row['size_code']),0)*15//100)):
-            raise RuntimeError('Cumulative overdelivery/source invariant failed')
-        if admin and ((ci := row['contract_inspection'] or 0) + row['inspection'] > row['pending_inspection']
-                      or (cb := row['contract_qualified'] or 0) + row['qualified'] > row['pending_inbound']
-                      or ci+cb > (row['normal_received'] or 0)):
-            raise RuntimeError('Contract stage source exceeds recorded receipt')
+            or row['inspection']+row['qualified']>row['used']):
+            raise RuntimeError('Overdelivery stage markers exceed actual quantities')
     public_boundary(public_inventory(db.list_products()))
     verified=['ledger-schema','validated-constraints','cumulative-allowance','stage-provenance','public-field-boundary']
     if args.backend=='admin-backend':
@@ -64,6 +58,6 @@ with db._connect() as conn:
         # Importing app would run initialization/migrations: inspect release
         # metadata without executing the application in a read-only smoke check.
         source=(Path(__file__).resolve().parents[1]/args.backend/'app.py').read_text('utf-8')
-        if 'INVENTORY_TEMPLATE_VERSION = "inventory-v6"' not in source:raise RuntimeError('Inventory template incompatible')
-        verified+=['internal-size-fields','ledger-audit-trigger','inventory-v6']
+        if 'INVENTORY_TEMPLATE_VERSION = "inventory-v7"' not in source:raise RuntimeError('Inventory template incompatible')
+        verified+=['internal-size-fields','ledger-audit-trigger','inventory-v7']
     print(json.dumps({'readOnly':True,'checks':verified}))

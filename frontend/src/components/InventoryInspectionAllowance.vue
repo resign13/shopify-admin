@@ -6,17 +6,18 @@
       </ElButton>
     </template>
     <div class="allowance-card">
-      <div class="allowance-card__heading"><strong>{{ inventorySizeLabel(row.sizeCode) }} · 验货额度</strong><span>按原合同累计 15%</span></div>
-      <div class="allowance-card__remaining"><span>{{ preview ? '登记后剩余额度' : '剩余超量额度' }}</span><strong>{{ row.overdeliveryRemaining || 0 }}<small> 件</small></strong></div>
+      <div class="allowance-card__heading"><strong>{{ inventorySizeLabel(row.sizeCode) }} · 验货额度</strong><span>当前未送的 15%</span></div>
+      <div class="allowance-card__remaining"><span>{{ preview ? '登记后下一笔最多到货' : '单次最多到货' }}</span><strong>{{ row.contractPending + balanceAllowance(row.contractPending) }}<small> 件</small></strong></div>
       <dl class="allowance-card__details">
         <div><dt>实际合同未送</dt><dd>{{ row.contractPending || 0 }} 件</dd></div>
-        <div><dt>原合同总数</dt><dd>{{ row.originalContractQuantity || 0 }} 件</dd></div>
-        <div><dt>15% 超量额度</dt><dd>{{ row.overdeliveryLimit || 0 }} 件</dd></div>
-        <div><dt>累计已用</dt><dd>{{ row.overdeliveryUsed || 0 }} 件</dd></div>
+        <div><dt>可超收数量</dt><dd>{{ balanceAllowance(row.contractPending) }} 件</dd></div>
         <div><dt>待验货中超量</dt><dd>{{ row.overdeliveryInspection || 0 }} 件</dd></div>
       </dl>
-      <p v-if="!row.originalContractQuantity" class="allowance-card__note">该尺码尚无采购合同额度，手动登记合同未送不增加超量额度。</p>
-      <p v-else class="allowance-card__note">先扣未送（含旧余额），超出才用额度。额度按尺码向下取整，使用后不返还。</p>
+      <label v-if="arrival > 0" class="allowance-card__extra">本次超收（选填）
+        <ElInputNumber :model-value="row.receiptExtra ?? undefined" :min="0" :precision="0"
+          :controls="false" placeholder="留空自动" :aria-label="`本次超收 ${row.sizeCode}`" @change="value => emit('extra', value)" />
+      </label>
+      <p class="allowance-card__note">按实际未送计算，向下取整。旧批多送时可单独填写超收，超收不扣未送。</p>
       <p v-if="preview" class="allowance-card__preview">当前为草稿预览，保存后生效。</p>
     </div>
   </ElPopover>
@@ -26,7 +27,10 @@
 import { computed } from 'vue';
 import { InfoFilled } from '@element-plus/icons-vue';
 import { inventorySizeLabel } from '../utils/inventorySizes';
+import { balanceAllowance, receiptArrival } from '../utils/inventoryStages';
 const props = defineProps({ row: { type: Object, required: true } });
+const emit = defineEmits(['extra']);
+const arrival = computed(() => props.row.registrationBase ? receiptArrival(props.row.registrationBase, props.row.pendingInspection, props.row.pendingInbound) : 0);
 const preview = computed(() => props.row.pendingInspection !== props.row.originalInspection || props.row.pendingInbound !== props.row.originalInbound);
 </script>
 
