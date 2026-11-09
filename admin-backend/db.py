@@ -368,6 +368,8 @@ def ensure_database_ready() -> None:
         import finance_order_styles
         if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (finance_order_styles.VERSION,)).fetchone():
             raise RuntimeError('Database finance order style binding migration is required')
+        if not inventory_overdelivery.stage_sources_ready(conn):
+            raise RuntimeError('Database contract receipt stage provenance migration is required')
     if os.environ.get('APP_ENV','production') == 'production':
         with _connect() as conn:
             role = conn.execute('SELECT rolsuper,rolcreatedb,rolcreaterole,rolbypassrls FROM pg_roles WHERE rolname=current_user').fetchone()
@@ -1262,7 +1264,8 @@ def apply_inventory_import(rows: list[dict[str, Any]]) -> dict[str, int]:
                 if inbound_changed and current_inbound not in (int(row['originalPendingInbound']), next_inbound):
                     raise ValueError(f"合格数量冲突：{product_id} / {size_code}")
                 totals, ledger = inventory_overdelivery.states(cur, [product_id])
-                state = inventory_overdelivery.internal(totals.get((product_id,size_code),0), ledger.get((product_id,size_code)), current)
+                state = inventory_overdelivery.internal(totals.get((product_id,size_code),0), ledger.get((product_id,size_code)),
+                                                        current, include_stage_sources=True)
                 stages_already_applied = all(int(current[col]) == row[key] for col,key in [('contract_pending','contractPending'),('pending_inspection','pendingInspection'),('pending_inbound','pendingInbound')])
                 if not stages_already_applied:
                     row.pop('_stagePrepared', None)

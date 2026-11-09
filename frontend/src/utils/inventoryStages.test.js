@@ -86,11 +86,23 @@ test('qualified transfers preserve provenance; draft undo does not spend quota',
   assert.equal(procurementPreview(delivered,0,115).overdeliveryQualified,15);
   assert.equal(defectiveReturnPreview({...delivered,defectivePending:20}).contractAfter,5);
 });
-test('spent quota and original normal counter cannot be renewed by pending edits', () => {
+test('actual manual pending is normal, without replenishing spent quota', () => {
   const base={...contractBase(),contractReceived:100,contractPending:100};
-  assert.throws(()=>procurementPreview(base,16,0),/累计15%/);
-  assert.equal(procurementPreview(base,15,0).overdeliveryUsed,15);
-  assert.throws(()=>procurementPreview({...base,overdeliveryUsed:15},1,0),/累计15%/);
+  assert.equal(procurementPreview(base,100,0).overdeliveryUsed,0);
+  assert.equal(procurementPreview(base,115,0).overdeliveryUsed,15);
+  assert.throws(()=>procurementPreview(base,116,0),/累计15%/);
+  assert.throws(()=>procurementPreview({...base,overdeliveryUsed:15},101,0),/累计15%/);
+});
+test('ZM4744 and ZM4745 legacy quantities debit the visible actual pending balance', () => {
+  for (const [pending, inspection, contract, target, limit] of [[175,1,75,101,11],[147,2,60,89,9]]) {
+    const base={...contractBase(),contractPending:pending,pendingInspection:inspection,
+      originalContractQuantity:contract,overdeliveryLimit:limit};
+    const row={...base,registrationBase:base,defectivePending:inspection,pendingInspection:target};
+    assert.equal(moveProcurementStage(row,'inspection',target,inspection),'');
+    assert.equal(row.contractPending,contract);
+    assert.equal(row.overdeliveryUsed,0);
+    assert.equal(row.overdeliveryRemaining,limit);
+  }
 });
 test('stage edits do not silently discard manual contract adjustments', () => {
   const base=contractBase();const row={...base,registrationBase:base,contractPending:101,pendingInspection:10,defectivePending:0};

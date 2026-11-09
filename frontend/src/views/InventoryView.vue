@@ -195,7 +195,7 @@
           <div class="registration-rules">
             <strong>库存登记规则</strong>
             <ul>
-              <li><b>待验货：</b>增加时先扣合同未送；超量按原合同总数累计 15%，按尺码向下取整。点击尺码下的“验货额度”查看明细。</li>
+              <li><b>待验货：</b>先扣实际合同未送（含旧余额）；超过未送的部分才按原合同累计 15% 校验。点击尺码下的“验货额度”查看明细。</li>
               <li><b>次品：</b>仅暂存并预留待验货；打回优先处理超量次品，普通次品返合同，已使用超量额度不返还。</li>
               <li><b>合格：</b>增加时扣减可转移的待验货；入库时增加现货并清零合格。</li>
               <li><b>临时待入库：</b>独立登记与入库，不影响采购阶段。</li>
@@ -728,7 +728,7 @@ async function moveStage(row, stage, value) {
     row[target] = old;
   } else {
     row[source] = candidate[source];
-    for (const key of ['overdeliveryUsed', 'overdeliveryInspection', 'overdeliveryQualified', 'overdeliveryRemaining', 'contractPending', 'contractReceived']) row[key] = candidate[key];
+    for (const key of ['overdeliveryUsed', 'overdeliveryInspection', 'overdeliveryQualified', 'overdeliveryRemaining', 'contractPending']) row[key] = candidate[key];
   }
   error.value = message;
 }
