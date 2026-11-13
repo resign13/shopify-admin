@@ -11,16 +11,13 @@
     ></PageHeader
   >
   <div v-if="isPhone" class="mobile-dashboard-range">
-    <div><button v-for="item in [['1','今天'],['7','近7天'],['30','近30天']]" :key="item[0]" :class="{active: preset === item[0]}" @click="setPreset(item[0])">{{ item[1] }}</button><button :class="{active:preset === 'custom'}" :aria-expanded="mobileFilterOpen" aria-controls="mobile-dashboard-filters" @click="mobileFilterOpen = true">自定义</button></div>
+    <div><button v-for="item in dashboardDatePresets" :key="item.value" type="button" :class="{active: preset === item.value}" @click="setPreset(item.value)">{{ item.label }}</button></div>
     <button class="mobile-dashboard-filter" aria-label="经营筛选" :aria-expanded="mobileFilterOpen" aria-controls="mobile-dashboard-filters" @click="mobileFilterOpen = !mobileFilterOpen"><ElIcon><Filter /></ElIcon></button>
   </div>
   <section v-if="!isPhone" class="panel">
     <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId,statuses:appliedGlobal.statuses ? appliedStatusLabel : ''}" :labels="{statuses: '订单状态'}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
       <ElRadioGroup v-model="preset" @change="setPreset"
-        ><ElRadioButton value="1">今天</ElRadioButton
-        ><ElRadioButton value="7">近 7 天</ElRadioButton
-        ><ElRadioButton value="30">近 30 天</ElRadioButton
-        ><ElRadioButton value="custom">自定义</ElRadioButton></ElRadioGroup
+        ><ElRadioButton v-for="item in dashboardDatePresets" :key="item.value" :value="item.value">{{ item.label }}</ElRadioButton></ElRadioGroup
       ><ElDatePicker
         v-model="dates"
         type="daterange"
@@ -29,7 +26,7 @@
         :clearable="false"
         start-placeholder="开始日期"
         end-placeholder="结束日期"
-        @change="preset = 'custom'"
+        @change="preset = matchDashboardPreset(dates)"
       /><ElSelect v-model="country" clearable filterable placeholder="全部国家"
         ><ElOption
           v-for="item in data?.filters.countries"
@@ -59,7 +56,7 @@
   </section>
   <section v-if="isPhone" v-show="mobileFilterOpen" id="mobile-dashboard-filters" class="mobile-dashboard-inline-filters" aria-label="经营筛选">
     <ElForm label-position="top" @submit.prevent="applyMobileFilters">
-      <ElFormItem label="统计日期"><ElDatePicker v-model="dates" type="daterange" value-format="YYYY-MM-DD" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @change="preset = 'custom'" /></ElFormItem>
+      <ElFormItem label="统计日期"><ElDatePicker v-model="dates" type="daterange" value-format="YYYY-MM-DD" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @change="preset = matchDashboardPreset(dates)" /></ElFormItem>
       <ElFormItem label="国家"><ElSelect v-model="country" clearable filterable placeholder="全部国家"><ElOption v-for="item in data?.filters.countries" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem label="款号"><ElSelect v-model="style" multiple collapse-tags collapse-tags-tooltip clearable filterable placeholder="全部款号"><ElOption v-for="item in data?.filters.styles" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem v-if="auth.isSuperAdmin" label="业务员"><ElSelect v-model="salespersonId" clearable filterable placeholder="全公司业务员"><ElOption label="未分配订单" value="unassigned"/><ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name"/></ElSelect></ElFormItem>
@@ -736,6 +733,7 @@ import { RouterLink, useRoute, useRouter } from "vue-router";
 import { useAdminAuthStore } from "../stores/auth";
 import PageHeader from "../components/PageHeader.vue";
 import { stylePerformanceQuery, stylePerformanceExportQuery, isPersonalStyleScope } from "../utils/styleSalesperson";
+import { dashboardDatePresets, defaultDashboardPreset, dashboardPresetDates as presetDates, dashboardDateFilter, matchDashboardPreset } from "../utils/dashboardDates";
 import { api, useQueuedDownload, exportQueueLabel, notifyError, money, dateTime, statusNames } from "../composables/workbench";
 const TrendChart = defineAsyncComponent(
   () => import("../components/TrendChart.vue"),
@@ -750,7 +748,7 @@ const route = useRoute(),
 const data = ref(),
   loading = ref(false),
   error = ref("");
-const preset = ref("30"),
+const preset = ref(defaultDashboardPreset),
   dates = ref([]),
   country = ref(""),
   style = ref([]), statuses = ref([]);
@@ -762,7 +760,7 @@ function removeMobileFilter(key) {
   load(true);
 }
 const appliedGlobal = ref({}),
-  appliedPreset = ref("30"),
+  appliedPreset = ref(defaultDashboardPreset),
   trendMetric = ref("orders");
 const stylePerformance = ref({ items: null, summary: {} });
 const stylePerformanceLoading = ref(false),
@@ -852,18 +850,6 @@ function daysText(item) {
     return "暂无销量";
   return `${Number(item.estimatedDays).toFixed(1)} 天`;
 }
-function presetDates(value) {
-  const today = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Shanghai",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-  const end = new Date(`${today}T00:00:00Z`),
-    start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - Number(value) + 1);
-  return [start.toISOString().slice(0, 10), end.toISOString().slice(0, 10)];
-}
 function setPreset(value) {
   if (value === "custom") return;
   preset.value = value;
@@ -909,17 +895,9 @@ function readRoute() {
   country.value = scalar(q.country);
   style.value = scalar(q.style).split(",").filter(Boolean);
   statuses.value = scalar(q.statuses).split(",").filter(value => value in statusNames);
-  dates.value =
-    q.dateFrom && q.dateTo
-      ? [scalar(q.dateFrom), scalar(q.dateTo)]
-      : presetDates("30");
-  preset.value =
-    ["1", "7", "30"].includes(q.datePreset) &&
-    queryKey(dates.value) === queryKey(presetDates(q.datePreset))
-      ? q.datePreset
-      : q.dateFrom
-        ? "custom"
-        : "30";
+  const dateFilter = dashboardDateFilter(q);
+  dates.value = dateFilter.dates;
+  preset.value = dateFilter.preset;
   styleSalespersonId.value = auth.isSuperAdmin ? scalar(q.styleSalespersonId) : "";
   styleKeyword.value = scalar(q.styleKeyword);
   styleCategory.value = scalar(q.styleCategory);
