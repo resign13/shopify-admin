@@ -4,6 +4,7 @@ import order_pricing
 import order_printing
 import order_cancellation
 import export_resources
+from export_image_quality import NOTE_PIXELS, NOTE_ENCODING, encode_note_image
 import order_export_service
 import order_export_process
 
@@ -473,7 +474,7 @@ def fetch_image_bytes(url: str, *, attachment: bool = False):
             if raw is None:
                 raise ExportImageError()
             return raw
-        with image_variant(1600 if attachment else 640):
+        with image_variant(NOTE_PIXELS if attachment else 640):
             raw = _read_export_image(value, source)
         if cache is not None:
             _remember_export_image(cache, key, raw)
@@ -513,7 +514,7 @@ def prefetch_export_images(orders: list[dict[str, Any]]) -> None:
     def read(pair):
         key, source = pair
         try:
-            with transport.use(), image_variant(1600 if key[1] else 640):
+            with transport.use(), image_variant(NOTE_PIXELS if key[1] else 640):
                 return _read_export_image(key[0], source)
         except Exception:
             app.logger.warning('export_image_missing')
@@ -573,17 +574,21 @@ def prepare_export_images(orders):
     g.export_sources = sources
 
 
-def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640, source_key=None) -> OpenpyxlImage | None:
+def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, pixels: int = 640, source_key=None, note: bool = False) -> OpenpyxlImage | None:
     from export_image_cache import ExportImageError, shared_cache
     try:
         from flask import has_request_context
         from PIL import ImageOps
         cache = export_resources.cache() if has_request_context() else None
         key = (source_key, pixels) if source_key is not None and cache is not None else None
+        if note and key is not None:
+            key = (*key, NOTE_ENCODING)
         if key is not None and key in cache.converted:
             path, image_width, image_height = cache.converted[key]
         else:
             def convert():
+                if note:
+                    return encode_note_image(image_bytes, pixels)
                 with PILImage.open(BytesIO(image_bytes)) as img:
                     converted = ImageOps.exif_transpose(img).convert("RGBA")
                     converted.thumbnail((pixels, pixels), PILImage.Resampling.LANCZOS)
@@ -596,7 +601,8 @@ def build_excel_image(image_bytes: bytes, *, width: int = 54, height: int = 70, 
             token = getattr(cache, 'source_tokens', {}).get(source_key) if cache is not None else None
             # The raw entry's random generation ID changes whenever its source
             # version/TTL changes. No new digest is needed for converted reuse.
-            converted_bytes = shared_cache().get(['converted-v1', token, pixels, 'jpeg94-rgba'], convert, kind='converted').data if token else convert()
+            identity = ['converted-note-v1', token, pixels, NOTE_ENCODING] if note else ['converted-v1', token, pixels, 'jpeg94-rgba']
+            converted_bytes = shared_cache().get(identity, convert, kind='converted').data if token else convert()
             with PILImage.open(BytesIO(converted_bytes)) as image:
                 image_width, image_height = image.size
             if cache is not None:
@@ -1197,7 +1203,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
         missing_images = 0
         for attachment_url in attachment_images:
             attachment_bytes = fetch_image_bytes(attachment_url, attachment=True)
-            attachment_image = build_excel_image(attachment_bytes, width=480, height=480, pixels=1600, source_key=(str(attachment_url).strip(), True)) if attachment_bytes else None
+            attachment_image = build_excel_image(attachment_bytes, width=480, height=480, pixels=NOTE_PIXELS, source_key=(str(attachment_url).strip(), True), note=True) if attachment_bytes else None
             if attachment_image:
                 pictures.append(attachment_image)
             else:

@@ -9,6 +9,7 @@ from decimal import Decimal
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Side, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from export_image_quality import NOTE_PIXELS
 
 SIZES = ['28/S', '30/M', '32/L', '34/XL', '36/2XL']
 ALIASES = {alias: label for label, aliases in zip(SIZES, [
@@ -183,7 +184,7 @@ def build(orders, *, split=False, include_images=True, fetch_image, make_image, 
             missing_images = 0
             for url in image_urls:
                 data = image_bytes(url, attachment=True)
-                image = make_image(data, width=480, height=480, pixels=1600, source_key=(str(url).strip(), True)) if data else None
+                image = make_image(data, width=480, height=480, pixels=NOTE_PIXELS, source_key=(str(url).strip(), True), note=True) if data else None
                 if image:
                     attachment_images.append(image)
                 else:
