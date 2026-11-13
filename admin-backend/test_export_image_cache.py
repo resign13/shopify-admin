@@ -15,6 +15,7 @@ import unittest
 from unittest.mock import patch
 from PIL import Image, ImageOps
 import export_image_cache as shared
+from export_image_quality import NOTE_PIXELS, NOTE_ENCODING
 
 
 def picture(color='red'):
@@ -151,6 +152,8 @@ class SourceVariantTest(unittest.TestCase):
             self.assertEqual(shared.export_source_url(url), url.replace('/upload/', '/upload/c_limit,w_640,h_640/'))
             with shared.image_variant(1600):
                 self.assertIn('/c_limit,w_1600,h_1600/', shared.export_source_url(url))
+            with shared.image_variant(NOTE_PIXELS):
+                self.assertIn('/c_limit,w_2400,h_2400/', shared.export_source_url(url))
             self.assertIn('/c_limit,w_640,h_640/', shared.export_source_url(url))
         self.assertEqual(shared.export_source_url(url), url)
         unchanged = [
@@ -227,7 +230,7 @@ class ApplicationImageCacheTest(unittest.TestCase):
         app = self.application
         import export_resources
         url = 'https://res.cloudinary.com/fixture/image/upload/v123/photo.png'
-        targets = [url.replace('/upload/', f'/upload/c_limit,w_{pixels},h_{pixels}/') for pixels in (640, 1600)]
+        targets = [url.replace('/upload/', f'/upload/c_limit,w_{pixels},h_{pixels}/') for pixels in (640, NOTE_PIXELS)]
         output = BytesIO()
         Image.new('RGBA', (64, 32), (10, 20, 30, 100)).save(output, 'PNG')
         raw = output.getvalue()
@@ -239,10 +242,11 @@ class ApplicationImageCacheTest(unittest.TestCase):
                 app.prefetch_export_images([order])
                 cache = export_resources.cache()
                 self.assertNotEqual(cache.source_tokens[(url, False)], cache.source_tokens[(url, True)])
-                for attachment, pixels in ((False, 640), (True, 1600)):
+                for attachment, pixels in ((False, 640), (True, NOTE_PIXELS)):
                     data = app.fetch_image_bytes(url, attachment=attachment)
-                    app.build_excel_image(data, pixels=pixels, source_key=(url, attachment))
-                    path = cache.converted[((url, attachment), pixels)][0]
+                    app.build_excel_image(data, pixels=pixels, source_key=(url, attachment), note=attachment)
+                    key = ((url, attachment), pixels, NOTE_ENCODING) if attachment else ((url, attachment), pixels)
+                    path = cache.converted[key][0]
                     with Image.open(path) as image:
                         self.assertEqual(image.format, 'PNG')
                         self.assertEqual(image.size, (64, 32))
@@ -259,6 +263,31 @@ class ApplicationImageCacheTest(unittest.TestCase):
             download.assert_not_called()
         self.assertEqual(order['items'][0]['image'], url)
         self.assertEqual(order['labelImageUrls'], [url])
+
+    def test_note_preserves_png_and_uses_new_cache_policy_while_product_is_unchanged(self):
+        app = self.application
+        import export_resources
+        url = 'https://fixture/image.png'
+        raw = picture()
+        with patch.object(app, '_export_image_source', return_value=None), \
+             patch('safe_images.validate_url'), patch('safe_images.fetch_image', return_value=raw), \
+             patch.object(app, 'encode_note_image', wraps=app.encode_note_image) as convert:
+            note_bytes, product_bytes = [], []
+            for _ in range(2):
+                with app.app.test_request_context('/'):
+                    for note, pixels, results in [(True, NOTE_PIXELS, note_bytes), (False, 640, product_bytes)]:
+                        source = app.fetch_image_bytes(url, attachment=note)
+                        token = source.cache_token
+                        if note:
+                            shared.shared_cache().get(['converted-v1', token, pixels, 'jpeg94-rgba'], lambda: b'stale-converted-policy')
+                        app.build_excel_image(source, pixels=pixels, source_key=(url, note), note=note)
+                        key = ((url, True), pixels, NOTE_ENCODING) if note else ((url, False), pixels)
+                        results.append(export_resources.cache().converted[key][0].read_bytes())
+            self.assertEqual(convert.call_count, 1)
+        self.assertEqual(note_bytes, [raw, raw])
+        self.assertEqual(product_bytes[0], product_bytes[1])
+        with Image.open(BytesIO(product_bytes[0])) as product:
+            self.assertEqual((product.format, product.size), ('JPEG', (640, 320)))
 
     def test_cloudinary_original_must_pass_current_validation_before_derivation(self):
         app = self.application

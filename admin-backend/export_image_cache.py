@@ -12,6 +12,7 @@ import threading
 import time
 from urllib.parse import quote
 import uuid
+from export_image_quality import NOTE_PIXELS
 
 
 class ExportImageError(Exception):
@@ -43,7 +44,7 @@ _CLOUDINARY_UPLOAD = re.compile(
 @contextmanager
 def image_variant(pixels):
     """Set only the current export read's existing product/attachment limit."""
-    if pixels not in (640, 1600):
+    if pixels not in (640, 1600, NOTE_PIXELS):
         raise ValueError('Invalid export image variant')
     previous = getattr(_variant, 'pixels', None)
     _variant.pixels = pixels
