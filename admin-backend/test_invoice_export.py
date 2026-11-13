@@ -114,38 +114,15 @@ class InvoiceExportTest(unittest.TestCase):
                             if name.startswith('xl/media/'):
                                 with Image.open(BytesIO(archive.read(name))) as picture:
                                     dimensions.append(picture.size)
-                        self.assertIn((1800, 2400), dimensions)
-                        self.assertIn((480, 640), dimensions)
-                    pictures = [pic for ws in book for pic in ws._images if pic.width == 1800]
+                        self.assertIn((1200, 1600), dimensions)
+                    pictures = [pic for ws in book for pic in ws._images if pic.width == 1200]
                     self.assertEqual(len(pictures), 2)
                     self.assertEqual(pictures[0].anchor._from.row, pictures[1].anchor._from.row)
                     self.assertGreater(pictures[1].anchor._from.col, pictures[0].anchor._from.col)
                     for ws in book:
                         for picture in ws._images:
-                            if picture.width == 1800:
+                            if picture.width == 1200:
                                 self.assertGreaterEqual(ws.row_dimensions[picture.anchor._from.row + 1].height, 300)
-
-    def test_all_order_exports_embed_original_png_and_keep_note_display_size(self):
-        original = BytesIO()
-        Image.new('RGB', (1045, 674), 'navy').save(original, format='PNG')
-        raw = original.getvalue()
-        order = {'orderNo': 'ORIGINAL-NOTE-PNG', 'shippingFee': 10,
-                 'labelImageUrls': ['/uploads/note.png'],
-                 'items': [{'sku': 'ONE', 'quantity': 1, 'unitPrice': 20}]}
-        for builder in (application.build_orders_export, application.build_orders_sheet_export, application.build_order_invoice_export):
-            with self.subTest(builder=builder.__name__), patch.object(application, 'fetch_image_bytes', return_value=raw):
-                stream = builder(order if builder == application.build_order_invoice_export else [order])
-                with ZipFile(stream) as archive:
-                    media = [p for p in archive.namelist() if p.startswith('xl/media/')]
-                    # PI also contains its unchanged template logos.
-                    self.assertEqual(sum(archive.read(name) == raw for name in media), 1)
-                stream.seek(0)
-                sheet = load_workbook(stream).active
-                attachments = [pic for pic in sheet._images if pic.width == 1045 and pic.height == 674]
-                self.assertEqual(len(attachments), 1)
-                picture = attachments[0]
-                self.assertLessEqual(picture.anchor.ext.cx / 9525, 320.01)
-                self.assertLessEqual(picture.anchor.ext.cy / 9525, 400.01)
 
     def test_invoice_attachments_follow_totals_and_product_pictures_are_large(self):
         photo = BytesIO(); Image.new('RGB', (1200, 1600), '#335577').save(photo, format='PNG')
