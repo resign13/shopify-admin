@@ -10,10 +10,18 @@ BASE_OPERATION_MODULES = {
     'warehouse': ['inventory','orders'], 'customer': ['inventory'], 'finance': ['finance'],
 }
 CAPABILITIES = {role: list(MODULES) for role in STAFF_ROLES}
+for _role in STAFF_ROLES:
+    CAPABILITIES[_role].append('orders.cancel.approve')
 CAPABILITIES['customer'] = ['inventory']
 DEFAULTS = {**BASE_OPERATION_MODULES,
             'sales': [k for k in BASE_OPERATION_MODULES['sales'] if k != 'presale'] + ['size-charts'],
             'finance': ['finance', 'contracts']}
+DEFAULTS['admin'] = [*MODULES, 'orders.cancel.approve']
+
+
+def can_approve_cancellation(user):
+    granted = effective(user)
+    return user.get('role') in STAFF_ROLES and 'orders' in granted and 'orders.cancel.approve' in granted
 
 
 def effective(user):
@@ -28,6 +36,8 @@ def validate(value, role):
         raise ValueError('模块权限必须是列表')
     if any(v not in CAPABILITIES.get(role, []) for v in value):
         raise ValueError('包含当前角色不支持的模块权限')
+    if 'orders.cancel.approve' in value and 'orders' not in value:
+        raise ValueError('取消审批权限需要同时开启订单管理')
     return list(dict.fromkeys(value))
 
 

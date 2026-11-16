@@ -1,4 +1,4 @@
-import { roleModules, defaultRoleModules } from '../permissions';
+import { roleModules, rolePermissions, defaultRoleModules } from '../permissions';
 import { defineStore } from 'pinia';
 import { request } from '../api';
 import { setAuthSession, withAuthTransition } from '../authTransport';
@@ -46,6 +46,9 @@ export const useAdminAuthStore = defineStore('admin-auth',{
     canManageAccounts() {
       return this.can("admin-users");
     },
+    canApproveCancellation() {
+      return this.can('orders') && this.can('orders.cancel.approve');
+    },
     canEditOrders() {
       return this.can("orders") && ["admin", "sales", "finance"].includes(this.userRole);
     },
@@ -54,7 +57,7 @@ export const useAdminAuthStore = defineStore('admin-auth',{
     },
     permissions: (state) =>
       (state.user?.permissions ?? defaultRoleModules(state.user?.role)).filter((key) =>
-        roleModules(state.user?.role).includes(key),
+        rolePermissions(state.user?.role).includes(key),
       ),
     can() {
       return (module) => this.permissions.includes(module);
@@ -68,8 +71,8 @@ export const useAdminAuthStore = defineStore('admin-auth',{
             : "dashboard";
       return this.can(preferred)
         ? "/" + preferred
-        : this.permissions.length
-          ? "/" + this.permissions[0]
+        : this.permissions.some(key=>roleModules(this.userRole).includes(key))
+          ? "/" + this.permissions.find(key=>roleModules(this.userRole).includes(key))
           : "/no-access";
     },
   },

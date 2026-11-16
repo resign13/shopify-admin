@@ -106,7 +106,7 @@ class OrderOperationsTest(unittest.TestCase):
         order, _ = self.create()
         self.update(order['id'], status='cancelled')
         self.assertEqual(self.history(order['id']).json['items'][0]['action'], 'cancel')
-        self.update(order['id'], status='paid')
+        self.update(order['id'], status='pending_payment')
         result = self.history(order['id']).json
         self.assertEqual(result['items'][0]['action'], 'restore')
         before = db._fetch_all('SELECT id,stock,temporary_inbound FROM product_size_prices ORDER BY id')

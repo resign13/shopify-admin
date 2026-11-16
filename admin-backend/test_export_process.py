@@ -188,13 +188,13 @@ class ExportProcessIntegrationTest(unittest.TestCase):
             order = {'orderNo': 'fixture', 'shippingFee': 10, 'note': 'fixture note',
                      'labelImageUrls': ['/uploads/photo.png'], 'items': [
                          {'sku': 'one', 'image': '/uploads/photo.png', 'sizeCode': 'M', 'quantity': 1, 'unitPrice': 20}]}
-            for kind in ('combined', 'split', 'invoice'):
+            for kind in ('combined', 'split', 'invoice', 'draft_invoice'):
                 with self.subTest(kind=kind), application.app.test_request_context('/'):
                     g.export_sources = {('/uploads/photo.png', False): source, ('/uploads/photo.png', True): source}
                     book = load_workbook(process.build(kind, [order]))
                     images = [image for sheet in book for image in sheet._images]
                     template_images = []
-                    if kind == 'invoice':
+                    if kind in {'invoice','draft_invoice'}:
                         template = load_workbook(application.PROFORMA_TEMPLATE_PATH)
                         template_images = [(image.width, image.height, image.anchor._from.col,
                                             image.anchor._from.row, image._data())
@@ -206,7 +206,7 @@ class ExportProcessIntegrationTest(unittest.TestCase):
                         self.assertIn(original, serialized)
                         serialized.remove(original)
                     width, height, col, row, raw = serialized[0]
-                    self.assertEqual((width, height, col, row), (30, 60, 1, 12 if kind == 'invoice' else 5))
+                    self.assertEqual((width, height, col, row), (30, 60, 1, 12 if kind in {'invoice','draft_invoice'} else 5))
                     for _, _, _, _, raw in serialized:
                         with Image.open(io.BytesIO(raw)) as authorized:
                             red, green, blue = authorized.convert('RGB').getpixel((15, 30))
@@ -231,7 +231,7 @@ class ExportProcessIntegrationTest(unittest.TestCase):
             Image.new('RGB', (30, 60), 'blue').save(valid)
             source = {'legacy_path': str(valid), 'legacy_channel': 'admin'}
             bad_source = {'legacy_path': str(invalid), 'legacy_channel': 'admin'}
-            for kind in ('combined', 'split', 'invoice'):
+            for kind in ('combined', 'split', 'invoice', 'draft_invoice'):
                 for failure in ('denied', 'unreadable'):
                     for attachment in (False, True):
                         with self.subTest(kind=kind, failure=failure, attachment=attachment):

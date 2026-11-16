@@ -3,7 +3,7 @@ import json
 import re
 import uuid
 
-VERSION = 'order-export-queue-v2'
+VERSION = 'order-export-queue-v3'
 RETRY_SECONDS = 5
 WAIT_SECONDS = 120
 HEARTBEAT_SECONDS = 20
@@ -20,7 +20,12 @@ SYNC_ROUTES = {
 
 
 def is_invoice(path):
-    return re.fullmatch(r'/api/admin/orders/[0-9]+/invoice', path) is not None
+    return re.fullmatch(r'/api/admin/orders/(?:drafts/)?[0-9]+/invoice', path) is not None
+
+
+def draft_invoice_id(path):
+    match=re.fullmatch(r'/api/admin/orders/drafts/([0-9]+)/invoice',path)
+    return int(match[1]) if match else None
 
 
 def is_order_route(path):
@@ -56,9 +61,11 @@ def migrate(cur):
     ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS result_expires TIMESTAMPTZ;
     ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS result_orders BIGINT[];
     ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS actor_role TEXT;
+    ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS result_draft_id BIGINT;
+    ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS result_draft_revision TEXT;
     ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS result_code TEXT;
     ALTER TABLE security_export_queue ADD COLUMN IF NOT EXISTS result_message TEXT;
-    INSERT INTO security_schema_versions(version) VALUES('order-export-queue-v2') ON CONFLICT DO NOTHING''')
+    INSERT INTO security_schema_versions(version) VALUES('order-export-queue-v2'),('order-export-queue-v3') ON CONFLICT DO NOTHING''')
 
 
 def identity(request):

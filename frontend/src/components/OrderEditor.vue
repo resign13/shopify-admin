@@ -35,7 +35,9 @@
     </section>
     <ElAlert v-if="ready && readOnly" title="正在查看其他业务员的草稿，仅供查阅，编辑和提交由草稿创建人完成。" type="info" :closable="false" />
     <p v-if="ready && !id && !readOnly && draftSavedAt" class="small-note" role="status">已保存至服务器 · {{ dateTime(draftSavedAt) }}{{ dirty ? ' · 有未保存修改' : '' }}</p>
-    <ElForm v-if="ready && isPhone" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top" class="m-order-editor" data-testid="mobile-order-editor">
+    <div v-if="!id && activeDraftId" class="section-gap"><ElButton :loading="exportState?.busy" :disabled="dirty || saving || uploading || exportState?.busy" @click="exportDraft">导出订单详情</ElButton><small v-if="dirty" class="small-note">请先保存草稿后再导出</small></div>
+    <ElAlert v-if="cancellationPending(orderPolicy)" title="取消申请正在审核，请撤回申请或完成审核后再修改。" type="warning" :closable="false" />
+    <ElForm v-if="ready && isPhone" ref="formRef" :model="form" :disabled="saving || readOnly || cancellationPending(orderPolicy)" label-position="top" class="m-order-editor" data-testid="mobile-order-editor">
       <nav class="m-editor-steps" aria-label="订单填写进度"><button v-for="(label,index) in ['客户','商品','完成']" :key="label" type="button" :class="{active:mobileStep===index+1,done:mobileStep>index+1}" :aria-current="mobileStep===index+1 ? 'step' : undefined" @click="mobileStep=index+1"><span>{{ mobileStep>index+1 ? '✓' : index+1 }}</span>{{ label }}</button></nav>
       <section v-show="mobileStep===1" class="m-editor-section">
         <div class="m-editor-card"><header><h3>客户与收货</h3><ElButton text type="primary" :disabled="readOnly" @click="openMobileRecipient" data-testid="mobile-order-recipient">{{ form.userId ? '编辑收货资料' : '选择客户' }}</ElButton></header><div class="m-editor-customer"><span>{{ (form.contactName || selectedCustomer?.name || '客').slice(0,1) }}</span><div><strong>{{ form.contactName || selectedCustomer?.name || '选择商城客户' }}</strong><small>{{ [selectedCustomer?.companyName || selectedCustomer?.name, form.country].filter(Boolean).join(' · ') || '填写本单的客户与收货资料' }}</small></div></div><p v-if="form.address" class="m-editor-address">{{ [form.address,form.apartment,form.city,form.state,form.zip].filter(Boolean).join(', ') }}</p></div>
@@ -163,7 +165,7 @@
         <ElFormItem label="订单状态"
           ><ElSelect v-model="form.status" @change="form.cancelNote = ''"
             ><ElOption
-              v-for="(label, value) in statusNames"
+              v-for="(label, value) in allowedOrderStatuses(orderPolicy,statusNames)"
               :key="value"
               :value="value"
               :label="label" /></ElSelect
@@ -214,7 +216,7 @@
         </div>
       </section>
     </ElForm>
-    <ElForm v-else-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly" label-position="top">
+    <ElForm v-else-if="ready" ref="formRef" :model="form" :disabled="saving || readOnly || cancellationPending(orderPolicy)" label-position="top">
       <ElFormItem label="副单号（选填）" prop="secondaryOrderNo">
         <SecondaryOrderInput v-model="form.secondaryOrderNo" />
       </ElFormItem>
@@ -396,7 +398,7 @@
         <ElFormItem label="订单状态"
           ><ElSelect v-model="form.status" @change="form.cancelNote = ''"
             ><ElOption
-              v-for="(label, value) in statusNames"
+              v-for="(label, value) in allowedOrderStatuses(orderPolicy,statusNames)"
               :key="value"
               :value="value"
               :label="label" /></ElSelect
@@ -457,7 +459,7 @@
     >
   </component>
   <ElDrawer v-if="isPhone" v-model="mobileRecipientOpen" title="编辑收货资料" size="100%" append-to-body :close-on-click-modal="false" :before-close="closeMobileRecipient" class="m-recipient-drawer">
-    <ElForm ref="mobileRecipientForm" :model="mobileRecipient" label-position="top" :disabled="saving || readOnly" class="m-order-recipient-form">
+    <ElForm ref="mobileRecipientForm" :model="mobileRecipient" label-position="top" :disabled="saving || readOnly || cancellationPending(orderPolicy)" class="m-order-recipient-form">
       <ElFormItem label="商城客户" prop="userId" :rules="[{required:true,message:'请选择客户'}]"><ElSelect v-model="mobileRecipient.userId" filterable remote :remote-method="searchCustomers" :loading="customerLoading" placeholder="搜索客户姓名、公司或邮箱" class="full-width"><ElOption v-for="c in customers" :key="c.id" :value="c.id" :label="`${c.name} · ${c.companyName || c.email}`"/></ElSelect></ElFormItem>
       <div class="m-recipient-fields"><ElFormItem v-for="field in fields" :key="field.key" :label="field.label" :prop="field.key" :rules="field.required ? [{required:true,whitespace:true,message:`请填写${field.label}`}] : []"><ElInput v-model="mobileRecipient[field.key]" :maxlength="500"/></ElFormItem></div>
       <ElFormItem label="副单号（选填）"><SecondaryOrderInput v-model="mobileRecipient.secondaryOrderNo"/></ElFormItem>
@@ -495,6 +497,7 @@ import CustomerTemplates from "./CustomerTemplates.vue";
 import PdfAttachment from "./PdfAttachment.vue";
 import OrderPricingDialog from './OrderPricingDialog.vue';
 import { catalogQuote, quoteTotal, validAmount } from '../utils/orderPricing';
+import {allowedOrderStatuses,cancellationPending} from '../utils/orderCancellation';
 import { mergeSelectionQuantities, orderProductSizes } from '../utils/orderSelection';
 import { customerFields, customerProfile, applyCustomerProfile } from "../utils/customerTemplates";
 import { compareProductCategories } from "../utils/catalogOrder";
@@ -510,6 +513,7 @@ import {
   confirm,
   money as formatMoney,
   dateTime,
+  download,
   statusNames,
 } from "../composables/workbench";
 const props = defineProps({
@@ -518,6 +522,8 @@ const props = defineProps({
     sourceOrderId: [Number, String],
     draftId: [Number, String],
     embedded: Boolean,
+    exportState:Object,
+    runExport:Function,
   }),
   emit = defineEmits(["update:open", "saved"]);
 const { isPhone } = useResponsive();
@@ -570,6 +576,12 @@ async function mobileSubmit(){if(isPhone.value && (!form.userId || fields.some(f
 const originalItems = ref([]);
 const sourceOrderNo = ref(''), customerUnavailable = ref(false);
 const activeDraftId = ref(null), draftVersion = ref(''), draftKey = ref(''), draftSavedAt = ref(''), readOnly = ref(false);
+const orderPolicy=ref({});
+async function exportDraft(){
+  if(dirty.value || saving.value || uploading.value || !activeDraftId.value || !props.runExport)return;
+  try{await props.runExport(options=>download(`orders/drafts/${activeDraftId.value}/invoice?version=${encodeURIComponent(draftVersion.value)}`,`订单草稿详情-DRAFT-${activeDraftId.value}.xlsx`,options));}
+  catch(e){error.value=errorMessage(e);}
+}
 const priceChanges = computed(() => reorderPriceChanges(form.items,form.currency));
 const imageUploading = ref(false), pdfUploading = ref(false), templateBusy = ref(false);
 const uploading = computed(() => imageUploading.value || pdfUploading.value || templateBusy.value);
@@ -784,6 +796,7 @@ async function retryProductDetails() {
   finally { if (current === serial) productRetrying.value = false; }
 }
 async function populate(item, expectedSerial = serial) {
+  orderPolicy.value=item;
   originalItems.value = item.items.map(row => ({...row}));
   version.value = item.version;
   status.value = item.status;
@@ -832,7 +845,7 @@ async function loadEditor() {
     conflict.value = false;
     latest.value = null;
     sourceOrderNo.value = ''; customerUnavailable.value = false;
-    activeDraftId.value = null; draftVersion.value = ''; draftSavedAt.value = ''; readOnly.value = false;
+    activeDraftId.value = null; draftVersion.value = ''; draftSavedAt.value = ''; readOnly.value = false;orderPolicy.value={};
     draftKey.value = crypto.randomUUID();
     Object.keys(products).forEach(key => delete products[key]);
     customers.value = [];
@@ -967,6 +980,7 @@ async function close(done) {
   }
 }
 async function submit() {
+  if(cancellationPending(orderPolicy.value)){error.value='取消申请正在审核，请先撤回或完成审核';return;}
   if (
     readOnly.value ||
     saving.value ||

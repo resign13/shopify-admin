@@ -1,13 +1,13 @@
 <template>
-  <ElDialog :model-value="open" :title="noteOnly ? '修改取消备注' : '取消订单'" width="min(520px, 94vw)"
+  <ElDialog :model-value="open" :title="noteOnly ? '修改取消备注' : requiresApproval ? '申请取消订单' : '取消订单'" width="min(520px, 94vw)"
     append-to-body destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!busy" :before-close="close">
     <template v-if="current">
       <p class="order-id">{{ current.orderNo }}</p>
-      <p v-if="!noteOnly" class="small-note">{{ statusNames[current.status] }} → 已取消；商品库存按现有规则返还。</p>
+      <p v-if="!noteOnly" class="small-note">{{ requiresApproval ? '提交后保持原订单状态和库存，审核通过后才取消；审核期间暂停修改和发货，可撤回申请。' : `${statusNames[current.status]} → 已取消；商品库存按现有规则返还。` }}</p>
       <ElForm label-position="top" @submit.prevent="submit">
-        <ElFormItem label="取消备注（选填）">
+        <ElFormItem :label="requiresApproval ? '申请原因（必填）' : '取消备注（选填）'">
           <ElInput v-model="note" type="textarea" :rows="4" maxlength="500" show-word-limit
-            aria-label="取消备注（选填）" :disabled="busy" placeholder="填写取消原因，仅后台可见" />
+            :aria-label="requiresApproval ? '申请原因（必填）' : '取消备注（选填）'" :disabled="busy" :placeholder="requiresApproval ? '请填写取消申请原因' : '填写取消原因，仅后台可见'" />
         </ElFormItem>
       </ElForm>
       <ElAlert v-if="error" :title="error" type="error" :closable="false">
@@ -17,7 +17,7 @@
     <template #footer>
       <ElButton :disabled="busy" @click="close()">返回</ElButton>
       <ElButton type="primary" :loading="busy" :disabled="!current || conflict || invalidState" @click="submit">
-        {{ noteOnly || current?.status === 'cancelled' ? '保存取消备注' : '确认取消订单' }}
+        {{ requiresApproval ? '提交取消申请' : noteOnly || current?.status === 'cancelled' ? '保存取消备注' : '确认取消订单' }}
       </ElButton>
     </template>
   </ElDialog>
@@ -30,7 +30,8 @@ import { api, save, confirm, statusNames } from '../composables/workbench';
 const props = defineProps({ open: Boolean, order: Object, noteOnly: Boolean });
 const emit = defineEmits(['update:open', 'saved']);
 const current = ref(), note = ref(''), initial = ref(''), busy = ref(false), error = ref(''), conflict = ref(false);
-const invalidState = computed(() => props.noteOnly && current.value?.status !== 'cancelled');
+const requiresApproval = computed(()=>!props.noteOnly && !!current.value?.cancelApprovalRequired);
+const invalidState = computed(() => props.noteOnly && current.value?.status !== 'cancelled' || current.value?.cancelRequest?.state==='pending');
 let generation = 0;
 watch(() => [props.open, props.order?.id], () => {
   generation++;
@@ -62,15 +63,16 @@ async function refresh() {
 }
 async function submit() {
   if (busy.value || !current.value || conflict.value || invalidState.value) return;
+  if(requiresApproval.value && !note.value.trim()){error.value='请填写申请原因';return;}
   busy.value = true; error.value = '';
   try {
-    const { order } = await save(`orders/${current.value.id}`, {
+    const { order } = requiresApproval.value ? await save(`orders/${current.value.id}/cancellation-requests`,{version:current.value.version,reason:note.value},'POST') : await save(`orders/${current.value.id}`, {
       version: current.value.version, cancelNote: note.value,
       ...(!props.noteOnly && current.value.status !== 'cancelled' ? { status: 'cancelled' } : {}),
     });
     initial.value = note.value;
     emit('saved', order); emit('update:open', false);
-    ElMessage.success(props.noteOnly ? '取消备注已保存' : '订单已取消');
+    ElMessage.success(requiresApproval.value ? '取消申请已提交，等待审核' : props.noteOnly ? '取消备注已保存' : '订单已取消');
   } catch (e) { error.value = errorMessage(e); conflict.value = e.status === 409; }
   finally { busy.value = false; }
 }

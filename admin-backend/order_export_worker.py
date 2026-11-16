@@ -156,15 +156,15 @@ def main():
                 output = application.build_orders_export(orders, include_images=payload['include_images'])
             elif kind == 'split':
                 output = application.build_orders_sheet_export(orders, include_images=payload['include_images'])
-            elif kind == 'invoice':
-                output = application.build_order_invoice_export(orders[0])
+            elif kind in {'invoice','draft_invoice'}:
+                output = application.build_order_invoice_export(orders[0],draft=kind=='draft_invoice')
             else:
                 raise RuntimeError('Invalid export kind')
             (folder / 'export.xlsx').write_bytes(output.getvalue())
     except ExportImageError as error:
         status = {'error': 'image_unavailable', 'exception_type': exception_type(error)}
     except ValueError as error:
-        if payload.get('kind') == 'invoice':
+        if payload.get('kind') in {'invoice','draft_invoice'}:
             allowed = {'Please enter shipping fee before exporting PI', '请填写有效本单汇率', '本单汇率须为正数，最多六位小数'}
             status = {'error': 'invoice_invalid', 'message': str(error) if str(error) in allowed else 'Invalid invoice data'}
         else:

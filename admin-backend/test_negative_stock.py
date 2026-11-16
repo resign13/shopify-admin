@@ -17,6 +17,7 @@ class NegativeStockTest(unittest.TestCase):
     call = order_tests.AdminOrdersTest.call
     payload = order_tests.AdminOrdersTest.payload
     stock = order_tests.AdminOrdersTest.stock
+    change_status = order_tests.AdminOrdersTest.change_status
     workbook = workbench_tests.WorkbenchTest.workbook
     upload = workbench_tests.WorkbenchTest.upload
 
@@ -62,7 +63,7 @@ class NegativeStockTest(unittest.TestCase):
         self.assertEqual(self.balance(), 4)
         order = self.update(order, note='cancelled metadata')
         self.assertEqual(self.balance(), 4)
-        response = self.call(f"orders/{order['id']}", 'PUT', {'status':'paid'})
+        response = self.call(f"orders/{order['id']}", 'PUT', {'status':'pending_payment'})
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(self.balance(), -2)
         self.assertEqual(self.call('orders', 'DELETE', {'orderIds':[order['id']]}).status_code, 200)
@@ -109,18 +110,24 @@ class NegativeStockTest(unittest.TestCase):
         self.assertTrue(all(r.status_code in [200,400,404] for r in results),[r.json for r in results])
         self.assertEqual(self.balance(),0)
 
-    def test_fulfilled_deletion_and_reopening_stock_arithmetic(self):
+    def test_fulfilled_cancellation_approval_and_restore_stock_arithmetic(self):
         self.set_stock(M=0)
         for status in ['shipped','completed']:
             order=self.create(2)
             order=self.update(order,status=status,trackingNo='FIXTURE')
             before=self.balance()
-            for target in ['paid','pending_payment','partially_allocated','allocated','cancelled','cancelled','partially_allocated','paid','shipped']:
+            for target in ['paid','pending_payment','partially_allocated','allocated','cancelled']:
                 response = self.call(f"orders/{order['id']}",'PUT',{'status':target,'trackingNo':'FIXTURE'})
-                self.assertEqual(response.status_code,200,response.json)
-                self.assertEqual(self.balance(), before + (2 if target == 'cancelled' else 0))
-            self.assertEqual(self.call('orders','DELETE',{'orderIds':[order['id']]}).status_code,200)
+                self.assertEqual(response.status_code,409 if target=='cancelled' else 400,response.json)
+                self.assertEqual(self.balance(),before)
+            self.assertEqual(self.call('orders','DELETE',{'orderIds':[order['id']]}).status_code,400)
+            order=self.change_status(order,'cancelled')
+            self.assertEqual(self.balance(),before+2)
+            order=self.change_status(order,status)
             self.assertEqual(self.balance(),before)
+            order=self.change_status(order,'cancelled')
+            self.assertEqual(self.call('orders','DELETE',{'orderIds':[order['id']]}).status_code,200)
+            self.assertEqual(self.balance(),before+2)
         order=self.create(3);before=self.balance()
         self.assertEqual(self.call('orders','DELETE',{'orderIds':[order['id']]}).status_code,200)
         self.assertEqual(self.balance(),before+3)

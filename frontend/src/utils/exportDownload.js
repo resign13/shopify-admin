@@ -71,7 +71,7 @@ export async function downloadFile(fetcher, url, filename, options = {}) {
   const readOptions = { method: 'GET', ...(requestOptions.signal ? { signal: requestOptions.signal } : {}) };
   const unavailable = error => {
     const terminal = [400,401,403,404,410].includes(error.status)
-      || ['export_timeout','export_image_unavailable','rate_limited','export_poll_limited',
+      || ['version_conflict','export_timeout','export_image_unavailable','rate_limited','export_poll_limited',
         'export_queue_full','export_ticket_finished','export_ticket_expired','export_ticket_mismatch'].includes(error.code);
     if (terminal) onExportUnavailable?.();
     return error;

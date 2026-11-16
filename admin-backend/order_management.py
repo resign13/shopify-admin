@@ -65,6 +65,9 @@ def save_order(payload, order_id=None):
         old = db._fetch_one('SELECT * FROM orders WHERE id=%s FOR UPDATE', (order_id,))
         if not old:
             raise ValueError('订单不存在')
+        import order_cancel_policy
+        with db.get_connection() as conn, conn.cursor() as cur:
+            order_cancel_policy.assert_mutable(cur,order_id)
         from flask import current_app
         old['label_pdf_url'] = current_app.extensions['media'].canonical(old.get('label_pdf_url') or '')
         old['label_image_urls'] = json.dumps([current_app.extensions['media'].canonical(u) for u in db._parse_label_image_urls(old)])
@@ -140,7 +143,7 @@ def save_order(payload, order_id=None):
     order_cancellation.next_note((old or {}).get('status'), next_status, cancel_note, (old or {}).get('cancellation_note',''))
     if old:
         db._fetch_one('UPDATE orders SET owner_admin_id=%s WHERE id=%s RETURNING id', (owner_id, order_id))
-        db.validate_admin_order_transition(old["status"], next_status)
+        db.validate_admin_order_transition(old["status"], next_status,old.get('cancelled_from_status'))
     tracking = payload.get('trackingNo', (old or {}).get('tracking_no') or '')
     payment = payload.get('paymentLink', (old or {}).get('payment_link') or '')
     if not isinstance(tracking, str) or len(tracking) > 500 or not isinstance(payment, str) or len(payment) > 2048:

@@ -15,9 +15,10 @@
       <ElTableColumn prop="itemCount" label="件数" width="65"/>
       <ElTableColumn prop="creatorName" label="创建人" width="100"/>
       <ElTableColumn label="保存时间" min-width="150"><template #default="{row}"><small>{{ dateTime(row.updatedAt) }}</small></template></ElTableColumn>
-      <ElTableColumn label="操作" width="145"><template #default="{row}">
+      <ElTableColumn label="操作" width="260"><template #default="{row}">
         <ElButton link type="primary" :disabled="loading" @click="$emit('select', row)">{{ row.canEdit ? '继续编辑' : '查看' }}</ElButton>
         <ElButton v-if="row.canEdit" link type="danger" :disabled="loading" @click="remove(row)">删除</ElButton>
+        <ElButton link type="primary" :loading="exportState?.busy" :disabled="loading || exportState?.busy" @click="exportDraft(row)">导出订单详情</ElButton>
       </template></ElTableColumn>
     </AdaptiveTable>
     <ElPagination class="section-gap" :current-page="page" :page-size="10" :total="total" layout="total, prev, pager, next" @current-change="page = $event; load()" />
@@ -29,12 +30,17 @@ import AdaptiveTable from "./AdaptiveTable";
 import ResponsiveFilters from './ResponsiveFilters.vue';
 import { ref, watch } from 'vue';
 import OrderNumber from './OrderNumber.vue';
-import { api, save, confirm, dateTime } from '../composables/workbench';
+import { api, save, confirm, dateTime, download } from '../composables/workbench';
 import { useAdminAuthStore } from '../stores/auth';
-const props = defineProps({open:Boolean});
+const props = defineProps({open:Boolean,exportState:Object,runExport:Function});
 defineEmits(['update:open','select']);
 const auth=useAdminAuthStore(), rows=ref([]), page=ref(1), total=ref(0), scope=ref('mine'), keyword=ref(''), loading=ref(false), error=ref('');
 let serial=0;
+async function exportDraft(row){
+  if(!props.runExport || props.exportState?.busy)return;
+  try{await props.runExport(options=>download(`orders/drafts/${row.id}/invoice?version=${encodeURIComponent(row.version)}`,`订单草稿详情-DRAFT-${row.id}.xlsx`,options));}
+  catch(e){error.value=errorMessage(e);}
+}
 async function load() {
   const current=++serial; loading.value=true; error.value='';
   try {

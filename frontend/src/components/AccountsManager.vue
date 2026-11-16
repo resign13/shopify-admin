@@ -11,7 +11,7 @@
     </ResponsiveFilters>
     <div class="mobile-system-section"><span>{{ list.total }} 位{{ admin ? '团队成员' : '商城客户' }}</span><MobileActionMenu label="更多"><ElButton @click="reset">重置筛选</ElButton><ElButton @click="list.load">刷新列表</ElButton></MobileActionMenu></div>
     <ElAlert v-if="list.error" :title="list.error" type="error" :closable="false"><ElButton text @click="list.load">重试</ElButton></ElAlert>
-    <div v-loading="list.loading" class="mobile-account-list"><article v-for="row in list.rows" :key="row.id" class="mobile-account-card"><button class="mobile-account-main" @click="edit(row)"><span class="mobile-account-avatar">{{ row.name?.slice(0,1) }}</span><span class="mobile-account-copy"><span class="mobile-account-name"><strong>{{ row.name }}</strong><ElTag size="small" :type="row.status==='active'?'success':'info'">{{ row.status==='active'?'启用':'停用' }}</ElTag></span><span>{{ admin ? roleNames[row.role] : row.companyName || '未填写公司' }}</span><small>{{ row.email }}</small></span></button><footer><small>{{ admin ? editableRolePermissions(row.role,row.permissions).length+' 项模块权限' : row.linkedAdminName ? '关联业务员 · '+row.linkedAdminName : '尚未关联业务员' }}</small><MobileActionMenu icon-only :label="row.name+' · 更多'"><ElButton @click="edit(row)">编辑账号</ElButton><ElButton type="danger" :disabled="admin && row.id===auth.user.id" @click="remove(row)">删除账号</ElButton></MobileActionMenu></footer></article><ElEmpty v-if="!list.loading&&!list.rows.length" description="没有找到匹配账号" :image-size="64" /></div>
+    <div v-loading="list.loading" class="mobile-account-list"><article v-for="row in list.rows" :key="row.id" class="mobile-account-card"><button class="mobile-account-main" @click="edit(row)"><span class="mobile-account-avatar">{{ row.name?.slice(0,1) }}</span><span class="mobile-account-copy"><span class="mobile-account-name"><strong>{{ row.name }}</strong><ElTag size="small" :type="row.status==='active'?'success':'info'">{{ row.status==='active'?'启用':'停用' }}</ElTag></span><span>{{ admin ? roleNames[row.role] : row.companyName || '未填写公司' }}</span><small>{{ row.email }}</small></span></button><footer><small>{{ admin ? editableRolePermissions(row.role,row.permissions).filter(key=>roleModules(row.role).includes(key)).length+' 项模块权限' : row.linkedAdminName ? '关联业务员 · '+row.linkedAdminName : '尚未关联业务员' }}</small><MobileActionMenu icon-only :label="row.name+' · 更多'"><ElButton @click="edit(row)">编辑账号</ElButton><ElButton type="danger" :disabled="admin && row.id===auth.user.id" @click="remove(row)">删除账号</ElButton></MobileActionMenu></footer></article><ElEmpty v-if="!list.loading&&!list.rows.length" description="没有找到匹配账号" :image-size="64" /></div>
     <ElPagination v-if="list.total" class="mobile-system-pagination" :current-page="Number(list.query.page)" :page-size="Number(list.query.pageSize)" :total="list.total" layout="prev, pager, next" :pager-count="5" @current-change="list.query.page=$event" />
   </section>
   <template v-else>
@@ -125,7 +125,7 @@
               部门只决定默认勾选项，可按账号启用其他模块；未勾选的模块不显示，也不允许调用接口。业务归属等规则保持不变。
           </p>
           <div>
-            <ElButton text @click="form.permissions = roleModules(form.role)"
+            <ElButton text @click="selectAllModules"
               >全选可用模块</ElButton
             ><ElButton text @click="form.permissions = defaultRoleModules(form.role)">恢复部门默认</ElButton
             ><ElButton text @click="form.permissions = []">清空</ElButton>
@@ -143,11 +143,12 @@
                 >
               </div>
             </section>
+            <section v-if="form.permissions?.includes('orders')"><strong>订单操作权限</strong><div><ElCheckbox value="orders.cancel.approve">取消审批</ElCheckbox></div></section>
           </ElCheckboxGroup>
           <p class="small-note">
             已选
             {{
-              form.permissions?.length || 0
+              moduleCount
             }}
               个模块。客户角色仍仅开放库存查看。
           </p>
@@ -159,7 +160,7 @@
               部门只决定默认勾选项，可按账号启用其他模块；未勾选的模块不显示，也不允许调用接口。业务归属等规则保持不变。
           </p>
           <div>
-            <ElButton text @click="form.permissions = roleModules(form.role)"
+            <ElButton text @click="selectAllModules"
               >全选可用模块</ElButton
             ><ElButton text @click="form.permissions = defaultRoleModules(form.role)">恢复部门默认</ElButton
             ><ElButton text @click="form.permissions = []">清空</ElButton>
@@ -177,11 +178,12 @@
                 >
               </div>
             </section>
+            <section v-if="form.permissions?.includes('orders')"><strong>订单操作权限</strong><div><ElCheckbox value="orders.cancel.approve">取消审批</ElCheckbox></div></section>
           </ElCheckboxGroup>
           <p class="small-note">
             已选
             {{
-              form.permissions?.length || 0
+              moduleCount
             }}
               个模块。客户角色仍仅开放库存查看。
           </p>
@@ -227,7 +229,7 @@ import { Plus, Search } from "@element-plus/icons-vue";
 import ResponsiveFilters from "./ResponsiveFilters.vue";
 import { moduleGroups, roleModules, defaultRoleModules, editableRolePermissions } from "../permissions";
 import { useRouter } from "vue-router";
-import { computed, reactive, ref, onMounted } from "vue";
+import { computed, reactive, ref, onMounted, watch } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "./PageHeader.vue";
 import DataTable from "./DataTable.vue";
@@ -268,6 +270,11 @@ const filters = reactive({
   saving = ref(false),
   error = ref("");
 const { markClean, canLeave } = useDirty(() => form);
+const moduleCount=computed(()=>form.permissions?.filter(key=>roleModules(form.role).includes(key)).length || 0);
+function selectAllModules(){form.permissions=[...roleModules(form.role),...(form.permissions?.includes('orders.cancel.approve')?['orders.cancel.approve']:[])];}
+watch(()=>form.permissions?.includes('orders'),value=>{
+  if(value===false && form.permissions?.includes('orders.cancel.approve')) form.permissions=form.permissions.filter(key=>key!=='orders.cancel.approve');
+});
 const roleHelp = {
   finance: "默认财务管理和合同管理；可额外勾选其他后台模块。",
   admin: "可分配全部后台模块，实际访问范围以下方勾选为准。",

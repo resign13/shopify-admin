@@ -12,6 +12,7 @@ class OrderDetailStockTest(unittest.TestCase):
     call = helpers.AdminOrdersTest.call
     payload = helpers.AdminOrdersTest.payload
     create = helpers.AdminOrdersTest.create
+    change_status = helpers.AdminOrdersTest.change_status
 
     def detail(self, oid, role='admin'):
         r = self.call(f'orders/{oid}',role=role)
@@ -56,10 +57,9 @@ class OrderDetailStockTest(unittest.TestCase):
 
     def test_all_states_display_actual_balance_without_another_subtraction_or_return(self):
         order = self.create()
-        for status in ['partially_allocated','allocated','paid','shipped','completed','cancelled','pending_payment']:
-            response = self.call(f"orders/{order['id']}",'PUT',{'version':order['version'],'status':status,'trackingNo':'TRACK'})
-            self.assertEqual(response.status_code,200,response.json)
-            order = response.json['order']; self.assert_balances(order)
+        for status in ['partially_allocated','allocated','paid','shipped','completed','cancelled','completed']:
+            order=self.change_status(order,status,trackingNo='TRACK')
+            self.assert_balances(order)
             before = self.business()
             current = self.detail(order['id']); self.assert_balances(current)
             self.assertEqual(self.business(),before)

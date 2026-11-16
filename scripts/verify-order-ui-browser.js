@@ -1,6 +1,7 @@
 // UI regressions run only against the guarded, synthetic *_test fixture.
 async (page) => {
-  const base = 'http://127.0.0.1:5360';
+  const base = new URL(page.url()).origin;
+  if(!['http://127.0.0.1:5360','http://127.0.0.1:5396'].includes(base))throw new Error('Isolated order browser fixture required');
   if (!page.url().startsWith(base + '/')) throw new Error('Isolated fixture required');
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const api = (path, method = 'GET', body) => page.evaluate(async ({path, method, body}) => {
@@ -234,40 +235,50 @@ async (page) => {
   await page.reload();
   const statusButton = page.getByRole('button', {name: `修改订单 ${order.orderNo} 状态`, exact: true});
   await statusButton.click();
-  for (const name of ['待付款', '已配货', '已付款', '已发货', '已取消']) {
-    check(await page.getByRole('menuitem', {name, exact: true}).isEnabled(), 'Completed status target disabled: ' + name);
+  for (const name of ['待付款', '部分配货', '已配货', '已付款', '已发货', '已取消']) {
+    check(await page.getByRole('menuitem', {name, exact: true}).count()===0, 'Completed status regression still offered: ' + name);
   }
-  const change = page.waitForResponse(r => r.url().endsWith(`/api/admin/orders/${id}`) && r.request().method() === 'PUT');
-  await page.getByRole('menuitem', {name: '已付款', exact: true}).click();
-  await page.getByRole('dialog', {name: '修改订单状态', exact: true}).getByRole('button', {name: '确认', exact: true}).click();
-  check((await change).status() === 200, 'Completed list status update failed');
-  check((await api(`orders/${id}`)).order.status === 'paid' && await balance() === savedBalance, 'Reopen unexpectedly changed stock');
-  await transition(id, 'completed'); await page.reload();
+  check(await page.getByRole('menuitem',{name:'申请取消',exact:true}).isEnabled(),'Completed cancellation request unavailable');
+  await page.keyboard.press('Escape');
   await page.getByRole('button', {name: '订单详情', exact: true}).click();
   const detail = page.getByRole('dialog', {name: '订单详情 · ' + order.orderNo, exact: true});
   await detail.getByRole('button', {name: '修改订单资料', exact: true}).click();
   await detail.locator('.el-form-item').filter({has: page.getByRole('combobox', {name: '订单状态', exact: true})})
     .locator('.el-select').click();
-  for (const name of ['待付款', '已配货', '已付款', '已发货', '已取消']) {
-    check(!(await page.getByRole('option', {name, exact: true}).getAttribute('class')).includes('is-disabled'), 'Completed editor option disabled');
+  for (const name of ['待付款', '部分配货', '已配货', '已付款', '已发货', '已取消']) {
+    check(await page.getByRole('option', {name, exact: true}).count()===0, 'Completed editor offers regression');
   }
-  await page.getByRole('option', {name: '已配货', exact: true}).click();
+  await page.keyboard.press('Escape');
   check(await detail.getByRole('columnheader', {name: '小计', exact: true}).count() === 0, 'Edit matrix still has subtotal');
   check(await detail.locator('.order-size-price').count() === 0, 'Edit matrix still has unit prices');
+  await detail.getByRole('textbox',{name:'备注',exact:true}).fill('Completed order browser note');
   const editResponse = page.waitForResponse(r => r.url().endsWith(`/api/admin/orders/${id}/details`) && r.request().method() === 'PUT');
   await detail.getByRole('button', {name: '保存修改', exact: true}).click();
   await page.getByRole('dialog', {name: '确认操作', exact: true}).getByRole('button', {name: '确认', exact: true}).click();
   check((await editResponse).status() === 200, 'Completed details save failed');
-  check((await api(`orders/${id}`)).order.status === 'allocated' && await balance() === savedBalance, 'Details reopening changed stock');
+  check((await api(`orders/${id}`)).order.status === 'completed' && await balance() === savedBalance, 'Completed details edit changed state or stock');
   await detail.getByRole('button', {name: '修改订单资料', exact: true}).waitFor();
   await detail.getByRole('button', {name: '关闭', exact: true}).click();
   const history = (await api(`orders/${id}/operations`)).items;
-  check(history.some(h => h.changes.some(c => c.field === 'status' && c.before === 'completed' && c.after === 'allocated')), 'Reopen operation not recorded');
-  await transition(id, 'cancelled');
+  check(history.some(h => h.changes.some(c => c.field === 'note' && c.after === 'Completed order browser note')), 'Details edit operation not recorded');
+  const current=(await api(`orders/${id}`)).order;
+  const requested=await api(`orders/${id}/cancellation-requests`,'POST',{version:current.version,reason:'Completed order cancellation UI fixture'});
+  check(await balance()===savedBalance,'Cancellation request returned inventory before review');
+  await page.reload();
+  await page.getByRole('button',{name:/^取消审批/}).click();
+  const reviews=page.getByRole('dialog',{name:'取消审批',exact:true});
+  await reviews.locator('.review-row').filter({hasText:order.orderNo}).getByRole('button',{name:'查看并审核',exact:true}).click();
+  const review=page.getByRole('dialog',{name:'取消申请详情',exact:true});
+  await review.getByRole('textbox',{name:'审核意见',exact:true}).fill('Reviewed fixture');
+  const approved=page.waitForResponse(r=>r.url().endsWith(`/cancellation-requests/${requested.item.id}/approve`) && r.request().method()==='POST');
+  await review.getByRole('button',{name:'审核通过并取消',exact:true}).click();
+  await page.getByRole('dialog',{name:'确认操作',exact:true}).getByRole('button',{name:'确认',exact:true}).click();
+  check((await approved).status()===200,'Cancellation approval failed');
+  await review.waitFor({state:'hidden'});
+  await reviews.getByRole('button',{name:'关闭此对话框',exact:true}).click();
   check(await balance() !== savedBalance, 'Cancellation did not restore inventory');
-  await transition(id, 'paid');
-  check(await balance() === savedBalance, 'Restoring cancelled order did not re-deduct inventory exactly');
   await transition(id, 'completed');
+  check(await balance() === savedBalance, 'Restoring cancelled order did not re-deduct inventory exactly');
   await login('warehouse'); await query(contact);
   check(await page.getByRole('columnheader', {name: '商品金额', exact: true}).count() === 0, 'Warehouse list exposes money');
   await page.getByRole('button', {name: '订单详情', exact: true}).click();
@@ -275,12 +286,13 @@ async (page) => {
   await warehouseDetail.getByRole('button', {name: '修改订单状态', exact: true}).click();
   await warehouseDetail.locator('.el-form-item').filter({has: page.getByRole('combobox', {name: /订单状态/})})
     .locator('.el-select').click();
-  check(!(await page.getByRole('option', {name: '已付款', exact: true}).getAttribute('class')).includes('is-disabled'), 'Warehouse completed status option disabled');
-  await page.getByRole('option', {name: '已付款', exact: true}).click();
+  check(await page.getByRole('option', {name: '已付款', exact: true}).count()===0, 'Warehouse completed regression offered');
+  await page.keyboard.press('Escape');
+  await warehouseDetail.getByRole('textbox',{name:'物流单号',exact:true}).fill('WAREHOUSE-APPROVAL-FIXTURE');
   const warehouseSave = page.waitForResponse(r => r.url().endsWith(`/api/admin/orders/${id}`) && r.request().method() === 'PUT');
   await warehouseDetail.getByRole('button', {name: '保存修改', exact: true}).click();
   const result = await warehouseSave;
-  check(result.status() === 200, 'Warehouse completed reopen failed');
+  check(result.status() === 200, 'Warehouse metadata save failed');
   const redacted = (await result.json()).order;
   check(!['totalAmount', 'shippingFee', 'paymentLink'].some(k => k in redacted), 'Warehouse update exposes money');
   check(redacted.items.every(i => !('unitPrice' in i) && !('totalPrice' in i)), 'Warehouse items expose money');
@@ -292,6 +304,6 @@ async (page) => {
     usdOnlyEditor: true,shippingNoStepper: true,compactEditorHints: true,
     itemCountsPreserved: true,amountsAndShippingPreserved: true,draftWeightAndMissingWarning: true,
     compactWeightHint: true,missingDetailsPopover: true,unsetWeightSmallFont: true,narrowWeightSummary: true,
-    currentWeightRefresh: true,weightFailureRecovery: true,completedListReopen: true,
-    completedEditorReopen: true,cancelRestoreStock: true,operationRecorded: true,warehouseReopenWithoutMoney: true};
+    currentWeightRefresh: true,weightFailureRecovery: true,completedListRegressionBlocked: true,
+    completedEditorRegressionBlocked: true,cancelApprovalAndRestoreStock: true,operationRecorded: true,warehouseEditWithoutMoney: true};
 }
