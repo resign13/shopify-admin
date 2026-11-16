@@ -1,7 +1,7 @@
 // Negotiated order and stock-delta acceptance, isolated local fixture only.
 async (page) => {
-  const base='http://127.0.0.1:5360';
-  if(!page.url().startsWith(base+'/'))throw new Error('Isolated fixture required');
+  const base=new URL(page.url()).origin;
+  if(!['http://127.0.0.1:5360','http://127.0.0.1:5396'].includes(base))throw new Error('Isolated fixture required');
   page.removeAllListeners('dialog');page.on('dialog',dialog=>dialog.accept());
   const check=(value,message)=>{if(!value)throw new Error(message);};
   const api=(path,method='GET',body)=>page.evaluate(async({path,method,body})=>{
@@ -61,9 +61,11 @@ async (page) => {
   await detail.getByRole('button',{name:'关闭',exact:true}).click();await detail.waitFor({state:'hidden'});
   for(const status of ['shipped','completed','cancelled']){
     const current=(await api('orders/'+made.id)).order;
-    await api('orders/'+made.id,'PUT',{version:current.version,status,
-      ...(status==='shipped'?{trackingNo:'PICKER-QA-TRACK'}:{}),
-      ...(status==='cancelled'?{cancelNote:'Fixture locked selection'}:{})});
+    if(status==='cancelled'){
+      const request=(await api('orders/'+made.id+'/cancellation-requests','POST',{version:current.version,reason:'Fixture locked selection'})).item;
+      await api('orders/cancellation-requests/'+request.id+'/approve','POST',{version:request.version});
+    }else await api('orders/'+made.id,'PUT',{version:current.version,status,
+      ...(status==='shipped'?{trackingNo:'PICKER-QA-TRACK'}:{})});
     detail=await open();
     const add=detail.getByRole('button',{name:'＋ 添加商品',exact:true});
     const quantity=detail.getByRole('spinbutton',{name:'GT-2026-1 M 数量',exact:true});

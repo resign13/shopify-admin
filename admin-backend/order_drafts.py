@@ -32,11 +32,12 @@ def migrate(cur):
     ''')
 
 
-def get_row(draft_id, *, write=False):
+def get_row(draft_id, *, write=False, share=False):
     # Administrators may inspect all drafts, but only the creator can mutate.
     restriction = '' if not write and g.current_user['role'] == 'admin' else ' AND creator_id=%s'
     params = (draft_id,) if not restriction else (draft_id, g.current_user['id'])
-    row = db._fetch_one('SELECT * FROM admin_order_drafts WHERE id=%s' + restriction + (' FOR UPDATE' if write else ''), params)
+    lock = ' FOR UPDATE' if write else ' FOR SHARE' if share else ''
+    row = db._fetch_one('SELECT * FROM admin_order_drafts WHERE id=%s' + restriction + lock, params)
     if not row:
         abort(404, description='草稿不存在或无权访问')
     return row
@@ -158,6 +159,45 @@ def detail(draft_id):
                   customerUnavailable=had_customer and (not customer or customer['status'] != 'active'),
                   customer={'id':customer['id'],'name':customer['name'],'companyName':customer['company_name'],'email':customer['email']} if customer else None)
     return result
+
+
+def assert_exportable(draft_id, revision, *, share=False):
+    row = get_row(draft_id,share=share)
+    if row['state']!='active' or str(revision or '')!=str(row['revision']):
+        raise workbench.Conflict('草稿已更新、删除或已转为正式订单，请重新导出。')
+    return row
+
+
+def invoice_snapshot(draft_id, revision):
+    """Use saved quotes, including unresolved lines. Never refresh catalog prices."""
+    row=assert_exportable(draft_id,revision)
+    data=copy.deepcopy(row['document'])
+    currency,rate=order_pricing.saved_terms(data)
+    rows=[{**r,'pending':False} for r in data.get('items',[])] + [{**r,'pending':True} for r in data.get('pendingItems',[])]
+    rows=[r for r in rows if r.get('quantity',0)>0]
+    if not rows: raise ValueError('草稿至少需要一条数量大于零的商品明细才能导出')
+    product_ids=list({r['productId'] for r in rows if r.get('productId')})
+    products={r['id']:r for r in db._fetch_all('SELECT id,is_active,main_image_url FROM products WHERE id=ANY(%s)',(product_ids,))}
+    sizes={(r['product_id'],r['size_code']) for r in db._fetch_all('SELECT product_id,size_code FROM product_size_prices WHERE product_id=ANY(%s)',(product_ids,))}
+    customer=db._fetch_one('SELECT name,email,company_name FROM store_users WHERE id=%s',(data.get('userId'),)) or {}
+    from order_management import amount
+    items=[]
+    for r in rows:
+        name=r.get('productName') or r.get('sku') or '待核对商品'
+        product=products.get(r.get('productId'))
+        if r['pending'] or not product or not product['is_active'] or (r.get('productId'),r.get('sizeCode')) not in sizes:
+            name+=' [待核对]'
+        items.append({**r,'productName':name,'image':products.get(r.get('productId'),{}).get('main_image_url') or '',
+                      'totalPrice':db._num(amount(r['unitPrice'],'商品单价')*r['quantity'])})
+    shipping=data.get('shippingFee',0)
+    urls=list(dict.fromkeys(data.get('inheritedAttachmentUrls',[])+data.get('labelImageUrls',[])+([data['labelPdfUrl']] if data.get('labelPdfUrl') else [])))
+    return {**data,'draftId':row['id'],'draftVersion':str(row['revision']),
+            'orderNo':f'DRAFT-{row["id"]}','userName':customer.get('name',''),
+            'userEmail':customer.get('email',''),'companyName':customer.get('company_name',''),
+            'shippingAddress':', '.join(data.get(k,'') for k in ['address','apartment','city','state','zip','country'] if data.get(k)),
+            'currency':currency,'exchangeRate':str(rate) if rate is not None else None,
+            'shippingFee':shipping,'items':items,'labelImageUrls':urls,
+            'totalAmount':db._num(sum(amount(i['unitPrice'],'单价')*i['quantity'] for i in items)+amount(shipping,'运费'))}
 
 
 def listing(args):

@@ -76,7 +76,7 @@ class CancellationTest(unittest.TestCase):
 
     def test_restore_clears_current_note_but_keeps_audit_and_recancel_is_blank(self):
         order = self.update(self.create(), status='cancelled', cancelNote='原取消原因')
-        restored = self.update(order, status='paid')
+        restored = self.update(order, status='pending_payment')
         self.assertEqual(restored['cancelNote'], '')
         self.assertEqual(self.stock()['stock'], 25)
         self.assertTrue(any(c['field']=='cancelNote' and c['before']=='原取消原因' and c['after']==''

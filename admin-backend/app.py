@@ -1,5 +1,6 @@
 from __future__ import annotations
 import safe_excel
+import db
 import order_pricing
 import order_printing
 import order_cancellation
@@ -825,12 +826,14 @@ def invoice_size_column(size_code: Any) -> str:
     return ""
 
 
-def build_invoice_line_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_invoice_line_items(items: list[dict[str, Any]], *, draft=False) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str, float], dict[str, Any]] = {}
     for item in items:
         if not isinstance(item, dict):
             continue
         description = build_invoice_item_description(item)
+        if draft and item.get('productName'):
+            description+='\n'+str(item['productName'])
         size_column = invoice_size_column(item.get('sizeCode'))
         if not size_column:
             description += '\nSize: ' + str(item.get('sizeCode') or 'Unspecified')
@@ -998,12 +1001,12 @@ def rebuild_invoice_fixed_footer(worksheet: Any, *, footer_start_row: int) -> No
     worksheet.print_area = f'A1:J{seller_label_row}'
 
 
-def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
+def build_order_invoice_export(order: dict[str, Any], *, draft=False) -> BytesIO:
     if not PROFORMA_TEMPLATE_PATH.exists():
         raise FileNotFoundError(f"Proforma invoice template not found: {PROFORMA_TEMPLATE_PATH}")
 
     shipping_fee = normalize_order_shipping_fee(order.get("shippingFee"))
-    if shipping_fee <= 0:
+    if shipping_fee <= 0 and not draft:
         raise ValueError("Please enter shipping fee before exporting PI")
 
     # PI always uses the existing USD template/payment details. Convert a CNY
@@ -1035,7 +1038,7 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
             del worksheet.column_dimensions[name]
 
     raw_items = [item for item in (order.get("items") or []) if isinstance(item, dict)]
-    invoice_items = build_invoice_line_items(raw_items)
+    invoice_items = build_invoice_line_items(raw_items,draft=draft)
 
     item_start_row = 13
     template_item_rows = 3
@@ -1073,6 +1076,12 @@ def build_order_invoice_export(order: dict[str, Any]) -> BytesIO:
 
     # Header/customer fields: keep all original template formatting.
     worksheet["B5"] = order_numbering.export_label(order)
+    if draft:
+        worksheet['B5']='草稿 / 非正式订单\n'+worksheet['B5'].value
+        for row in worksheet.iter_rows(min_row=1,max_row=4,max_col=10):
+            for cell in row:
+                if isinstance(cell.value,str) and 'PROFORMA' in cell.value.upper():
+                    cell.value='DRAFT PROFORMA INVOICE'
     # A full customer name is part of new numbers. Keep the printable value,
     # wrapping inside the existing header instead of shrinking the font.
     number_alignment = copy(worksheet['B5'].alignment)
@@ -1688,7 +1697,7 @@ def require_roles(*roles: str) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not module_permissions.allows_operation(g.current_user, request.path, request.method, allowed_roles):
                 return jsonify({"message": "Forbidden"}), 403
-            if func.__name__ in {'export_orders', 'export_orders_by_sheet', 'export_order_invoice', 'contract_export_route'}:
+            if func.__name__ in {'export_orders', 'export_orders_by_sheet', 'export_order_invoice', 'export_draft_invoice', 'contract_export_route'}:
                 return func(*args, **kwargs)
             if request.path.startswith('/api/admin/') and request.method in {'POST', 'PUT', 'DELETE', 'PATCH'} and not request.path.endswith(('/uploads', '/preview')):
                 return workbench.atomic_admin_call(func, args, kwargs)
@@ -3141,6 +3150,75 @@ def reorder_draft_route(order_id):
     return jsonify(order_reorder.draft(order_id))
 
 
+@app.route('/api/admin/orders/<int:order_id>/cancellation-requests', methods=['GET','POST'])
+@require_auth
+@require_roles('admin','sales','warehouse','finance')
+def order_cancellation_requests_route(order_id):
+    import order_cancel_policy as policy
+    sales_ownership.assert_access(order_id)
+    if request.method=='GET':
+        return jsonify({'items':policy.history(db,order_id)})
+    item=policy.submit(db,order_id,g.current_user,'admin',request.get_json(silent=True) or {})
+    return jsonify({'item':item,'order':admin_order_snapshot(order_id)})
+
+
+@app.get('/api/admin/orders/cancellation-requests')
+@require_auth
+@require_roles('admin','sales','warehouse','finance')
+def order_cancellation_review_list():
+    if not module_permissions.can_approve_cancellation(g.current_user):
+        return jsonify({'message':'没有取消审批权限'}),403
+    import order_cancel_policy as policy
+    return jsonify(policy.listing(db,request.args))
+
+
+@app.get('/api/admin/orders/cancellation-requests/<int:request_id>')
+@require_auth
+@require_roles('admin','sales','warehouse','finance')
+def order_cancellation_review_detail(request_id):
+    if not module_permissions.can_approve_cancellation(g.current_user):
+        return jsonify({'message':'没有取消审批权限'}),403
+    import order_cancel_policy as policy
+    row=db._fetch_one('SELECT * FROM order_cancellation_requests WHERE id=%s',(request_id,))
+    if not row: return jsonify({'message':'申请不存在'}),404
+    return jsonify({'item':policy.serialize(row),'order':admin_order_snapshot(row['order_id']) if row['order_id'] else None})
+
+
+@app.post('/api/admin/orders/cancellation-requests/<int:request_id>/<decision>')
+@require_auth
+@require_roles('admin','sales','warehouse','finance')
+def order_cancellation_decision(request_id,decision):
+    import order_cancel_policy as policy
+    actions={'approve':'approved','reject':'rejected','withdraw':'withdrawn'}
+    if decision not in actions: return jsonify({'message':'操作不存在'}),404
+    if decision!='withdraw' and not module_permissions.can_approve_cancellation(g.current_user):
+        return jsonify({'message':'没有取消审批权限'}),403
+    def cancel(order,row):
+        db.update_order_status(order['id'],'cancelled',order.get('tracking_no') or '',
+            order.get('payment_link') or '',order['shipping_fee'],cancel_note=row['reason'],approved_request_id=row['id'])
+    item=policy.decide(db,request_id,g.current_user,'admin',request.get_json(silent=True) or {},actions[decision],apply_cancel=cancel)
+    return jsonify({'item':item})
+
+
+@app.get('/api/admin/orders/drafts/<int:draft_id>/invoice')
+@require_auth
+@require_roles('admin','sales')
+def export_draft_invoice(draft_id):
+    import order_drafts
+    def load():
+        value=order_drafts.invoice_snapshot(draft_id,request.args.get('version'))
+        prepare_export_images([value])
+        return value
+    draft=order_export_service.snapshot(load)
+    try:
+        with export_resources.stage('workbook'):
+            stream=order_export_process.build('draft_invoice',[draft])
+    except order_export_process.InvoiceInvalid as error:
+        return jsonify({'message':str(error)}),400
+    import order_export_results
+    return order_export_results.deliver(stream,[],f'订单草稿详情-DRAFT-{draft_id}.xlsx',draft=draft)
+
+
 @app.get('/api/admin/orders/drafts')
 @require_auth
 @require_roles('admin', 'sales')
@@ -3283,6 +3361,11 @@ def inventory_batch_operation_route():
 @require_roles('admin','sales','warehouse')
 def receive_temporary_inventory_route(product_id):
     return jsonify(workbench.receive_inventory(product_id, request.get_json() or {}, source='temporary'))
+
+
+@app.errorhandler(workbench.Conflict)
+def handle_order_version_conflict(error):
+    return jsonify({'message':str(error),'code':'version_conflict'}),409
 
 
 @app.errorhandler(ValueError)

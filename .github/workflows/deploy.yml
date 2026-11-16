@@ -65,7 +65,7 @@ jobs:
         run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderSelectionTotals.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/dashboardDates.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderCancellation.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/dashboardDates.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
       - name: Build shared frontend
         working-directory: frontend
         run: npm run build
@@ -302,7 +302,7 @@ jobs:
           playwright-cli -s=weightsci run-code --filename scripts/verify-order-ui-browser.js | tee "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"dateAfterOrderNo":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"goodsSummaryPosition":true' "$RUNNER_TEMP/order-ui-result.log"
-          grep -q '"warehouseReopenWithoutMoney":true' "$RUNNER_TEMP/order-ui-result.log"
+          grep -q '"warehouseEditWithoutMoney":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"compactWeightHint":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"unsetWeightSmallFont":true' "$RUNNER_TEMP/order-ui-result.log"
           grep -q '"narrowWeightSummary":true' "$RUNNER_TEMP/order-ui-result.log"
@@ -310,6 +310,12 @@ jobs:
           grep -q '"reorder":true' "$RUNNER_TEMP/reorder-result.log"
           playwright-cli -s=weightsci run-code --filename scripts/verify-order-drafts-browser.js | tee "$RUNNER_TEMP/drafts-result.log"
           grep -q '"drafts":true' "$RUNNER_TEMP/drafts-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-draft-invoice-browser.js | tee "$RUNNER_TEMP/draft-invoice-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/draft-invoice-result.log"; then exit 1; fi
+          grep -q '"passed":true' "$RUNNER_TEMP/draft-invoice-result.log"
+          playwright-cli -s=weightsci run-code --filename scripts/verify-cancellation-approval-browser.js | tee "$RUNNER_TEMP/cancellation-approval-result.log"
+          if grep -q '^### Error' "$RUNNER_TEMP/cancellation-approval-result.log"; then exit 1; fi
+          grep -q '"passed":true' "$RUNNER_TEMP/cancellation-approval-result.log"
           playwright-cli -s=weightsci run-code --filename scripts/verify-order-number-browser.js | tee "$RUNNER_TEMP/order-number-result.log"
           grep -q '"orderNumberUI":true' "$RUNNER_TEMP/order-number-result.log"
           playwright-cli -s=weightsci run-code --filename scripts/verify-partial-allocation-browser.js | tee "$RUNNER_TEMP/partial-allocation-result.log"

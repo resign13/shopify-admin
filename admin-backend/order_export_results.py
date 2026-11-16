@@ -62,11 +62,11 @@ def ready(ticket, filename, expires):
             'expiresAt': expires.isoformat()}
 
 
-def deliver(stream, orders, filename, export_kind=None):
+def deliver(stream, orders, filename, export_kind=None, *, draft=None):
     ticket = getattr(g, 'security_export_ticket', None)
     if not ticket:
         response = send_file(stream, as_attachment=True, download_name=filename, mimetype=MIMETYPE)
-        return order_export_service.finish(response, orders, export_kind)
+        return order_export_service.finish(response, orders, export_kind,draft=draft)
     directory = folder()
     _private_folder(str(directory))
     cleanup()
@@ -84,13 +84,13 @@ def deliver(stream, orders, filename, export_kind=None):
         response = jsonify(ready(ticket, filename, expires))
         def publish():
             row = db._fetch_one('''UPDATE security_export_queue SET state='finished',result_name=%s,
-                result_expires=%s,result_orders=%s,actor_role=%s,updated_at=clock_timestamp()
+                result_expires=%s,result_orders=%s,actor_role=%s,result_draft_id=%s,result_draft_revision=%s,updated_at=clock_timestamp()
                 WHERE ticket=%s AND state='started' RETURNING ticket''',
                 (filename, expires, sorted({int(order['id']) for order in orders}),
-                 g.export_actor_role, ticket))
+                 g.export_actor_role, draft['draftId'] if draft else None,draft['draftVersion'] if draft else None,ticket))
             if not row:
                 raise workbench.Conflict('导出请求状态已改变，请重新发起。')
-        result = order_export_service.finish(response, orders, export_kind, on_success=publish)
+        result = order_export_service.finish(response, orders, export_kind, on_success=publish,draft=draft)
         if result is not response:
             path.unlink(missing_ok=True)
         return result
@@ -123,6 +123,13 @@ def authorized(ticket):
                 or row['actor_role'] and current['role'] != row['actor_role']):
             abort(403)
         g.current_user = {**g.current_user, **current}
+        if draft_id:=export_queue.draft_invoice_id(row['path']):
+            import order_drafts
+            if row['result_draft_id'] is not None:
+                if row['result_draft_id']!=draft_id: abort(404)
+                order_drafts.assert_exportable(draft_id,row['result_draft_revision'])
+            else:
+                order_drafts.active(order_drafts.get_row(draft_id))
         ids = row['result_orders'] or []
         if ids:
             existing = db._fetch_all('SELECT id FROM orders WHERE id=ANY(%s)', (ids,))

@@ -1,7 +1,7 @@
 // Run only on the dedicated local *_test UI fixture started on port 5360.
 async (page) => {
-  const base = 'http://127.0.0.1:5360';
-  if (!page.url().startsWith(base + '/')) throw new Error('Isolated fixture required');
+  const base = new URL(page.url()).origin;
+  if (!['http://127.0.0.1:5360','http://127.0.0.1:5396'].includes(base)) throw new Error('Isolated fixture required');
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   const api = (path, method='GET', body) => page.evaluate(async ({path,method,body}) => {
     const csrf = await fetch('/api/auth/csrf').then(r=>r.json());
@@ -84,13 +84,13 @@ async (page) => {
   dialog=await openCancel();
   await dialog.getByRole('textbox',{name:'取消备注（选填）',exact:true}).fill('List reason\nSecond line');
   // A second window changes the version; textarea must survive the 409.
-  await transition('allocated');
+  await transition('partially_allocated');
   const rejected=page.waitForResponse(r=>r.url().endsWith(`/api/admin/orders/${id}`) && r.request().method()==='PUT');
   await dialog.getByRole('button',{name:'确认取消订单',exact:true}).click();
   check((await rejected).status()===409,'Expected conflict not returned');
   check(await dialog.getByRole('textbox',{name:'取消备注（选填）',exact:true}).inputValue()==='List reason\nSecond line','Conflict lost reason');
   await dialog.getByRole('button',{name:'刷新订单版本（保留备注）',exact:true}).click();
-  await dialog.getByText('已配货 → 已取消；商品库存按现有规则返还。',{exact:true}).waitFor();
+  await dialog.getByText('部分配货 → 已取消；商品库存按现有规则返还。',{exact:true}).waitFor();
   const saved=page.waitForResponse(r=>r.url().endsWith(`/api/admin/orders/${id}`) && r.request().method()==='PUT');
   await dialog.getByRole('button',{name:'确认取消订单',exact:true}).click();
   check((await saved).status()===200,'Cancellation after refresh failed');
@@ -114,7 +114,7 @@ async (page) => {
   check((await detail()).cancelNote==='','Clear did not persist');
   await drawer().getByRole('button',{name:'关闭',exact:true}).click();
   check(await page.getByTestId('cancel-note-mark').count()===0,'Empty note icon remains');
-  await transition('paid'); await query(no);
+  await transition('partially_allocated'); await query(no);
   check(await stock()===reservedStock && (await detail()).cancelNote==='','Restore did not clear note or reserve stock');
   dialog=await openCancel();
   check(await dialog.getByRole('textbox',{name:'取消备注（选填）',exact:true}).inputValue()==='','Recancel inherited old reason');
@@ -131,7 +131,7 @@ async (page) => {
   check((await detail()).cancelNote==='Full editor reason' && await stock()===initialStock,'Full editor note/stock incorrect');
   await drawer().getByRole('button',{name:'修改订单资料',exact:true}).waitFor();
   await drawer().getByRole('button',{name:'关闭',exact:true}).click();
-  await transition('paid');
+  await transition('partially_allocated');
   // Warehouse quick-status cancellation and no financial disclosure.
   await login('warehouse'); await query(no); await openDetail();
   await drawer().getByRole('button',{name:'修改订单状态',exact:true}).click();

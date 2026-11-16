@@ -64,6 +64,12 @@ def link_account(user_id, value):
     row = db._fetch_one('SELECT linked_admin_user_id FROM store_users WHERE id=%s FOR UPDATE', (user_id,))
     if not row: raise ValueError('商城账号不存在')
     owner = validate_owner(value, previous=row['linked_admin_user_id'])
+    if owner is not None:
+        import order_cancel_policy
+        targets=db._fetch_all("SELECT id FROM orders WHERE store_user_id=%s AND order_source='store' AND owner_admin_id IS NULL ORDER BY id FOR UPDATE",(user_id,))
+        with db.get_connection() as conn, conn.cursor() as cur:
+            for target in targets:
+                order_cancel_policy.assert_mutable(cur,target['id'])
     db._fetch_one('UPDATE store_users SET linked_admin_user_id=%s,updated_at=NOW() WHERE id=%s RETURNING id', (owner, user_id))
     if owner is not None:
         db._fetch_all("UPDATE orders SET owner_admin_id=%s,updated_at=NOW() WHERE store_user_id=%s AND order_source='store' AND owner_admin_id IS NULL RETURNING id", (owner, user_id))

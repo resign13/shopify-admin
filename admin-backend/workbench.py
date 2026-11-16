@@ -502,6 +502,8 @@ def migrate(cur):
                   'product_category_translations', 'admin_users', 'store_users', 'banners', 'purchase_contracts', 'order_customer_templates', 'inventory_overdelivery']:
         cur.execute(f'DROP TRIGGER IF EXISTS admin_audit ON {table}')
         cur.execute(f'CREATE TRIGGER admin_audit AFTER INSERT OR UPDATE OR DELETE ON {table} FOR EACH ROW EXECUTE FUNCTION capture_admin_audit()')
+    import order_cancel_policy
+    order_cancel_policy.migrate(cur)
 
 
 class Conflict(Exception):
@@ -516,7 +518,7 @@ def version(table, object_id):
 def check_versions(payload):
     path = request.path.split('/')
     # Customer presets use their own revision checks, not an order ID/version.
-    if len(path) > 4 and path[3] == 'orders' and path[4] in {'templates', 'drafts'}:
+    if len(path) > 4 and path[3] == 'orders' and path[4] in {'templates', 'drafts', 'cancellation-requests'}:
         return
     module = 'home-config' if path[3] == 'activity-config' else path[3]
     if module not in {'products', 'inventory', 'orders', 'home-config'}:
@@ -540,6 +542,7 @@ def check_versions(payload):
 def atomic_admin_call(func, args, kwargs):
     """All helpers and audit triggers commit together, including legacy multi-step routes."""
     from order_reorder import PriceChanged
+    from order_cancel_policy import Conflict as CancellationConflict
     with db._connect() as conn:
         token = db.REQUEST_CONNECTION.set(conn)
         try:
@@ -581,6 +584,9 @@ def atomic_admin_call(func, args, kwargs):
         except PriceChanged as exc:
             conn.rollback()
             return jsonify({'message': str(exc), 'code': 'reorder_price_changed', 'changes': exc.changes}), 409
+        except CancellationConflict as exc:
+            conn.rollback()
+            return jsonify({'message':str(exc),'code':'cancellation_conflict'}),409
         except Conflict as exc:
             conn.rollback()
             return jsonify({'message': str(exc), 'code': 'version_conflict'}), 409

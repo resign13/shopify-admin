@@ -8,6 +8,7 @@
     ><template v-if="isPhone">
       <ElButton v-if="canEditDetails" type="primary" circle aria-label="新增订单" data-testid="mobile-order-create" @click="editOrder()">＋</ElButton>
       <MobileActionMenu label="订单操作">
+        <ElButton v-if="auth.canApproveCancellation" @click="reviewsOpen=true">取消审批{{ pendingReviews==null?'':`（${pendingReviews}）` }}</ElButton>
         <ElButton @click="mobileSelection = !mobileSelection; clear()">{{ mobileSelection ? '退出选择模式' : '选择订单' }}</ElButton>
         <ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton>
         <ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton>
@@ -16,7 +17,7 @@
         <ElButton @click="list.sort({prop:'createdAt',order:'descending'})">按下单时间降序</ElButton><ElButton @click="list.sort({prop:'createdAt',order:'ascending'})">按下单时间升序</ElButton>
         <ElButton v-if="!auth.isWarehouse" @click="list.sort({prop:'totalAmount',order:'descending'})">按应付金额降序</ElButton><ElButton v-if="!auth.isWarehouse" @click="list.sort({prop:'totalAmount',order:'ascending'})">按应付金额升序</ElButton><ElButton @click="list.sort({prop:'',order:null})">默认排序</ElButton>
       </MobileActionMenu>
-    </template><template v-else><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
+    </template><template v-else><ElButton v-if="auth.canApproveCancellation" @click="reviewsOpen=true">取消审批{{ pendingReviews==null?'':`（${pendingReviews}）` }}</ElButton><ElButton v-if="canEditDetails" type="primary" @click="editOrder()"
       >＋ 新增订单</ElButton
     ><MobileActionMenu v-if="canEditDetails || canExportOrders"><ElButton v-if="canEditDetails" @click="templatesOpen = true">客户模板</ElButton
     ><ElButton v-if="canEditDetails" @click="draftsOpen = true">我的草稿</ElButton
@@ -161,7 +162,7 @@
           <template #dropdown>
             <ElDropdownMenu>
               <ElDropdownItem v-for="status in statusOptions(row)" :key="status" :command="status">
-                {{ statusNames[status] }}
+                {{ status==='cancelled' && row.canRequestCancellation ? '申请取消' : statusNames[status] }}
               </ElDropdownItem>
             </ElDropdownMenu>
           </template>
@@ -176,7 +177,7 @@
                   : 'primary'
           "
           >{{ statusNames[row.status] }}</ElTag
-        ><OrderCancelNoteMark v-if="row.status === 'cancelled'" :note="row.cancelNote" /></template
+        ><OrderCancelNoteMark v-if="row.status === 'cancelled'" :note="row.cancelNote" /><ElTag v-if="row.cancelRequest?.state==='pending'" size="small" type="warning">取消待审核</ElTag></template
       ><template #createdAt="{ row }"
         ><small>{{ dateTime(row.createdAt) }}</small></template
       ><template #actions="{ row }"
@@ -192,10 +193,11 @@
       ></DataTable
     >
   </section>
-  <OrderDrawer v-model:open="detailOpen" :id="detailId" :export-state="exportState" :run-export="orderExport.run" @saved="list.load" @reorder="reorder" />
+  <OrderDrawer v-model:open="detailOpen" :id="detailId" :export-state="exportState" :run-export="orderExport.run" @saved="cancelSaved" @reorder="reorder" />
   <OrderCancellationDialog v-model:open="cancelOpen" :order="cancelOrder" @saved="cancelSaved" />
-  <OrderEditor v-model:open="editorOpen" :source-order-id="reorderSourceId" :draft-id="selectedDraftId" @saved="orderSaved" />
-  <OrderDrafts v-if="canEditDetails" v-model:open="draftsOpen" @select="openDraft" />
+  <OrderEditor v-model:open="editorOpen" :source-order-id="reorderSourceId" :draft-id="selectedDraftId" :export-state="exportState" :run-export="orderExport.run" @saved="orderSaved" />
+  <OrderDrafts v-if="canEditDetails" v-model:open="draftsOpen" :export-state="exportState" :run-export="orderExport.run" @select="openDraft" />
+  <OrderCancellationReviews v-if="auth.canApproveCancellation" v-model:open="reviewsOpen" @count="pendingReviews=$event" @changed="cancelSaved" />
   <CustomerTemplates v-if="canEditDetails" v-model:open="templatesOpen" manager-only />
 </template>
 <script setup>
@@ -215,6 +217,8 @@ import DataTable from "../components/DataTable.vue";
 import OrderNumber from "../components/OrderNumber.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderCancellationDialog from "../components/OrderCancellationDialog.vue";
+import OrderCancellationReviews from '../components/OrderCancellationReviews.vue';
+import {allowedOrderStatuses,cancellationPending} from '../utils/orderCancellation';
 import OrderCancelNoteMark from "../components/OrderCancelNoteMark.vue";
 import { removeAppliedOrderFilter } from "../utils/orderFilters";
 import { queryToSortState } from "../utils/tableSort";
@@ -266,11 +270,15 @@ watch(() => [isPhone.value, list.query.status, ...mobileStatusTabs.value.map(tab
 }, { immediate: true, flush: 'post' });
 const statusBusy = ref(false);
 const cancelOpen = ref(false), cancelOrder = ref();
-function cancelSaved() { clear(); list.load(); }
+const reviewsOpen=ref(false),pendingReviews=ref(null);
+async function loadReviewCount(){if(!auth.canApproveCancellation)return;try{pendingReviews.value=(await api('orders/cancellation-requests')).pendingCount;}catch{pendingReviews.value=null;}}
+watch(()=>auth.canApproveCancellation,value=>{if(value)loadReviewCount();},{immediate:true});
+function cancelSaved() { clear(); list.load();loadReviewCount(); }
 const templatesOpen = ref(false);
 function statusOptions(row) {
   if (!auth.can("orders") || !["admin", "sales", "warehouse", "finance"].includes(auth.userRole)) return [];
-  return Object.keys(statusNames).filter(status =>
+  if(cancellationPending(row))return [];
+  return [...new Set([...Object.keys(allowedOrderStatuses(row,statusNames)),...(row.canRequestCancellation?['cancelled']:[])])].filter(status =>
     status !== row.status,
   );
 }

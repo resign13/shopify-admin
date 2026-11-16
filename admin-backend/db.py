@@ -11,6 +11,7 @@ import order_numbering
 import order_pricing
 import order_printing
 import order_cancellation
+import order_cancel_policy
 import os
 import secrets
 from contextlib import contextmanager
@@ -359,6 +360,7 @@ def ensure_database_ready() -> None:
         row = conn.execute("SELECT to_regclass('public.security_schema_versions') AS name").fetchone()
         if not row or not row['name']:
             raise RuntimeError('Database migration required; run scripts/migrate-database.py with migration credentials')
+        order_cancel_policy.require_ready(conn)
         import security_core
         if not conn.execute('SELECT 1 FROM security_schema_versions WHERE version=%s', (security_core.VERSION,)).fetchone():
             raise RuntimeError('Database security schema version is not ready')
@@ -2186,6 +2188,8 @@ def list_orders(
           o.created_at,
           o.updated_at{version_column},
           o.status,
+          o.cancelled_from_status,
+          cr.cancel_request,
           o.store_user_id,
           o.owner_admin_id,
           o.created_by_admin_id,
@@ -2234,6 +2238,8 @@ def list_orders(
         FROM orders o
         JOIN store_users su ON su.id = o.store_user_id
         LEFT JOIN order_warehouse_prints wp ON wp.order_id = o.id
+        LEFT JOIN LATERAL (SELECT to_jsonb(r) AS cancel_request FROM order_cancellation_requests r
+          WHERE r.order_id=o.id ORDER BY r.id DESC LIMIT 1) cr ON TRUE
         LEFT JOIN order_items oi ON oi.order_id = o.id
         LEFT JOIN products p ON p.id = oi.product_id
         {weight_join}
@@ -2269,6 +2275,7 @@ def list_orders(
                 "updatedAt": _iso(row["updated_at"]),
                 **({"version": row["version"]} if include_version else {}),
                 "status": row["status"],
+                **order_cancel_policy.presentation(row['status'],row['cancelled_from_status'],row['cancel_request']),
                 "cancelNote": row["cancellation_note"] if row["status"] == 'cancelled' else '',
                 "ownerAdminId": row["owner_admin_id"],
                 "ownerAdminName": row["owner_admin_name"] or "未分配",
@@ -2456,27 +2463,30 @@ def create_order(payload: dict[str, Any]) -> dict[str, Any]:
     return get_order_by_id(order_id)  # type: ignore[return-value]
 
 
-def validate_admin_order_transition(previous, next_status):
-    # Authorized staff may reopen completed orders. Customer transitions remain
-    # restricted in inventory_policy.validate_transition.
+def validate_admin_order_transition(previous, next_status, cancelled_from=None, *, approved=False):
+    # All admin entry points share the same forward-only and approval rules.
     if next_status not in ORDER_STATUSES:
         raise ValueError('订单状态无效')
+    order_cancel_policy.validate_transition(previous,next_status,cancelled_from,approved=approved)
 
 
 def update_order_status(
     order_id: int, status: str, tracking_no: str = "", payment_link: str = "", shipping_fee: Any = 0,
     cancel_note=order_cancellation.MISSING,
+    approved_request_id=None,
 ) -> dict[str, Any] | None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute('SELECT status,total_amount,currency,cancellation_note FROM orders WHERE id=%s FOR UPDATE', (order_id,))
+            cur.execute('SELECT status,total_amount,currency,cancellation_note,cancelled_from_status FROM orders WHERE id=%s FOR UPDATE', (order_id,))
             previous = cur.fetchone()
             if not previous:
                 return None
-            validate_admin_order_transition(previous['status'], status)
+            order_cancel_policy.assert_mutable(cur,order_id,approval_id=approved_request_id)
+            validate_admin_order_transition(previous['status'], status,previous['cancelled_from_status'],approved=approved_request_id is not None)
             cancellation_note = order_cancellation.next_note(previous['status'], status, cancel_note, previous['cancellation_note'])
             if previous['status'] != 'cancelled' and status == 'cancelled':
                 inventory_policy.return_order_stock(cur, [order_id])
+                cur.execute('UPDATE orders SET cancelled_from_status=%s WHERE id=%s',(previous['status'],order_id))
             elif previous['status'] == 'cancelled' and status != 'cancelled':
                 cur.execute("SELECT product_id,COALESCE(size_code,'') AS size_code,SUM(quantity) AS quantity FROM order_items WHERE order_id=%s GROUP BY product_id,COALESCE(size_code,'')", (order_id,))
                 inventory_policy.adjust_stock(cur, {(r['product_id'], r['size_code']): -int(r['quantity']) for r in cur.fetchall()})
@@ -2552,6 +2562,7 @@ def update_order_cancel_note(order_id, value):
         row = cur.fetchone()
         if not row:
             return None
+        order_cancel_policy.assert_mutable(cur,order_id)
         if row['status'] != 'cancelled':
             raise ValueError('仅已取消订单可填写取消备注')
         if row['cancellation_note'] != note:
@@ -2567,6 +2578,10 @@ def delete_orders(order_ids: list[int]) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute('SELECT id,status FROM orders WHERE id=ANY(%s) ORDER BY id FOR UPDATE', (ids,))
             rows = cur.fetchall()
+            for row in rows:
+                order_cancel_policy.assert_mutable(cur,row['id'])
+                if row['status'] in order_cancel_policy.PROTECTED:
+                    raise ValueError('已配货及后续状态订单须先通过取消审批，不能直接删除。')
             restore = [r['id'] for r in rows if r['status'] in inventory_policy.OPEN_STATUSES]
             if restore:
                 inventory_policy.return_order_stock(cur, restore)

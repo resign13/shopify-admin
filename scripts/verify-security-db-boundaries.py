@@ -38,6 +38,11 @@ for kind in ['admin','store']:
         if kind=='store':
             assert not conn.execute("SELECT has_table_privilege(current_user,'orders','UPDATE')").fetchone()[0]
             assert conn.execute("SELECT has_column_privilege(current_user,'orders','cancellation_note','UPDATE')").fetchone()[0]
+            assert conn.execute("SELECT has_column_privilege(current_user,'orders','cancelled_from_status','UPDATE')").fetchone()[0]
+            for table in ('order_cancellation_requests','order_cancellation_migrations'):
+                conn.execute('SELECT 1 FROM '+table+' LIMIT 1')
+            for column in ('reviewer_id','reviewer_name','review_note','requester_id','order_id'):
+                assert not conn.execute("SELECT has_column_privilege(current_user,'order_cancellation_requests',%s,'UPDATE')",(column,)).fetchone()[0]
             for column in ('total_amount','shipping_fee','payment_link','owner_admin_id','note'):
                 try: conn.execute('UPDATE orders SET '+column+'='+column+' WHERE FALSE')
                 except psycopg.errors.InsufficientPrivilege: pass
@@ -83,7 +88,28 @@ if is_store:
     with db._connect() as conn: restored=conn.execute("SELECT stock FROM product_size_prices WHERE product_id=1 AND size_code='M'").fetchone()['stock']
     assert restored==before,'Cancellation did not restore stock'
     assert client.get('/api/catalog/styles').status_code==200
+    before_request=db.get_order_by_id(1,user_id=1)
+    request_route='/api/store/orders/1/cancellation-requests'
+    requested=client.post(request_route,json={'reason':'Runtime role cancellation'},headers=headers)
+    assert requested.status_code==200,'Restricted store cannot submit cancellation: '+str(requested.status_code)
+    item=requested.json['item']
+    withdrawn=client.post('/api/store/orders/cancellation-requests/'+str(item['id'])+'/withdraw',json={'version':item['version']},headers=headers)
+    assert withdrawn.status_code==200,'Restricted store cannot withdraw request'
+    assert db.get_order_by_id(1,user_id=1)['status']==before_request['status']
+    assert client.post(request_route,json={'reason':'Runtime role cancellation'},headers=headers).status_code==200
 else:
+    pending=client.get('/api/admin/orders/cancellation-requests')
+    assert pending.status_code==200,'Admin runtime cannot list cancellation requests'
+    item=next(r for r in pending.json['items'] if r['reason']=='Runtime role cancellation')
+    approve='/api/admin/orders/cancellation-requests/'+str(item['id'])+'/approve'
+    approved=client.post(approve,json={'version':item['version']},headers=headers)
+    assert approved.status_code==200,'Restricted admin cannot approve cancellation'
+    assert client.post(approve,json={'version':item['version']},headers=headers).status_code==409
+    draft=client.post('/api/admin/orders/drafts',json={'draftKey':str(uuid.uuid4()),'draft':{**body,'shippingFee':0,'contactName':'','phone':'','address':'','country':''}},headers=headers)
+    assert draft.status_code==200,'Restricted admin cannot save draft'
+    saved_draft=draft.json
+    exported=client.get('/api/admin/orders/drafts/'+str(saved_draft['id'])+'/invoice?version='+saved_draft['version'],headers=headers)
+    assert exported.status_code==200,'Restricted admin cannot export saved draft: '+str(exported.status_code)
     assert client.get('/api/admin/finance/options').status_code==200
     costs=client.get('/api/admin/finance/costs')
     assert costs.status_code==200,'Admin runtime cannot read style costs'
@@ -92,7 +118,7 @@ else:
     assert preview.status_code==200,'Admin runtime cannot preview style costs'
     saved=client.post('/api/admin/finance/costs/save',json={**change,'previewHash':preview.json['previewHash'],'requestId':str(uuid.uuid4())},headers=headers)
     assert saved.status_code==200 and saved.json['saved']==1,'Admin runtime cannot save style costs/audit'
-print(json.dumps({'runtime':app.security.channel,'login':True,'create':True,'stock':True,'cancel':is_store}))
+print(json.dumps({'runtime':app.security.channel,'login':True,'create':True,'stock':True,'cancel':is_store,'cancelRequest':True,'draftExport':not is_store}))
 '''
 for kind,directory in [('store',store),('admin',root/'admin-backend')]:
     child=env.copy();child.update(PGUSER=args.prefix+'_'+kind,PGPASSWORD=passwords[kind],DB_SCHEMA_AUTO_MIGRATE='0')

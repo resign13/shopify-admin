@@ -72,6 +72,11 @@ with db._connect() as conn:
     read=['security_schema_versions','security_media_migrations','products','product_categories','product_category_translations','product_translations','product_sizes','product_size_prices','product_images','banners','banner_translations','homepage_configs','presale_configs','store_users','orders','order_items','inventory_legacy_cancelled_orders','security_files','security_file_refs']
     for name in read:
         if name in tables: conn.execute(sql.SQL('GRANT SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
+    for name in ['order_cancellation_requests','order_cancellation_migrations']:
+        if name in tables: conn.execute(sql.SQL('GRANT SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
+    if 'order_cancellation_requests' in tables:
+        conn.execute(sql.SQL('GRANT INSERT(order_id,order_no,requester_kind,requester_id,requester_name,reason,order_status,order_version) ON public.order_cancellation_requests TO {}').format(store))
+        conn.execute(sql.SQL('GRANT UPDATE(state,revision,closed_at) ON public.order_cancellation_requests TO {}').format(store))
     if conn.execute("SELECT to_regclass('public.security_export_waiting') AS name").fetchone()['name']:
         conn.execute(sql.SQL('GRANT SELECT ON public.security_export_waiting TO {}').format(store))
     for name in ['orders','order_items','store_sessions','security_files','security_file_refs','security_audit_events','security_rate_buckets','security_request_metrics']:
@@ -84,7 +89,7 @@ with db._connect() as conn:
     conn.execute(sql.SQL('GRANT UPDATE(stock) ON public.product_size_prices TO {}').format(store))
     # Number assignment and customer cancellation need only these columns.
     # Do not grant table-wide UPDATE (prices, ownership and payment data stay locked).
-    conn.execute(sql.SQL('GRANT UPDATE(order_no,status,updated_at,cancellation_note) ON public.orders TO {}').format(store))
-    for name in ['orders_id_seq','order_items_id_seq','store_sessions_id_seq','security_audit_events_id_seq']:
+    conn.execute(sql.SQL('GRANT UPDATE(order_no,status,updated_at,cancellation_note,cancelled_from_status) ON public.orders TO {}').format(store))
+    for name in ['orders_id_seq','order_items_id_seq','store_sessions_id_seq','security_audit_events_id_seq','order_cancellation_requests_id_seq']:
         if name in sequences: conn.execute(sql.SQL('GRANT USAGE,SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
 print('Database roles provisioned; runtime DDL and storefront finance/account-management access removed')

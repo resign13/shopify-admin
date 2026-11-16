@@ -1,7 +1,7 @@
 // Guarded UI fixture only; all API writes here target the dedicated *_test DB.
 async (page) => {
-  const base='http://127.0.0.1:5360';
-  if(!page.url().startsWith(base+'/'))throw new Error('Isolated fixture required');
+  const base=new URL(page.url()).origin;
+  if(!['http://127.0.0.1:5360','http://127.0.0.1:5396'].includes(base))throw new Error('Isolated fixture required');
   // Reset only this script's fault-injection route when rerunning a failed check.
   await page.unroute('**/api/admin/orders/1');
   const check=(ok,msg)=>{if(!ok)throw new Error(msg);};
@@ -111,7 +111,9 @@ async (page) => {
   await detail.getByRole('button',{name:'关闭',exact:true}).click();
   // Cancellation is already reflected in the balance; note-only saves preserve it.
   let order=await getOrder();
-  const cancelled=await api('orders/1','PUT',{version:order.version,status:'cancelled',cancelNote:'Stock check'});
+  const request=(await api('orders/1/cancellation-requests','POST',{version:order.version,reason:'Stock check'})).item;
+  await api('orders/cancellation-requests/'+request.id+'/approve','POST',{version:request.version});
+  const cancelled=await api('orders/1');
   check(cancelled.order.items[0].currentStock===-5,'Cancel did not return exactly the order quantity');
   detail=await open();
   check(await hint(detail).textContent()==='库存 -5 · 欠货','Cancelled detail added stock back twice');

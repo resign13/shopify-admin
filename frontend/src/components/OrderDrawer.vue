@@ -9,6 +9,7 @@
     </div><ElSkeleton v-if="loading && !order" :rows="10" animated />
     <ElAlert v-if="!order && !loading && error" :title="error" type="error" :closable="false"><ElButton text @click="refreshDetails">重试读取详情</ElButton></ElAlert>
     <template v-if="order">
+      <OrderCancellationHistory :order="order" @changed="cancellationChanged" />
       <OrderEditor
         v-if="fullEditing"
         ref="editor"
@@ -153,7 +154,7 @@
               :rules="[{ required: true, message: '请选择状态' }]"
               ><ElSelect v-model="form.status" @change="form.cancelNote = ''"
                 ><ElOption
-                  v-for="(label, value) in statusNames"
+                  v-for="(label, value) in allowedOrderStatuses(order,statusNames)"
                   :key="value"
                   :value="value"
                   :label="label" /></ElSelect></ElFormItem
@@ -220,17 +221,18 @@
         @click="exportInvoice"
         >导出订单详情</ElButton>
       </MobileActionMenu>
+      <ElButton v-if="!editing && order?.canRequestCancellation" :disabled="busy || loading" @click="requestCancelOpen=true">申请取消</ElButton>
       <ElButton
         v-if="!editing && !warehouseStatusOnly"
         type="primary"
-        :disabled="loading || !order"
+        :disabled="loading || !order || cancellationPending(order)"
         @click="editDetails"
         >修改订单资料</ElButton
       >
       <ElButton
         v-if="!editing && warehouseStatusOnly"
         type="primary"
-        :disabled="loading || !order"
+        :disabled="loading || !order || cancellationPending(order)"
         @click="editDetails"
         >修改订单状态</ElButton
       >
@@ -250,9 +252,12 @@
   >
   <ElDrawer v-if="isPhone" v-model="mobileHistoryOpen" title="订单操作记录" size="100%" append-to-body><OrderOperations v-if="order" :order-id="order.id" :open="mobileHistoryOpen" :revision="order.version"/></ElDrawer>
   <OrderCancellationDialog v-model:open="cancelNoteOpen" :order="order" note-only @saved="cancelNoteSaved" />
+  <OrderCancellationDialog v-model:open="requestCancelOpen" :order="order" @saved="cancelNoteSaved" />
 </template>
 <script setup>
 import { errorMessage } from '../utils/adminErrors.js';
+import OrderCancellationHistory from './OrderCancellationHistory.vue';
+import {allowedOrderStatuses,cancellationPending} from '../utils/orderCancellation';
 import { useResponsive } from "../composables/responsive";
 import MobileActionMenu from './MobileActionMenu.vue';
 import AdaptiveTable from "./AdaptiveTable";
@@ -288,6 +293,8 @@ const mobileImageAttachments = computed(() => (order.value?.labelImageUrls || []
 const editing = ref(false),
   editor = ref();
 const cancelNoteOpen = ref(false);
+const requestCancelOpen=ref(false);
+async function cancellationChanged(){await loadDetails();emit('saved');}
 const stockRefreshError = ref('');
 let detailSerial = 0;
 function stockTitle(row) {
@@ -437,6 +444,7 @@ async function useLatest() {
   if (await confirm("放弃当前草稿，使用线上最新订单？")) populate(latest.value);
 }
 function editDetails() {
+  if(cancellationPending(order.value))return;
   editing.value = true;
 }
 async function cancelEdit() {
