@@ -17,7 +17,7 @@ import style_catalog
 import workbench
 
 TZ = timezone(timedelta(hours=8))
-STATES = ['pending_payment', 'partially_allocated', 'allocated', 'paid', 'shipped', 'completed']
+STATES = ['pending_payment', 'paid', 'partially_allocated', 'allocated', 'shipped', 'completed']
 CENT = Decimal('.01')
 COST_BASIS = 'style_at_order_time'
 

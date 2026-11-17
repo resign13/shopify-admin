@@ -157,14 +157,14 @@ class AdminOrdersTest(unittest.TestCase):
         self.assertEqual(result['statusCounts']['allocated'],1)
         self.assertEqual(self.call('orders/export?view=workbench&status=allocated&includeImages=0', 'POST', role='warehouse').status_code,200)
         self.assertEqual(self.call('orders/export-by-sheet?view=workbench&status=allocated&includeImages=0', 'POST', role='warehouse').status_code,200)
-        self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'paid','shippingFee':99,'paymentLink':'https://changed.example'},role='warehouse').status_code,200)
+        self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'completed','shippingFee':99,'paymentLink':'https://changed.example'},role='warehouse').status_code,200)
         updated=self.call(f"orders/{order['id']}").json['order']
         self.assertEqual(float(updated['shippingFee']),12.5)
         self.assertEqual(updated['paymentLink'],'')
         with db.get_connection() as conn:
             with conn.cursor() as cur: db._migrate_order_status_values(cur)
-        self.assertEqual(self.call(f"orders/{order['id']}").json['order']['status'],'paid')
-        self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'allocated','shippingFee':-1}).status_code,400)
+        self.assertEqual(self.call(f"orders/{order['id']}").json['order']['status'],'completed')
+        self.assertEqual(self.call(f"orders/{order['id']}",'PUT',{'status':'completed','shippingFee':-1}).status_code,400)
 
     def test_partial_allocation_filter_exports_audit_and_migration(self):
         from io import BytesIO

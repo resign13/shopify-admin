@@ -37,7 +37,7 @@ class CancellationApprovalTest(unittest.TestCase):
         self.assertEqual(order['cancelledFromStatus'],'partially_allocated')
         self.assertEqual(self.call(f'orders/{order["id"]}','PUT',{'version':order['version'],'status':'pending_payment'}).status_code,400)
         order=self.stage(order,'partially_allocated')
-        for status in ['allocated','paid','shipped','completed']:
+        for status in ['paid','allocated','shipped','completed']:
             order=self.stage(order,status)
             stock=self.stock()
             for prior in policy.STAGES[:policy.STAGES.index(status)]:
@@ -64,6 +64,31 @@ class CancellationApprovalTest(unittest.TestCase):
                 self.assertEqual(self.stock()['stock'],before+5)
                 self.assertEqual(self.decision(item).status_code,409)
                 self.stage(cancelled,status)
+                self.assertEqual(self.stock()['stock'],before)
+
+    def test_paid_can_advance_to_partial_or_allocated_without_inventory_change(self):
+        partial=self.stage(self.create(),'paid');before=self.stock()['stock']
+        self.assertEqual(self.call(f'orders/{partial["id"]}','PUT',{'version':partial['version'],'status':'cancelled'}).status_code,409)
+        partial=self.stage(partial,'partially_allocated')
+        self.assertEqual(self.stock()['stock'],before)
+        self.assertTrue(partial['canCancel'])
+        cancelled=self.stage(partial,'cancelled')
+        self.assertEqual(self.stock()['stock'],before+5)
+        partial=self.stage(cancelled,'partially_allocated')
+        self.assertEqual(self.stock()['stock'],before)
+        paid=self.stage(partial,'paid');allocated=self.stage(paid,'allocated')
+        self.assertEqual(self.stock()['stock'],before)
+        for target in ('paid','partially_allocated'):
+            self.assertEqual(self.call(f'orders/{allocated["id"]}','PUT',{'version':allocated['version'],'status':target}).status_code,400)
+
+    def test_paid_to_allocation_through_full_edit(self):
+        for target in ('partially_allocated','allocated'):
+            with self.subTest(target=target):
+                paid=self.stage(self.create(),'paid'); before=self.stock()['stock']
+                body=copy.deepcopy(paid); body['status']=target
+                response=self.call(f'orders/{paid["id"]}/details','PUT',body)
+                self.assertEqual(response.status_code,200,response.json)
+                self.assertEqual(response.json['order']['status'],target)
                 self.assertEqual(self.stock()['stock'],before)
 
     def test_pending_freezes_all_mutation_paths_and_withdraw_restores_editing(self):
