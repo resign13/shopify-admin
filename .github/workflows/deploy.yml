@@ -62,7 +62,7 @@ jobs:
         run: npm ci && npm audit --audit-level=high
       - name: Order quantity selection unit tests
         working-directory: frontend
-        run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderSelectionTotals.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js
+        run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderSelectionTotals.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js src/utils/maintenance.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
         run: node --test src/utils/catalogOrder.test.js src/utils/contractFilters.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderCancellation.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/dashboardDates.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
@@ -321,6 +321,9 @@ jobs:
           playwright-cli -s=weightsci run-code --filename scripts/verify-partial-allocation-browser.js | tee "$RUNNER_TEMP/partial-allocation-result.log"
           if grep -q '^### Error' "$RUNNER_TEMP/partial-allocation-result.log"; then exit 1; fi
           grep -q '"partialAllocation": *true' "$RUNNER_TEMP/partial-allocation-result.log"
+            playwright-cli -s=weightsci run-code --filename scripts/verify-maintenance-browser.js | tee "$RUNNER_TEMP/maintenance-result.log"
+            if grep -q '^### Error' "$RUNNER_TEMP/maintenance-result.log"; then exit 1; fi
+            grep -q '"inputPreserved":true' "$RUNNER_TEMP/maintenance-result.log"
           playwright-cli -s=weightsci close
       - name: Isolated cancellation notes and current-stock browser lifecycle
         if: matrix.suite == 'orders'
