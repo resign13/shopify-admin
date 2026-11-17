@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {financeCostPageSize,financeCostFilters,financeCostKey,financeCodes,financeActiveStates,financeReportDates,financeReportKey,batchTargets,clearBatchTargets,costChanges,costValue} from './finance.js';
+import {financeDisplayAmount,financeCostPageSize,financeCostFilters,financeCostKey,financeCodes,financeActiveStates,financeReportDates,financeReportKey,batchTargets,clearBatchTargets,costChanges,costValue} from './finance.js';
 import {roleModules,defaultRoleModules,editableRolePermissions,moduleGroups} from '../permissions.js';
+
+test('report amounts group digits without rounding decimal strings or replacing missing costs with zero',()=>{
+  assert.equal(financeDisplayAmount('160548.69'),'160,548.69');
+  assert.equal(financeDisplayAmount('0.00'),'0.00');
+  assert.equal(financeDisplayAmount('-123456789012345.6700'),'-123,456,789,012,345.6700');
+  assert.equal(financeDisplayAmount(null),'');
+  assert.equal(financeDisplayAmount('待补全'),'待补全');
+});
 
 test('partially allocated orders remain in default finance reports',()=>{
   assert.ok(financeActiveStates.includes('partially_allocated'));

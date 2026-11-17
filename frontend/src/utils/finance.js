@@ -29,3 +29,8 @@ export const clearBatchTargets = (styles, selected) => batchTargets(styles,selec
 export function costChanges(styles) {
   return styles.filter(row=>costValue(row.draftCost)!==row.costCny).map(row=>({styleCode:row.styleCode,costCny:costValue(row.draftCost),version:row.version}));
 }
+// Display API decimal strings without changing their precision or accounting value.
+export function financeDisplayAmount(value) {
+  return String(value ?? '').replace(/^(-?\d+)(\.\d+)?$/, (_, integer, fraction = '') =>
+    integer.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + fraction);
+}
