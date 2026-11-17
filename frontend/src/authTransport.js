@@ -1,4 +1,5 @@
 import { localizeError, responseError } from './utils/adminErrors.js';
+import { maintenance } from './utils/maintenance.js';
 
 // Same-origin cookies carry credentials; only public session/CSRF metadata is visible to JS.
 let sessionId = '';
@@ -30,6 +31,7 @@ export async function csrfHeaders(force = false) {
       const revision = identityRevision;
       const pending = fetch('/api/auth/csrf', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
         .then(async (response) => {
+          await maintenance.observe(response);
           const data = await response.json().catch(error => {
             if (error?.name === 'AbortError') throw error;
             return {};
@@ -60,6 +62,7 @@ export async function authenticatedFetch(path, options = {}) {
     if (captured !== sessionId && !authPath) throw Object.assign(new Error('登录账号已改变，请重新打开页面'), {status:409,code:'session_changed'});
     if (captured && !authPath) headers.set('X-Auth-Session', captured);
     const response = await fetch(path, { ...options, credentials: 'same-origin', headers });
+    await maintenance.observe(response);
     if (captured && captured !== sessionId && !authPath) {
       const error = new Error('登录账号已改变，请重新打开页面');
       error.status = 409;

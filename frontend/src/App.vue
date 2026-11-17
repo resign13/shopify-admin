@@ -1,11 +1,11 @@
 <template>
   <ElConfigProvider :locale="zhCn" size="small"
-    ><RouterView
-  /></ElConfigProvider>
+    ><MaintenanceBoundary><RouterView /></MaintenanceBoundary></ElConfigProvider>
 </template>
 <script setup>
 import { RouterView } from "vue-router";
 import zhCn from "element-plus/es/locale/lang/zh-cn";
+import MaintenanceBoundary from './components/MaintenanceBoundary.vue';
 import { onMounted, onBeforeUnmount } from 'vue';
 let viewportFrame;
 function updateViewport() {
