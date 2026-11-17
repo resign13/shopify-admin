@@ -1,7 +1,7 @@
 // Real UI acceptance on the existing guarded weights *_test fixture only.
 async page => {
   const base = new URL(page.url()).origin;
-  if (!['http://127.0.0.1:5360','http://127.0.0.1:5396'].includes(base)) throw Error('Isolated fixture required');
+  if (!['http://127.0.0.1:5360','http://127.0.0.1:5396','http://127.0.0.1:5398'].includes(base)) throw Error('Isolated fixture required');
   const check = (value, message) => { if (!value) throw Error(message); };
   const api = (path, method='GET', body) => page.evaluate(async ({path, method, body}) => {
     const csrf = await fetch('/api/auth/csrf').then(r=>r.json());
@@ -27,7 +27,9 @@ async page => {
     contactName:'Partial allocation browser',phone:'123456',country:'Germany',address:'Fixture address',shippingFee:0,
     items:[{productId:1,sizeCode:'M',quantity:2,unitPrice:29.9}]};
   const made = await api('orders','POST',body), id=made.order.id;
-  const order=(await api(`orders/${id}`)).order;
+  let order=(await api(`orders/${id}`)).order;
+  order=(await api(`orders/${id}`,'PUT',{status:'paid',version:order.version})).order;
+  check(order.status==='paid','Fixture must start from paid');
   const balance = async()=>{
     const p=(await api('inventory/1')).product;
     return JSON.stringify([p.stock,p.sizePrices.map(s=>[s.sizeCode,s.stock])]);
@@ -78,13 +80,14 @@ async page => {
   await warehouse.getByRole('button',{name:'修改订单状态',exact:true}).click();
   await warehouse.locator('.el-form-item').filter({has:page.getByRole('combobox',{name:/订单状态/})}).locator('.el-select').click();
   check(await page.getByRole('option',{name:'部分配货',exact:true}).count()===0,'Allocated order offers rollback to partial');
-  await page.getByRole('option',{name:'已付款',exact:true}).click();
+  check(await page.getByRole('option',{name:'已付款',exact:true}).count()===0,'Allocated order offers rollback to paid');
+  await page.getByRole('option',{name:'已完成',exact:true}).click();
   const warehouseSaved=page.waitForResponse(r=>r.url().endsWith(`/api/admin/orders/${id}`)&&r.request().method()==='PUT');
   await warehouse.getByRole('button',{name:'保存修改',exact:true}).click();
   const response=await warehouseSaved; check(response.status()===200,'Warehouse save failed');
   const redacted=(await response.json()).order;
   check(!('totalAmount' in redacted)&&!('shippingFee' in redacted),'Warehouse response exposed amounts');
-  check(redacted.status==='paid'&&await balance()===stock,'Warehouse status changed stock');
+  check(redacted.status==='completed'&&await balance()===stock,'Warehouse status changed stock');
   await warehouse.getByRole('button',{name:'关闭',exact:true}).click();
   return {partialAllocation:true,listFilter:true,detailEdit:true,warehouseRedacted:true,statusOnlyStockUnchanged:true};
 }

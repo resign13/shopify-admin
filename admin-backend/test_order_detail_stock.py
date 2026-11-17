@@ -57,7 +57,7 @@ class OrderDetailStockTest(unittest.TestCase):
 
     def test_all_states_display_actual_balance_without_another_subtraction_or_return(self):
         order = self.create()
-        for status in ['partially_allocated','allocated','paid','shipped','completed','cancelled','completed']:
+        for status in ['paid','partially_allocated','allocated','shipped','completed','cancelled','completed']:
             order=self.change_status(order,status,trackingNo='TRACK')
             self.assert_balances(order)
             before = self.business()

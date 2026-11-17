@@ -5,7 +5,7 @@ from flask import g, has_request_context
 
 DIRECT = {'pending_payment', 'partially_allocated'}
 PROTECTED = {'allocated', 'paid', 'shipped', 'completed'}
-STAGES = ['pending_payment', 'partially_allocated', 'allocated', 'paid', 'shipped', 'completed']
+STAGES = ['pending_payment', 'paid', 'partially_allocated', 'allocated', 'shipped', 'completed']
 APPROVE_PERMISSION = 'orders.cancel.approve'
 
 
@@ -94,7 +94,7 @@ def validate_transition(previous, next_status, cancelled_from=None, *, approved=
             raise Conflict('该状态取消订单需要提交申请并审核通过。')
         return
     if previous in PROTECTED and next_status in STAGES and STAGES.index(next_status) < STAGES.index(previous):
-        raise ValueError('已配货及后续状态不支持回退到更早状态。')
+        raise ValueError('当前订单状态不支持回退到更早状态。')
 
 
 def serialize(row, *, public=False, actor=None, source='admin'):
