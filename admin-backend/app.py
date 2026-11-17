@@ -1697,7 +1697,7 @@ def require_roles(*roles: str) -> Callable[[F], F]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             if not module_permissions.allows_operation(g.current_user, request.path, request.method, allowed_roles):
                 return jsonify({"message": "Forbidden"}), 403
-            if func.__name__ in {'export_orders', 'export_orders_by_sheet', 'export_order_invoice', 'export_draft_invoice', 'contract_export_route'}:
+            if func.__name__ in {'export_orders', 'export_orders_by_sheet', 'export_order_invoice', 'export_draft_invoice', 'contract_export_route', 'contract_batch_export_route'}:
                 return func(*args, **kwargs)
             if request.path.startswith('/api/admin/') and request.method in {'POST', 'PUT', 'DELETE', 'PATCH'} and not request.path.endswith(('/uploads', '/preview')):
                 return workbench.atomic_admin_call(func, args, kwargs)
@@ -3506,6 +3506,30 @@ def contract_detail_route(contract_id):
     import contracts
     item = contracts.detail(contract_id)
     return jsonify({'item': item}) if item else (jsonify({'message': '合同不存在'}), 404)
+
+
+@app.get('/api/admin/contracts/export')
+@require_auth
+@require_roles('admin', 'sales')
+def contract_batch_export_route():
+    import contracts
+    def load():
+        values = contracts.export_items(request.args)
+        urls = {url for value in values for url in [value.get('styleImage'), value.get('sizeChartImage'), *(value.get('attachments') or [])] if url}
+        g.export_sources = {(url, True): _export_image_source(url, True) for url in urls}
+        return values
+    items = order_export_service.snapshot(load)
+    with export_resources.stage('workbook'):
+        stream = order_export_process.build('contracts', items)
+    month = request.args.get('createdMonth') or '全部月份'
+    response = send_file(stream, download_name=f'采购合同批量-{month}.xlsx', as_attachment=True,
+                         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    expected = {item['id']:item.get('revision', 1) for item in items}
+    def validate():
+        rows = db._fetch_all('SELECT id,snapshot FROM purchase_contracts WHERE id=ANY(%s) ORDER BY id FOR SHARE', (sorted(expected),))
+        if {row['id']:row['snapshot'].get('revision', 1) for row in rows} != expected:
+            raise workbench.Conflict('导出期间合同已修改或移除，请重新导出。')
+    return order_export_service.finish(response, [], on_success=validate)
 
 
 @app.put('/api/admin/contracts/<int:contract_id>')

@@ -5,23 +5,32 @@
     :mobile-description="`${list.total} 份合同`"
     description="从现有商品创建采购合同，按真实尺码登记合同未送。"
     eyebrow="ORDERS / 订单业务"
-    ><MobileActionMenu v-if="isPhone" icon-only label="合同操作"><ElButton @click="start">新建采购合同</ElButton><ElButton @click="mobileListTools = !mobileListTools">{{ mobileListTools ? '收起列表设置' : '列表设置' }}</ElButton></MobileActionMenu><ElButton v-else type="primary" @click="start">＋ 新建合同</ElButton></PageHeader
+    ><MobileActionMenu v-if="isPhone" icon-only label="合同操作"><ElButton @click="start">新建采购合同</ElButton><ElButton :disabled="batchDisabled || !selected.length" @click="exportBatch('selected')">导出勾选合同（{{ selected.length }}）</ElButton><ElButton :disabled="batchDisabled" @click="exportBatch('filtered')">导出筛选结果（{{ list.total }}）</ElButton><ElButton @click="mobileListTools = !mobileListTools">{{ mobileListTools ? '收起列表设置' : '列表设置' }}</ElButton></MobileActionMenu><template v-else><ElDropdown :disabled="batchDisabled" @command="exportBatch"><ElButton :loading="exporting==='batch'" :disabled="batchDisabled">批量导出 ▾</ElButton><template #dropdown><ElDropdownMenu><ElDropdownItem command="selected" :disabled="!selected.length">导出勾选合同（{{ selected.length }}）</ElDropdownItem><ElDropdownItem command="filtered">导出筛选全部（{{ list.total }}）</ElDropdownItem></ElDropdownMenu></template></ElDropdown><ElButton type="primary" @click="start">＋ 新建合同</ElButton></template></PageHeader
   >
-  <section class="panel goods-list-panel">
-    <MobileGoodsSearch v-if="isPhone" v-model="keyword" placeholder="搜索合同号、工厂或款号" @submit="list.apply({ keyword })" />
+  <section class="panel goods-list-panel contracts-list-panel">
+    <MobileGoodsSearch v-if="isPhone" v-model="keyword" placeholder="搜索合同号、工厂或款号" @submit="applyFilters" />
+    <div v-if="isPhone" class="contract-mobile-month"><span>创建月份</span><ElDatePicker v-model="createdMonth" type="month" value-format="YYYY-MM" format="YYYY年MM月" placeholder="全部月份" aria-label="合同创建月份" clearable @change="applyFilters" /></div>
     <div v-if="isPhone" class="mobile-goods-heading"><span>合同记录</span><small>按创建时间排列</small></div>
-    <form v-else class="filters" @submit.prevent="list.apply({ keyword })">
+    <form v-else class="filters contract-filters" @submit.prevent="applyFilters">
       <ElInput
         v-model="keyword"
         clearable
         placeholder="搜索合同编号、工厂、款号或 SKU"
-      /><ElButton native-type="submit">查询</ElButton>
+      /><ElDatePicker v-model="createdMonth" type="month" value-format="YYYY-MM" format="YYYY年MM月" placeholder="全部创建月份" aria-label="合同创建月份" clearable @change="applyFilters" /><ElButton native-type="submit">查询</ElButton><ElButton @click="resetFilters">重置</ElButton>
     </form>
+    <div v-if="selected.length" class="contract-selection" role="status"><strong>已选 {{ selected.length }} 份合同</strong><ElButton link @click="clearSelection">清空选择</ElButton><span>批量 Excel 中每份合同独立工作表</span></div>
+    <p v-if="exporting==='batch'" class="contract-export-progress" role="status">{{ queuePosition===null?'正在生成合同 Excel…':exportQueueLabel(queuePosition) }}</p>
+    <p v-else-if="filtersPending" class="contract-export-progress">筛选条件已修改，请先查询后再批量导出。</p>
     <DataTable
+      ref="contractTable"
+      selectable
+      @selection-change="selected = $event"
       storage-key="contracts"
       :mobile-actions="false"
       :mobile-tools="mobileListTools"
       :rows="list.rows"
+      :height="isPhone ? undefined : '100%'"
+      :scrollbar-always-on="!isPhone"
       :columns="columns"
       :total="list.total"
       :page="Number(list.query.page)"
@@ -274,7 +283,7 @@ import { useResponsive } from '../composables/responsive';
 import MobileActionMenu from '../components/MobileActionMenu.vue';
 import MobileGoodsCard from '../components/mobile-goods/MobileGoodsCard.vue';
 import MobileGoodsSearch from '../components/mobile-goods/MobileGoodsSearch.vue';
-import { computed, reactive, ref, onMounted } from "vue";
+import { computed, reactive, ref, onMounted, watch } from "vue";
 import { ElMessage } from "element-plus";
 import PageHeader from "../components/PageHeader.vue";
 import DataTable from "../components/DataTable.vue";
@@ -282,10 +291,13 @@ import ProductPicker from "../components/ProductPicker.vue";
 import ImageUploader from "../components/ImageUploader.vue";
 import { imageUrl } from "../utils/imageUrl";
 import { compareProductCategories } from "../utils/catalogOrder";
+import { contractExportQuery } from '../utils/contractFilters';
 import {
   api,
   save,
   download,
+  useQueuedDownload,
+  exportQueueLabel,
   useList,
   useDirty,
   dateTime,
@@ -299,8 +311,9 @@ const editingId = ref(null);
 const productInfo = reactive({});
 const cancelling = ref(false), cancelRows = ref([]), cancelRevision = ref(null), cancelError = ref(''), cancelConflict = ref(false);
 const cancelTotal = computed(() => cancelRows.value.reduce((total,row) => total+(row.quantity||0),0));
-const list = useList("contracts", { keyword: "" }),
+const list = useList("contracts", { keyword: "", createdMonth: "" }),
   keyword = ref(list.query.keyword),
+  createdMonth = ref(list.query.createdMonth),
   open = ref(false),
   step = ref(0),
   detail = ref(null),
@@ -310,6 +323,21 @@ const list = useList("contracts", { keyword: "" }),
   error = ref(""),
   categories = ref([]),
   busy = reactive({});
+const contractTable = ref(), selected = ref([]);
+const { download:downloadBatch, position:queuePosition } = useQueuedDownload();
+const filtersPending = computed(()=>String(keyword.value||'').trim()!==String(list.query.keyword||'').trim() || (createdMonth.value||'')!==(list.query.createdMonth||''));
+const batchDisabled = computed(()=>list.loading || !!exporting.value || filtersPending.value || !list.total);
+function clearSelection(){selected.value=[];contractTable.value?.clearSelection();}
+function applyFilters(){list.apply({keyword:String(keyword.value||'').trim(),createdMonth:createdMonth.value||''});}
+function resetFilters(){keyword.value='';createdMonth.value='';applyFilters();}
+watch(()=>[list.query.keyword,list.query.createdMonth],([word,month])=>{keyword.value=word||'';createdMonth.value=month||'';clearSelection();});
+async function exportBatch(scope){
+  if(batchDisabled.value || scope==='selected'&&!selected.value.length)return;
+  const query=contractExportQuery(list.query,scope==='selected'?selected.value.map(row=>row.id):null);
+  exporting.value='batch';
+  try{await downloadBatch('contracts/export?'+query,`采购合同批量-${list.query.createdMonth||'全部月份'}.xlsx`);}
+  catch(e){notifyError(e);}finally{exporting.value=null;}
+}
 const form = reactive({
   requestId: "",
   partyA: "",
@@ -576,6 +604,16 @@ onMounted(async () => {
 });
 </script>
 <style scoped>
+@media(min-width:768px){
+  .contracts-list-panel{display:flex;flex-direction:column;height:calc(100dvh - 216px);min-height:340px}
+  .contracts-list-panel>.filters,.contracts-list-panel>.contract-selection,.contracts-list-panel>.contract-export-progress{flex-shrink:0}
+  .contracts-list-panel :deep(.data-toolbar),.contracts-list-panel :deep(.table-footer){flex-shrink:0}
+  .contracts-list-panel :deep(.el-table){flex:1;min-height:0}
+}
+.contract-filters :deep(.el-date-editor){width:190px;flex:none}.contract-mobile-month{display:flex;align-items:center;gap:12px;color:#7184a0;font-size:12px;margin:12px 0}.contract-mobile-month :deep(.el-date-editor){flex:1;min-width:0}
+.contract-filters :deep(.el-input),.contract-filters :deep(.el-button){height:32px}
+.contract-filters :deep(.el-button+.el-button){margin-left:0}
+.contract-selection{display:flex;align-items:center;flex-wrap:wrap;gap:10px 16px;padding:12px 16px;margin:0 0 14px;background:#eff6ff;border:1px solid #dbeafe;border-radius:10px;color:#2563eb;font-size:13px}.contract-selection>span{margin-left:auto;color:#7184a0;font-size:12px}.contract-export-progress{font-size:12px;color:#7184a0;line-height:1.8}
 .contract-cancel-row label { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 8px 0; }
 .contract-cancel-row label span { flex: 1; min-width: 170px; }
 

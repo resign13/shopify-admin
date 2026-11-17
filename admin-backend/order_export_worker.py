@@ -158,6 +158,9 @@ def main():
                 output = application.build_orders_sheet_export(orders, include_images=payload['include_images'])
             elif kind in {'invoice','draft_invoice'}:
                 output = application.build_order_invoice_export(orders[0],draft=kind=='draft_invoice')
+            elif kind == 'contracts':
+                import contracts
+                output = contracts.export_many(orders, lambda url: application.fetch_image_bytes(url, attachment=True), application.build_excel_image)
             else:
                 raise RuntimeError('Invalid export kind')
             (folder / 'export.xlsx').write_bytes(output.getvalue())

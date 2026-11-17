@@ -128,13 +128,19 @@
       <p v-if="reportOutdated" class="finance-rate-notice" role="status">{{ reportCostChanged?'整款成本已修改，请重新查询后导出；下方仍为上次查询结果。':reportRateChanged?'汇率已修改，请重新查询后导出；下方结果仍使用汇率 '+result.filters.exchangeRate+'。':'条件已修改，查询后更新；下方仍为上次查询结果。' }}</p>
       <div class="report-context"><span>首次成本补算历史，后续按下单时间匹配 · 不含运费及其他费用</span><ElPopover trigger="click" placement="bottom-start" :width="340" popper-style="max-width:calc(100vw - 32px)"><template #reference><ElButton text aria-label="核算说明"><ElIcon><QuestionFilled /></ElIcon>核算说明</ElButton></template><div class="finance-cost-help">每款首次填写成本时补算此前订单；之后改价只用于保存后的新订单，已有订单按对应历史成本核算。销售额使用订单成交价格；美元按本次核算汇率折算，人民币原币金额直接计入，不使用订单报价汇率重新折算。清空后的新订单为未设置成本，再次填写不补算清空期间。<br/>不含运费、税费及其他费用；包含未付款订单时不代表实际回款。人民币折算逐订单商品行四舍五入至分后汇总。<br/>导出包含全部筛选结果及完整字段，不限当前分页，使用导出时的数据库快照核算。</div></ElPopover></div>
       <template v-if="result">
-        <div class="finance-summary" aria-label="核算金额汇总">
-          <article><span>商品销售额 · 原币</span><strong>${{ result.summary.salesUsd }} <small>USD</small></strong><small>¥{{ result.summary.nativeSalesCny }} CNY 原币</small><small>折合 ¥{{ result.summary.salesCny }} CNY</small></article>
-          <article><span>商品成本 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.totalCostCny===null}">{{ result.summary.totalCostCny===null?'待补全':'¥'+result.summary.totalCostCny }}</strong><small v-if="result.summary.totalCostCny===null">已知成本 ¥{{ result.summary.knownCostCny }}</small><small v-else>按下单时的历史成本核算</small></article>
-          <article><span>商品毛利 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.profitCny===null}">{{ result.summary.profitCny===null?'待补全':'¥'+result.summary.profitCny }}</strong><small v-if="result.summary.profitCny===null">已设置部分 ¥{{ result.summary.knownProfitCny }}</small><small v-else>折合销售额 − 商品成本</small></article>
+        <div class="finance-results" data-testid="finance-report-results">
+          <section class="finance-overview" aria-label="本次核算概览">
+          <header class="finance-overview-heading"><div><strong>核算概览</strong><span>{{ result.filters.dateFrom }} — {{ result.filters.dateTo }}<small>北京时间</small></span></div><span class="finance-result-badge" :class="{'is-incomplete':result.summary.missingQuantity}"><i/>{{ result.summary.missingQuantity?'成本待补全':'成本已完整' }}</span></header>
+          <div class="finance-overview-grid"><div class="finance-summary" aria-label="核算金额汇总">
+          <article class="finance-sales-metric"><span>商品销售额 · 原币</span><strong>${{ financeDisplayAmount(result.summary.salesUsd) }} <small>USD</small></strong><small>¥{{ financeDisplayAmount(result.summary.nativeSalesCny) }} CNY 原币</small><small>折合 ¥{{ financeDisplayAmount(result.summary.salesCny) }} CNY</small></article>
+          <article><span>商品成本 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.totalCostCny===null}">{{ result.summary.totalCostCny===null?'待补全':'¥'+financeDisplayAmount(result.summary.totalCostCny) }}</strong><small v-if="result.summary.totalCostCny===null">已知成本 ¥{{ financeDisplayAmount(result.summary.knownCostCny) }}</small><small v-else>按下单时的历史成本核算</small></article>
+          <article><span>商品毛利 <small>CNY</small></span><strong :class="{'summary-incomplete':result.summary.profitCny===null,'finance-positive':result.summary.profitCny!==null&&!String(result.summary.profitCny).startsWith('-'),'finance-negative':String(result.summary.profitCny).startsWith('-')}">{{ result.summary.profitCny===null?'待补全':'¥'+financeDisplayAmount(result.summary.profitCny) }}</strong><small v-if="result.summary.profitCny===null">已设置部分 ¥{{ financeDisplayAmount(result.summary.knownProfitCny) }}</small><small v-else>折合销售额 − 商品成本</small></article>
         </div>
-        <div class="report-quantity-summary"><span>{{ result.summary.orderCount }} 个订单</span><span>{{ result.summary.quantity }} 件商品</span><span v-if="result.summary.missingQuantity" class="report-missing" role="status">{{ result.summary.missingQuantity }} 件成本未设置 · 完整成本与毛利待补全 <MissingCostPopover :styles="result.missingStyles" /></span></div>
-        <p class="report-result-meta">{{ result.filters.dateFrom }} — {{ result.filters.dateTo }}（北京时间） · 汇率 {{ result.filters.exchangeRate }} · 生成 {{ dateTime(result.generatedAt) }}</p>
+          <div class="report-quantity-summary" aria-label="核算订单与商品数量"><article data-testid="finance-order-count"><span>订单数量</span><strong>{{ result.summary.orderCount.toLocaleString() }}<small>单</small></strong></article><article data-testid="finance-product-count"><span>商品数量</span><strong>{{ result.summary.quantity.toLocaleString() }}<small>件</small></strong></article></div></div>
+          <footer class="finance-overview-footer"><span v-if="result.summary.missingQuantity" class="report-missing" role="status">{{ result.summary.missingQuantity }} 件成本未设置 · 完整成本与毛利待补全 <MissingCostPopover :styles="result.missingStyles" /></span><span v-else class="finance-complete-note"><ElIcon><CircleCheck /></ElIcon>本次筛选商品成本已完整</span><p class="report-result-meta"><span>核算汇率 <b>{{ result.filters.exchangeRate }}</b></span><span>生成 {{ dateTime(result.generatedAt) }}</span></p></footer>
+          </section>
+        <section class="finance-detail-section" aria-label="款号核算明细">
+        <header class="finance-detail-heading"><div><strong>款号核算明细</strong><span>按款号、颜色 SKU 与尺码汇总</span></div><small><b>{{ result.total.toLocaleString() }}</b> 条结果<i>·</i>点击行首展开订单</small></header>
         <div class="report-table-scroll"><AdaptiveTable class="finance-report-table" :data="result.items" v-loading="reportLoading" row-key="rowKey" size="small" empty-text="暂无符合条件的订单商品">
           <ElTableColumn type="expand" width="36"><template #default="{row}"><div class="line-detail"><div class="report-row-context"><span>折合销售额 <b>¥{{ row.salesCny }} CNY</b></span><span>单件成本区间 <b>{{ costRange(row) }} CNY</b></span></div><AdaptiveTable :data="row.lines" max-height="420" size="small">
             <ElTableColumn prop="orderNo" label="订单号" min-width="230"/><ElTableColumn prop="customerName" label="客户" min-width="130"/><ElTableColumn prop="accountName" label="商城账号" min-width="130"/><ElTableColumn prop="salesperson" label="业务员" width="100"/>
@@ -143,12 +149,14 @@
             <ElTableColumn label="单件成本 CNY" width="120" align="right"><template #default="{row:line}">{{ line.unitCostCny??'未设置' }}</template></ElTableColumn><ElTableColumn label="成本生效时间" width="175"><template #default="{row:line}">{{ line.costEffectiveAt?dateTime(line.costEffectiveAt):'—' }}<small v-if="line.costMatch==='首次成本补算'" class="cost-history-note">首次成本补算</small></template></ElTableColumn>
             <ElTableColumn label="成本 CNY" width="110" align="right"><template #default="{row:line}">{{ line.costCny??'待补全' }}</template></ElTableColumn><ElTableColumn label="商品毛利 CNY" width="120" align="right"><template #default="{row:line}">{{ line.profitCny??'待补全' }}</template></ElTableColumn>
           </AdaptiveTable></div></template></ElTableColumn>
-          <ElTableColumn prop="styleCode" label="款号" min-width="125"/><ElTableColumn prop="sku" label="颜色 SKU" min-width="160"/><ElTableColumn prop="sizeCode" label="尺码" width="90"/><ElTableColumn prop="quantity" label="销量" width="80"/>
-          <ElTableColumn label="原币销售额" min-width="155" align="right"><template #default="{row}"><span>USD {{ row.salesUsd }}</span><small class="cost-history-note">CNY {{ row.nativeSalesCny }}</small></template></ElTableColumn>
-          <ElTableColumn label="成本 CNY" min-width="135" align="right"><template #default="{row}">{{ row.totalCostCny??('已知 '+row.knownCostCny) }}<small v-if="row.missingQuantity" class="missing">{{ row.missingQuantity }} 件待补全</small></template></ElTableColumn>
-          <ElTableColumn label="毛利 CNY" min-width="135" align="right"><template #default="{row}">{{ row.profitCny??'待补全' }}</template></ElTableColumn>
+          <ElTableColumn prop="styleCode" label="款号" min-width="125"><template #default="{row}"><strong class="report-style-code">{{ row.styleCode }}</strong></template></ElTableColumn><ElTableColumn prop="sku" label="颜色 SKU" min-width="160"/><ElTableColumn prop="sizeCode" label="尺码" width="90"><template #default="{row}"><span class="report-size-label">{{ row.sizeCode }}</span></template></ElTableColumn><ElTableColumn prop="quantity" label="销量" width="80" align="right"/>
+          <ElTableColumn label="原币销售额" min-width="155" align="right"><template #default="{row}"><span>USD {{ financeDisplayAmount(row.salesUsd) }}</span><small class="cost-history-note">CNY {{ financeDisplayAmount(row.nativeSalesCny) }}</small></template></ElTableColumn>
+          <ElTableColumn label="成本 CNY" min-width="135" align="right"><template #default="{row}">{{ row.totalCostCny==null?'已知 '+financeDisplayAmount(row.knownCostCny):financeDisplayAmount(row.totalCostCny) }}<small v-if="row.missingQuantity" class="missing">{{ row.missingQuantity }} 件待补全</small></template></ElTableColumn>
+          <ElTableColumn label="毛利 CNY" min-width="135" align="right"><template #default="{row}"><span :class="{'finance-positive':row.profitCny!=null&&!String(row.profitCny).startsWith('-'),'finance-negative':String(row.profitCny).startsWith('-'),'report-value-incomplete':row.profitCny==null}">{{ row.profitCny==null?'待补全':financeDisplayAmount(row.profitCny) }}</span></template></ElTableColumn>
         </AdaptiveTable></div>
-        <ElPagination class="finance-gap" :current-page="result.page" :page-size="25" :total="result.total" layout="total, prev, pager, next" @current-change="page=>queryReport(page,true)" />
+        <footer class="finance-detail-footer"><span>按历史成本核算 · 不含运费及其他费用</span><ElPagination class="finance-gap" :current-page="result.page" :page-size="25" :total="result.total" layout="total, prev, pager, next" @current-change="page=>queryReport(page,true)" /></footer>
+        </section>
+        </div>
       </template><div v-else class="report-empty" role="status">{{ rateValid?'选择条件后点击“查询核算”':'填写核算汇率，选择条件后查询' }}</div>
     </template>
   </section>
@@ -186,11 +194,11 @@ import {onBeforeRouteLeave,RouterLink} from 'vue-router';
 import {useAdminAuthStore} from '../stores/auth';
 const auth=useAdminAuthStore();
 import {ElMessage} from 'element-plus';
-import {ArrowDown,ArrowRight,InfoFilled,DataAnalysis,QuestionFilled,Search,Clock,EditPen} from '@element-plus/icons-vue';
+import {ArrowDown,ArrowRight,InfoFilled,DataAnalysis,QuestionFilled,Search,Clock,EditPen,CircleCheck} from '@element-plus/icons-vue';
 import {api,save,confirm,dateTime,statusNames,useQueuedDownload,exportQueueLabel} from '../composables/workbench';
 import FinanceCostImportDialog from '../components/FinanceCostImportDialog.vue';
 import MissingCostPopover from '../components/MissingCostPopover.vue';
-import {financeCostPageSize,financeCostFilters,financeCostKey,financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
+import {financeDisplayAmount,financeCostPageSize,financeCostFilters,financeCostKey,financeToday,financeCodes,financeActiveStates,financeReportDates,financeReportKey,costChanges,costValue,batchTargets,clearBatchTargets} from '../utils/finance';
 const tab=ref('report'),error=ref(''),options=reactive({customers:[],salespeople:[],styles:[],categories:[]});
 const activeStates=financeActiveStates,today=financeToday();
 const filters=reactive({...financeReportDates(today),customerName:'',customerId:null,salespersonIds:[],styleCodes:[],statuses:[...activeStates],exchangeRate:null});
@@ -342,6 +350,81 @@ async function exportReport(){
   }catch(e){error.value=errorMessage(e);}finally{exporting.value=false;}
 }
 </script>
+
+<style scoped>
+.finance-results{margin:18px -22px -22px;padding:22px;background:#f6f8fb;border-top:1px solid #e7edf4;border-radius:0 0 10px 10px;color:#25374d}
+.finance-overview{padding:22px 24px 0;margin-bottom:20px;border:1px solid #e2e8f0;border-radius:12px;background:#fff;box-shadow:0 2px 4px #23375103}
+.finance-overview-heading{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.finance-overview-heading>div{display:flex;align-items:center;gap:16px;min-width:0;flex-wrap:wrap}
+.finance-overview-heading strong{font-size:15px;font-weight:650;letter-spacing:.02em;color:#243b58}
+.finance-overview-heading>div>span{font-size:12px;line-height:1.6;color:#8190a4;font-variant-numeric:tabular-nums}
+.finance-overview-heading small{margin-left:8px;font-size:10px;color:#98a5b5}
+.finance-result-badge{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;border:1px solid #e1eee8;background:#f5faf7;color:#56816c;border-radius:20px;font-size:11px;line-height:24px;padding:0 9px}
+.finance-result-badge>i{width:5px;height:5px;border-radius:50%;background:currentColor}
+.finance-result-badge.is-incomplete{border-color:#f2e6cf;background:#fffaf0;color:#ad833e}
+.finance-overview-grid{display:grid;grid-template-columns:minmax(0,3.25fr) minmax(250px,1fr);gap:26px;align-items:stretch;padding:24px 0}
+.finance-overview .finance-summary{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:0;border:0;padding:0}
+.finance-overview .finance-summary>article{display:flex;flex-direction:column;min-width:0;gap:7px;border:0;border-left:1px solid #edf0f5;border-radius:0;background:none;padding:0 22px;line-height:1.5}
+.finance-overview .finance-summary>article:first-child{border-left:0;padding-left:0}
+.finance-overview .finance-summary>article:last-child{padding-right:0}
+.finance-overview .finance-summary>article>span{font-size:12px;color:#7b8ba0;margin-bottom:6px}
+.finance-overview .finance-summary>article>span small{font-size:10px;margin-left:3px;color:#9da9b8}
+.finance-overview .finance-summary strong{display:block;font-size:clamp(22px,1.7vw,30px);letter-spacing:-.035em;line-height:1.35;font-weight:650;color:#253c59;margin-bottom:5px;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.finance-overview .finance-summary .finance-sales-metric>strong{color:#234f85}
+.finance-overview .finance-summary strong.summary-incomplete{font-size:22px;color:#ac8649;letter-spacing:0;font-weight:550}
+.finance-overview .finance-summary strong>small{font-size:11px;letter-spacing:0;font-weight:400;color:#94a2b4;white-space:nowrap}
+.finance-overview .finance-summary>article>small{font-size:11px;color:#95a2b4;line-height:1.6}
+.finance-overview .report-quantity-summary{display:grid;grid-template-columns:minmax(0,1fr);align-content:center;gap:0;margin:0;padding:4px 18px;border:1px solid #edf0f5;border-radius:10px;background:#f8fafc;min-width:0}
+.finance-overview .report-quantity-summary>article{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;min-width:0;padding:11px 0}
+.finance-overview .report-quantity-summary>article+article{border-top:1px solid #e5eaf1}
+.finance-overview .report-quantity-summary>article>span{font-size:12px;color:#8090a5}
+.finance-overview .report-quantity-summary strong{font-size:34px;line-height:1.2;letter-spacing:-.04em;color:#354e6f;font-weight:650;font-variant-numeric:tabular-nums;overflow-wrap:anywhere;text-align:right}
+.finance-overview .report-quantity-summary small{font-size:11px;letter-spacing:0;font-weight:400;margin-left:6px;color:#97a5b7}
+.finance-overview-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px 18px;padding:13px 0;border-top:1px solid #edf0f5}
+.finance-overview-footer .report-missing{display:inline-flex;align-items:center;gap:5px;color:#b0823f;font-size:11px;line-height:1.7}
+.finance-complete-note{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:#7d998a}
+.finance-overview-footer .report-result-meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin:0;font-size:10px;color:#9aa7b7;line-height:1.7}
+.report-result-meta b{font-weight:500;color:#7f90a8;margin-left:4px}
+.finance-results .finance-positive,.finance-results .finance-summary strong.finance-positive{color:#438677}
+.finance-results .finance-negative,.finance-results .finance-summary strong.finance-negative{color:#bd6569}
+.finance-detail-section{border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;background:#fff;min-width:0}
+.finance-detail-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px 18px;padding:19px 22px;border-bottom:1px solid #e9eef5}
+.finance-detail-heading>div{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.finance-detail-heading strong{font-size:14px;font-weight:650;color:#2e435e}
+.finance-detail-heading>div>span,.finance-detail-heading>small{font-size:11px;color:#98a5b5}
+.finance-detail-heading>small b{font-weight:600;color:#627d9f;margin-right:3px;font-variant-numeric:tabular-nums}
+.finance-detail-heading i{font-style:normal;margin:0 8px;color:#c6cfda}
+.finance-results .finance-report-table{font-size:13px;--el-table-header-bg-color:#f8fafc;--el-table-row-hover-bg-color:#f7faff;--el-table-border-color:#edf1f6;--el-table-text-color:#52657f}
+.finance-results .finance-report-table :deep(.el-table__cell){padding:12px 0}
+.finance-results .finance-report-table :deep(th.el-table__cell){background:#f8fafc;font-size:11px;font-weight:500;color:#8292a8;padding:13px 0}
+.finance-results .finance-report-table :deep(.cell){padding-left:14px;padding-right:14px;line-height:1.65}
+.finance-results .finance-report-table :deep(.el-table__expand-icon){color:#93a5bb}
+.finance-results .finance-report-table :deep(.el-table__expanded-cell){padding:0}
+.report-style-code{font-weight:600;color:#3c5677;letter-spacing:.01em}
+.report-size-label{display:inline-block;min-width:28px;border:1px solid #e9edf4;border-radius:5px;background:#f8fafc;padding:1px 6px;text-align:center;color:#8293aa;font-size:11px}
+.finance-results .cost-history-note{font-size:10px;color:#9ba8b9;margin-top:3px}
+.finance-results .missing{display:block;color:#b28b51;font-size:10px;margin-top:3px}
+.report-value-incomplete{font-size:12px;color:#a9b3c1}
+.finance-results .line-detail{padding:18px 22px;background:#f8fafd;border-top:1px solid #eaf0f7;border-bottom:1px solid #eaf0f7}
+.finance-detail-footer{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;padding:14px 22px}
+.finance-detail-footer>span{font-size:10px;color:#9ca9ba}
+.finance-detail-footer :deep(.el-pagination){margin:0;font-size:12px;--el-pagination-font-size:12px}
+@media(max-width:1250px){
+  .finance-overview-grid{grid-template-columns:minmax(0,1fr);gap:20px}
+  .finance-overview .report-quantity-summary{grid-template-columns:repeat(2,minmax(0,1fr));padding:14px 0}
+  .finance-overview .report-quantity-summary>article{padding:0 20px;gap:10px}
+  .finance-overview .report-quantity-summary>article+article{border-top:0;border-left:1px solid #e5eaf1}
+  .finance-overview .report-quantity-summary strong{font-size:32px}
+  .finance-overview .finance-summary strong{font-size:25px}
+}
+@media(max-width:1000px){
+  .finance-overview{padding:20px 18px 0}.finance-overview-heading>div{gap:8px}
+  .finance-overview-heading>div>span{font-size:11px}.finance-overview-heading small{display:none}
+  .finance-overview .finance-summary>article{padding:0 14px}.finance-overview .finance-summary>article:first-child{padding-left:0}
+  .finance-overview .finance-summary>article:last-child{padding-right:0}.finance-overview .finance-summary strong{font-size:23px}
+  .finance-detail-heading{padding:17px 18px}.finance-detail-footer{padding:12px 18px}
+}
+</style>
 
 <style scoped>
 .finance-panel{background:#fff;padding:22px;border:1px solid #e1e6ee;border-radius:10px;min-width:0}.finance-tabs{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.finance-tabs{border-bottom:1px solid #e8edf4}.finance-filters{display:flex;align-items:flex-end;flex-wrap:wrap;gap:14px;padding:20px 0}.finance-filters>label:not(.el-checkbox){display:flex;flex-direction:column;gap:7px;color:#596b83;font-size:12px}.finance-filters :deep(.el-select),.finance-filters :deep(.el-date-editor),.finance-filters :deep(.el-input-number){width:100%}.finance-gap{margin-top:18px}.cost-changed{background:#fff8e7}.line-detail{padding:16px;background:#f6f8fb}.missing{display:block;color:#c17820;font-size:11px}.finance-panel :deep(.el-checkbox__inner){width:20px;height:20px}.finance-panel :deep(.el-checkbox__inner:after){left:7px;top:4px}.finance-panel :deep(.el-checkbox){min-height:32px}.finance-panel :deep(.el-table .cell){overflow-wrap:anywhere}.cost-expanded{transform:rotate(180deg)}

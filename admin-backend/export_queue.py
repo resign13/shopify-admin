@@ -12,6 +12,7 @@ QUEUE_LIMIT = 10
 MUTEX = 549728836142681785
 ORDER_ROUTES = {'/api/admin/orders/export', '/api/admin/orders/export-by-sheet'}
 SYNC_ROUTES = {
+    ('GET', '/api/admin/contracts/export'): {'admin', 'sales'},
     ('GET', '/api/admin/inventory/export'): {'admin', 'sales', 'warehouse'},
     ('GET', '/api/admin/dashboard/style-performance/export'): {'admin', 'sales'},
     ('POST', '/api/admin/finance/costs/export'): {'admin', 'sales', 'warehouse', 'finance'},

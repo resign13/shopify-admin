@@ -2,8 +2,9 @@ import safe_excel
 """Purchase contracts: immutable snapshots and atomic pending inventory increments."""
 import hashlib
 import json
+import re
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 from urllib.parse import urlsplit
 from flask import g
@@ -58,15 +59,51 @@ def detail(contract_id):
     return serialize(row, True) if row else None
 
 
+def filters(args):
+    keyword = '%' + str(args.get('keyword', '')).strip() + '%'
+    where = "(factory_name ILIKE %s OR ('HT-' || lpad(id::text,6,'0')) ILIKE %s OR snapshot->>'contractNo' ILIKE %s OR snapshot->>'items' ILIKE %s)"
+    params = [keyword] * 4
+    month = args.get('createdMonth') or ''
+    if month:
+        if not isinstance(month, str) or not re.fullmatch(r'[0-9]{4}-(?:0[1-9]|1[0-2])', month):
+            raise ValueError('创建月份须为 YYYY-MM 格式的有效年月')
+        year, number = map(int, month.split('-'))
+        try:
+            zone = timezone(timedelta(hours=8))
+            start = datetime(year, number, 1, tzinfo=zone)
+            end = datetime(year + (number == 12), 1 if number == 12 else number + 1, 1, tzinfo=zone)
+        except ValueError:
+            raise ValueError('请填写有效的创建年月') from None
+        where += ' AND created_at >= %s AND created_at < %s'
+        params.extend([start, end])
+    return where, tuple(params)
+
+
 def listing(args):
     import workbench
     page, size = workbench.paging(args)
-    keyword = '%' + str(args.get('keyword', '')).strip() + '%'
-    where = "(factory_name ILIKE %s OR ('HT-' || lpad(id::text,6,'0')) ILIKE %s OR snapshot->>'contractNo' ILIKE %s OR snapshot->>'items' ILIKE %s)"
-    params = (keyword,) * 4
+    where, params = filters(args)
     total = db._fetch_one('SELECT count(*) AS total FROM purchase_contracts WHERE ' + where, params)['total']
     rows = db._fetch_all('SELECT * FROM purchase_contracts WHERE ' + where + ' ORDER BY id DESC LIMIT %s OFFSET %s', (*params, size, (page-1)*size))
     return {'items': [serialize(row) for row in rows], 'total': total, 'page': page, 'pageSize': size}
+
+
+def export_items(args):
+    where, params = filters(args)
+    ids = None
+    if 'contractIds' in args:
+        raw = str(args.get('contractIds', '')).split(',')
+        if any(not re.fullmatch(r'[0-9]+', value.strip()) or not 0 < int(value) < 2**63 for value in raw):
+            raise ValueError('请选择有效的合同编号')
+        ids = sorted({int(value) for value in raw})
+        where += ' AND id=ANY(%s)'
+        params += (ids,)
+    rows = db._fetch_all('SELECT * FROM purchase_contracts WHERE ' + where + ' ORDER BY id DESC', params)
+    if ids is not None and len(rows) != len(ids):
+        raise ValueError('部分所选合同已移除或不在当前筛选范围，请刷新后重新选择')
+    if not rows:
+        raise ValueError('当前筛选没有可导出的合同')
+    return [serialize(row, True) for row in rows]
 
 
 def create(payload, existing=None):
@@ -241,9 +278,28 @@ def cancel(contract_id, payload):
 
 def export(contract, fetch_image, make_image):
     from openpyxl import Workbook
+    book = Workbook(); ws = book.active; ws.title = '购买合同'
+    write_export_sheet(ws, contract, fetch_image, make_image)
+    stream = BytesIO(); safe_excel.prepare(book).save(stream); stream.seek(0); return stream
+
+
+def export_many(items, fetch_image, make_image):
+    from openpyxl import Workbook
+    book = Workbook(); book.remove(book.active)
+    used = set()
+    for contract in items:
+        name = re.sub(r'[\[\]:*?/\\]', '_', contract['contractNo']).strip("'") or '采购合同'
+        title = name[:31]; suffix = 2
+        while title.lower() in used:
+            tail = '-' + str(suffix); title = name[:31-len(tail)] + tail; suffix += 1
+        used.add(title.lower())
+        write_export_sheet(book.create_sheet(title), contract, fetch_image, make_image)
+    stream = BytesIO(); safe_excel.prepare(book).save(stream); stream.seek(0); return stream
+
+
+def write_export_sheet(ws, contract, fetch_image, make_image):
     from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
     from openpyxl.utils import get_column_letter
-    book = Workbook(); ws = book.active; ws.title = '购买合同'
     sizes = STANDARD + list(dict.fromkeys(size for item in contract['items'] if not item.get('displayQuantities') for size in item['sizes'] if size not in STANDARD))
     # Keep wide/unusual size sets readable in successive blocks, without merging real sizes.
     row = 1
@@ -311,4 +367,3 @@ def export(contract, fetch_image, make_image):
     ws.sheet_view.showGridLines = False; ws.freeze_panes = None
     ws.page_setup.orientation = 'landscape'; ws.page_setup.paperSize = ws.PAPERSIZE_A4
     ws.sheet_properties.pageSetUpPr.fitToPage = True; ws.page_setup.fitToWidth = 1; ws.page_setup.fitToHeight = 0
-    stream = BytesIO(); safe_excel.prepare(book).save(stream); stream.seek(0); return stream

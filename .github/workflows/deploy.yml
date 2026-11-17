@@ -65,7 +65,7 @@ jobs:
         run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderSelectionTotals.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js
       - name: Catalog ordering UI tests
         working-directory: frontend
-        run: node --test src/utils/catalogOrder.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderCancellation.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/dashboardDates.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
+        run: node --test src/utils/catalogOrder.test.js src/utils/contractFilters.test.js src/utils/customerTemplates.test.js src/utils/orderQuantities.test.js src/utils/orderPricing.test.js src/utils/orderOperations.test.js src/utils/orderCancellation.test.js src/utils/orderReorder.test.js src/utils/orderNumber.test.js src/utils/inventoryStages.test.js src/utils/inventoryRegistrationUI.test.js src/utils/styleSalesperson.test.js src/utils/dashboardDates.test.js src/utils/productWeights.test.js src/utils/presale.test.js src/utils/finance.test.js src/notifications/notifications.test.js src/notifications/authSession.test.js src/notifications/cookieTransport.test.js src/notifications/audioAsset.test.js
       - name: Build shared frontend
         working-directory: frontend
         run: npm run build
@@ -442,6 +442,10 @@ jobs:
           playwright-cli -s=financeci run-code --filename scripts/verify-finance-cost-ui-browser.js | tee "$RUNNER_TEMP/finance-ui-result.log"
           grep -Eq '"twoColumnLedger":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
           grep -Eq '"renderOnlyNoWrites":[[:space:]]*true' "$RUNNER_TEMP/finance-ui-result.log"
+          playwright-cli -s=financeci run-code --filename scripts/verify-finance-report-ui-browser.js | tee "$RUNNER_TEMP/finance-report-ui-result.log"
+          grep -Eq '"reportUi":[[:space:]]*true' "$RUNNER_TEMP/finance-report-ui-result.log"
+          playwright-cli -s=financeci run-code --filename scripts/verify-finance-contract-batch-browser.js | tee "$RUNNER_TEMP/finance-contract-batch-result.log"
+          grep -Eq '"passed":[[:space:]]*true' "$RUNNER_TEMP/finance-contract-batch-result.log"
           playwright-cli -s=financeci close
       - name: Isolated cost Excel export and import lifecycle
         if: matrix.suite == 'operations'

@@ -23,6 +23,8 @@
     :class="{ 'selection-large': largeSelection }"
     v-loading="loading"
     :data="rows"
+    :height="height"
+    :scrollbar-always-on="scrollbarAlwaysOn"
     row-key="id"
     :expand-row-keys="expandedKeys"
     :mobile-selection="mobileSelection"
@@ -88,6 +90,8 @@ const props = defineProps({
   rows: Array,
   columns: Array,
   total: Number,
+  height: [Number, String],
+  scrollbarAlwaysOn: Boolean,
   page: [Number, String],
   pageSize: [Number, String],
   loading: Boolean,
