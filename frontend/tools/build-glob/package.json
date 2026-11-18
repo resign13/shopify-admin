@@ -1,0 +1,10 @@
+{
+  "name": "@gingtto/build-glob",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Build-time path filters for Vite and component discovery",
+  "main": "index.cjs",
+  "dependencies": {
+    "minimatch": "11.0.9"
+  }
+}
