@@ -60,6 +60,9 @@ jobs:
       - name: Install frontend test dependencies
         working-directory: frontend
         run: npm ci && npm audit --audit-level=high
+      - name: Verify the installed build glob matcher and bundled Rollup fix
+        working-directory: frontend
+        run: node --test tests/buildGlob.test.cjs
       - name: Order quantity selection unit tests
         working-directory: frontend
         run: node --test tests/exportDownload.test.js src/utils/adminErrors.test.js src/utils/orderSelection.test.js src/utils/orderSelectionTotals.test.js src/utils/orderFilters.test.js src/utils/apiIntegration.test.js src/utils/sizeChartUnits.test.js src/utils/tableSort.test.js src/utils/tableResize.test.js src/utils/apiIntegrationReads.test.js src/utils/maintenance.test.js

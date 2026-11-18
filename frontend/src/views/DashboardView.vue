@@ -6,7 +6,7 @@
     :description="personalScope ? '查看对应业务员的订单、销量与经营表现。' : '从经营表现到日常业务，一站掌握全局。'"
     eyebrow="OVERVIEW / 经营概览"
     ><span class="muted">更新于 {{ dateTime(data?.updatedAt) }}</span
-    ><ElButton :loading="loading" @click="load(false, false)"
+    ><ElButton :loading="loading" @click="load(false, 'applied')"
       >刷新数据</ElButton
     ></PageHeader
   >
@@ -15,18 +15,18 @@
     <button class="mobile-dashboard-filter" aria-label="经营筛选" :aria-expanded="mobileFilterOpen" aria-controls="mobile-dashboard-filters" @click="mobileFilterOpen = !mobileFilterOpen"><ElIcon><Filter /></ElIcon></button>
   </div>
   <section v-if="!isPhone" class="panel">
-    <ResponsiveFilters :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId,statuses:appliedGlobal.statuses ? appliedStatusLabel : ''}" :labels="{statuses: '订单状态'}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
+    <ResponsiveFilters aria-label="经营概览筛选" :active="{country:appliedGlobal.country,style:appliedGlobal.style,salespersonId:appliedGlobal.salespersonId,statuses:appliedGlobal.statuses ? appliedStatusLabel : ''}" :labels="{statuses: '订单状态'}" @submit="load(true)" @remove="removeMobileFilter" style="padding: 0; border: 0">
       <ElRadioGroup v-model="preset" @change="setPreset"
         ><ElRadioButton v-for="item in dashboardDatePresets" :key="item.value" :value="item.value">{{ item.label }}</ElRadioButton></ElRadioGroup
       ><ElDatePicker
-        v-model="dates"
+        :model-value="dates"
         type="daterange"
         value-format="YYYY-MM-DD"
         range-separator="至"
         :clearable="false"
         start-placeholder="开始日期"
         end-placeholder="结束日期"
-        @change="preset = matchDashboardPreset(dates)"
+        @update:model-value="applyDateRange"
       /><ElSelect v-model="country" clearable filterable placeholder="全部国家"
         ><ElOption
           v-for="item in data?.filters.countries"
@@ -42,7 +42,7 @@
       ><ElSelect v-if="auth.isSuperAdmin" v-model="salespersonId" clearable filterable placeholder="全公司业务员" aria-label="业务员筛选">
         <ElOption label="未分配订单" value="unassigned" />
         <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
-      </ElSelect><ElSelect v-model="statuses" multiple collapse-tags collapse-tags-tooltip clearable placeholder="全部订单状态" aria-label="订单状态筛选"><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value" /></ElSelect><ElButton type="primary" :loading="loading" @click="load(true)"
+      </ElSelect><ElSelect v-model="statuses" multiple collapse-tags collapse-tags-tooltip clearable placeholder="全部订单状态" aria-label="订单状态筛选"><ElOption v-for="(label,value) in statusNames" :key="value" :label="label" :value="value" /></ElSelect><ElButton type="primary" native-type="submit" :loading="loading"
         >查询</ElButton
       >
     </ResponsiveFilters>
@@ -56,7 +56,7 @@
   </section>
   <section v-if="isPhone" v-show="mobileFilterOpen" id="mobile-dashboard-filters" class="mobile-dashboard-inline-filters" aria-label="经营筛选">
     <ElForm label-position="top" @submit.prevent="applyMobileFilters">
-      <ElFormItem label="统计日期"><ElDatePicker v-model="dates" type="daterange" value-format="YYYY-MM-DD" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @change="preset = matchDashboardPreset(dates)" /></ElFormItem>
+      <ElFormItem label="统计日期"><ElDatePicker :model-value="dates" type="daterange" value-format="YYYY-MM-DD" range-separator="至" :clearable="false" start-placeholder="开始日期" end-placeholder="结束日期" @update:model-value="applyDateRange" /></ElFormItem>
       <ElFormItem label="国家"><ElSelect v-model="country" clearable filterable placeholder="全部国家"><ElOption v-for="item in data?.filters.countries" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem label="款号"><ElSelect v-model="style" multiple collapse-tags collapse-tags-tooltip clearable filterable placeholder="全部款号"><ElOption v-for="item in data?.filters.styles" :key="item" :value="item" :label="item" /></ElSelect></ElFormItem>
       <ElFormItem v-if="auth.isSuperAdmin" label="业务员"><ElSelect v-model="salespersonId" clearable filterable placeholder="全公司业务员"><ElOption label="未分配订单" value="unassigned"/><ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name"/></ElSelect></ElFormItem>
@@ -65,7 +65,7 @@
     </ElForm>
   </section>
   <ElAlert v-if="error" :title="error" type="error" :closable="false" show-icon
-    ><ElButton link type="primary" @click="load(false, false)"
+    ><ElButton link type="primary" @click="load(false, 'applied')"
       >重新加载</ElButton
     ></ElAlert
   >
@@ -173,17 +173,19 @@
     <section class="panel style-performance-panel">
       <div class="panel-title style-performance-title">
         <div>
-          <h2>款号商品表现</h2>
+          <h2 :id="styleFilterId">款号商品表现</h2>
           <small>{{ stylePersonalScope ? '按款号汇总对应业务员的订单，展开查看颜色 SKU 和真实尺码销量。' : '按款号汇总颜色 SKU，展开查看每个真实尺码的销量与库存。' }}</small>
         </div>
         <div class="inline-actions">
           <ElRadioGroup
+            v-if="!stylePersonalScope"
             v-model="velocityWindow"
             size="small"
-            @change="loadStylePerformance(true)"
+            aria-label="预计可售天数的周转窗口"
+            @change="changeVelocityWindow"
           >
-            <ElRadioButton value="7">{{ stylePersonalScope ? '近 7 天日均' : '近 7 天周转' }}</ElRadioButton>
-            <ElRadioButton value="30">{{ stylePersonalScope ? '近 30 天日均' : '近 30 天周转' }}</ElRadioButton>
+            <ElRadioButton value="7">近 7 天周转</ElRadioButton>
+            <ElRadioButton value="30">近 30 天周转</ElRadioButton>
           </ElRadioGroup>
           <ElButton
             size="small"
@@ -202,13 +204,24 @@
           >
         </div>
       </div>
-      <ResponsiveFilters class="style-performance-filters" @submit="loadStylePerformance(true)">
+      <ResponsiveFilters class="style-performance-filters" :aria-labelledby="styleFilterId" @submit="loadStylePerformance(true)">
         <ElInput
           v-model="styleKeyword"
           clearable
           placeholder="搜索款号、颜色 SKU 或商品名称"
           @clear="loadStylePerformance(true)"
         />
+        <div class="style-report-date mobile-filter-field">
+          <label :for="styleDateIds[0]" class="date-sr-only">开始日期</label>
+          <label :for="styleDateIds[1]" class="date-sr-only">结束日期</label>
+          <ElDatePicker
+            :id="styleDateIds"
+            :model-value="dates"
+            type="daterange" value-format="YYYY-MM-DD" range-separator="至" :clearable="false"
+            start-placeholder="开始日期" end-placeholder="结束日期"
+            @update:model-value="applyDateRange"
+          />
+        </div>
         <ElSelect
           v-model="styleCategory"
           clearable
@@ -269,23 +282,15 @@
           <ElOption label="未分配订单" value="unassigned" />
           <ElOption v-for="person in salespeople" :key="person.id" :value="String(person.id)" :label="person.name" />
         </ElSelect>
-        <ElButton
-          native-type="submit"
-          type="primary"
-          :loading="stylePerformanceLoading"
-          >查询</ElButton
-        >
-        <ElButton @click="resetStyleFilters">重置</ElButton>
+        <ElButton native-type="submit" type="primary" :loading="stylePerformanceLoading">查询</ElButton>
       </ResponsiveFilters>
       <details class="mobile-explanation" :open="!isPhone"><summary>统计口径与计算说明</summary>
-      <p v-if="!stylePersonalScope" class="small-note calculation-note">
-        销量与金额按上方日期、国家和款号筛选，排除已取消订单，金额不含运费，统一按订单保存汇率折合 USD。现货及各库存阶段为当前数量。预计可售天数
-        = 当前现货 ÷ 截至 {{ appliedGlobal.dateTo }} 的近
-        {{ velocityWindow }} 天日均销量（{{
-          appliedGlobal.country || "全部国家"
-        }}）；无销量时不估算。
+      <p v-if="stylePerformance.salesWindow" class="small-note calculation-note">
+        销量、金额按 {{ stylePerformance.salesWindow.dateFrom }} 至 {{ stylePerformance.salesWindow.dateTo }} 统计；
+        日均销量 = 筛选销量 ÷ {{ stylePerformance.salesWindow.days }} 个自然日。排除已取消订单，不含运费，按订单保存汇率折合 USD。
+        <template v-if="!stylePersonalScope">库存各项为当前余额。预计可售天数 = 可用现货 ÷ 截至北京时间 {{ stylePerformance.velocityWindow.dateTo }} 的近 {{ stylePerformance.velocityWindow.days }} 天日均销量，不随统计日期变化；无销量时不估算。</template>
+        <template v-else>仅统计所选业务员的订单；共享库存请在库存管理查看，个人视图不计算公司周转。</template>
       </p>
-      <p v-else class="small-note">仅统计当前所选业务员的订单，不含已取消订单及运费；共享库存请在库存管理查看，个人视图不计算公司周转。</p>
       <p class="small-note">当前款号数据范围：{{ styleScopeLabel }}</p>
       </details>
       <ElAlert
@@ -350,7 +355,7 @@
           </div>
           <ElEmpty
             v-if="!stylePerformance.items.length"
-            description="当前筛选暂无款号数据，可调整条件或重置筛选"
+            description="当前筛选暂无款号数据，可调整日期或其他筛选条件"
             :image-size="70"
           />
           <AdaptiveTable
@@ -479,10 +484,9 @@
           <p class="small-note calculation-note">
             销售统计：{{ styleDetail.salesWindow.dateFrom }} 至
             {{ styleDetail.salesWindow.dateTo }} ·
-            {{ appliedStyleQuery.country || "全部国家" }} · {{ styleScopeLabel }}。日均窗口：{{
-              styleDetail.velocityWindow.dateFrom
-            }}
-            至 {{ styleDetail.velocityWindow.dateTo }}。点击行首箭头展开尺码。
+            {{ appliedStyleQuery.country || "全部国家" }} · {{ styleScopeLabel }}。日均销量按该区间的 {{ styleDetail.salesWindow.days }} 个自然日计算。
+            <template v-if="!stylePersonalScope">预计可售天数使用独立周转窗口：{{ styleDetail.velocityWindow.dateFrom }} 至 {{ styleDetail.velocityWindow.dateTo }}（北京时间）。</template>
+            点击行首箭头展开尺码。
           </p>
           <div class="style-detail-summary">
             <div>
@@ -727,6 +731,7 @@ import {
   onBeforeUnmount,
   onMounted,
   ref,
+  useId,
   watch,
 } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
@@ -762,6 +767,8 @@ function removeMobileFilter(key) {
 const appliedGlobal = ref({}),
   appliedPreset = ref(defaultDashboardPreset),
   trendMetric = ref("orders");
+const styleFilterId = useId();
+const styleDateIds = [styleFilterId + "-from", styleFilterId + "-to"];
 const stylePerformance = ref({ items: null, summary: {} });
 const stylePerformanceLoading = ref(false),
   stylePerformanceError = ref("");
@@ -850,11 +857,16 @@ function daysText(item) {
     return "暂无销量";
   return `${Number(item.estimatedDays).toFixed(1)} 天`;
 }
+function applyDateRange(range, preferred = preset.value) {
+  if (!range?.[0] || !range[1]) return;
+  dates.value = range;
+  preset.value = matchDashboardPreset(range, preferred);
+  if (range[0] === appliedGlobal.value.dateFrom && range[1] === appliedGlobal.value.dateTo
+      && preset.value === appliedPreset.value) return;
+  load(true, "dates");
+}
 function setPreset(value) {
-  if (value === "custom") return;
-  preset.value = value;
-  dates.value = presetDates(value);
-  load(true);
+  applyDateRange(presetDates(value), value);
 }
 function change(key) {
   const previous = Number(data.value?.previous[key] || 0);
@@ -1032,12 +1044,11 @@ function changeStylePageSize(size) {
   stylePageSize.value = size;
   loadStylePerformance(true);
 }
-function resetStyleFilters() {
-  styleSalespersonId.value = styleKeyword.value = styleCategory.value = styleRisk.value = "";
-  styleSort.value = "units";
-  styleDirection.value = "desc";
-  velocityWindow.value = "7";
-  loadStylePerformance(true);
+function changeVelocityWindow(value) {
+  if (requestedStyleQuery.value) {
+    requestedStyleQuery.value = { ...requestedStyleQuery.value, velocityWindow: value };
+  }
+  loadStylePerformance(true, false);
 }
 async function openStyle(row) {
   if (!row) return;
@@ -1067,26 +1078,36 @@ async function openStyle(row) {
     if (id === detailSeq) styleDetailLoading.value = false;
   }
 }
-async function load(resetPage = false, applyDraft = true) {
+async function load(resetPage = false, source = "all") {
   overviewController?.abort();
   const controller = (overviewController = new AbortController()),
     id = ++seq;
+  const applyDraft = source === "all";
   const query = applyDraft ? globalQuery() : { ...appliedGlobal.value };
+  if (source === "dates") [query.dateFrom, query.dateTo] = dates.value;
   if (queryKey(query) !== queryKey(appliedGlobal.value)) {
-    data.value = null;
-    stylePerformance.value = {};
+    // Keep the lower picker mounted while changing dates; removing the whole
+    // dashboard would jump a user working in the lower panel back to the top.
+    if (source !== "dates") {
+      data.value = null;
+      stylePerformance.value = {};
+    }
     styleDetail.value = null;
     styleDrawerVisible.value = false;
   }
-  if (auth.isSuperAdmin && !salespeople.value.length) { try { salespeople.value = (await api("salespeople")).items; } catch (e) { error.value = errorMessage(e); } }
   if (auth.userRole === "sales" || query.salespersonId) { styleRisk.value = ""; if (["stock","estimatedDays"].includes(styleSort.value)) styleSort.value = "units"; }
   resetPage ||=
     queryKey(query) !== queryKey(appliedGlobal.value) &&
     !!appliedGlobal.value.dateFrom;
   appliedGlobal.value = query;
-  if (applyDraft) appliedPreset.value = preset.value;
+  if (source !== "applied") appliedPreset.value = preset.value;
   loading.value = true;
   error.value = "";
+  const owners = auth.isSuperAdmin && !salespeople.value.length
+    ? api("salespeople", { signal: controller.signal }).then(result => {
+        if (id === seq) salespeople.value = result.items;
+      }).catch(e => { if (id === seq && e.name !== "AbortError") error.value = errorMessage(e); })
+    : null;
   const overview = (async () => {
     try {
       const result = await api(
@@ -1101,7 +1122,7 @@ async function load(resetPage = false, applyDraft = true) {
       }
     }
   })();
-  await Promise.all([overview, loadStylePerformance(resetPage, applyDraft)]);
+  await Promise.all([overview, loadStylePerformance(resetPage, applyDraft), owners]);
   if (id === seq) loading.value = false;
 }
 watch(styleDrawerVisible, (visible) => {
@@ -1183,6 +1204,15 @@ onBeforeUnmount(() => {
 .style-performance-filters .style-salesperson {
   width: 170px;
 }
+.style-report-date {
+  position: relative; display: flex; max-width: 100%; min-width: 0;
+}
+.style-report-date :deep(.el-date-editor) { width: 245px; min-width: 0; max-width: 100%; }
+.style-report-date :deep(.el-range-input) { min-width: 0; }
+.date-sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 .style-summary-grid,
 .style-detail-summary {
   display: grid;
@@ -1261,6 +1291,9 @@ onBeforeUnmount(() => {
   padding: 12px 8px;
 }
 @media (max-width: 767px) {
+  .style-performance-filters > .el-button[type="submit"] { transition-property: background-color, border-color, color, box-shadow; }
+  .style-performance-filters.is-expanded > .style-report-date { order: 3; flex: 1 0 100%; }
+  .style-performance-filters.is-expanded > .el-button[type="submit"] { order: 5; align-self: flex-end; }
   .style-performance-panel .style-performance-title { flex-direction:row; align-items:center; gap:12px; }
   .style-performance-title .style-export-button { margin-left:0; }
   .mobile-dashboard-range > div { min-width:0; }

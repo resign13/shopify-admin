@@ -1,7 +1,7 @@
 """XLSX and filter parity checks, on the guarded isolated *_test database only."""
 import io
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import patch
 from urllib.parse import urlencode
 
@@ -11,6 +11,7 @@ from test_workbench import application, db
 import dashboard_export
 
 
+@patch('workbench._style_today', new=lambda: date(2026, 9, 18))
 class DashboardExportTest(unittest.TestCase):
     setUp = fixture.DashboardTest.setUp
     product = fixture.DashboardTest.product
@@ -129,6 +130,12 @@ class DashboardExportTest(unittest.TestCase):
         all_rows = self.records(self.workbook(salespersonId='all'))
         self.assertIn('现货余额', all_rows[0])
         self.assertEqual(sum(r['销量（件）'] for r in all_rows), 6)
+
+    def test_excel_report_range_does_not_move_turnover_window(self):
+        for start, end, units, daily in [('2026-09-16', '2026-09-17', 3, 1.5), ('2026-09-18', '2026-09-18', 6, 6)]:
+            with self.subTest(start=start):
+                row, = self.records(self.workbook(style='GT-2026', dateFrom=start, dateTo=end))
+                self.assertEqual((row['销量（件）'], row['日均销量（件）'], row['预计可售（天）']), (units, daily, 70))
 
     def test_permissions_and_revocation_match_dashboard(self):
         self.assertEqual(self.export(role=None).status_code, 401)
