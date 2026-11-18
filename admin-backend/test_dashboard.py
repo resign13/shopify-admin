@@ -1,10 +1,13 @@
 """Dashboard API regressions; test_workbench guards the isolated local *_test database."""
 import unittest
+from datetime import date
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from test_workbench import seed, application, db
 
 
+@patch('workbench._style_today', new=lambda: date(2026, 9, 18))
 class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.tokens, self.products = seed()
@@ -76,7 +79,7 @@ class DashboardTest(unittest.TestCase):
         self.assertAlmostEqual(row['amount'], 179.4)
         self.assertEqual((row['velocityUnits'], row['stock'], row['colorSkuCount'], row['sizeCount']), (9, 90, 3, 9))
         self.assertEqual((row['contractPending'], row['pendingInspection'], row['pendingInbound']), (63, 27, 18))
-        self.assertEqual((row['averageDailyUnits'], row['estimatedDays']), (1.29, 70))
+        self.assertEqual((row['averageDailyUnits'], row['estimatedDays']), (6, 70))
         self.assertEqual(data['velocityWindow'], {'dateFrom': '2026-09-12', 'dateTo': '2026-09-18', 'days': 7})
         german = self.data(country='Germany')['items'][0]
         self.assertEqual((german['units'], german['velocityUnits'], german['orders']), (3, 3, 1))
@@ -162,6 +165,9 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(self.data(**{**params, 'country': 'China'})['total'], 0)
         self.assertEqual(self.data(**{**params, 'statuses': 'cancelled'})['total'], 0)
         self.assertEqual(self.data(**params, dateFrom='2026-10-01', dateTo='2026-10-01')['total'], 0)
+        # A retired SKU sold in the gap between reporting and turnover is in neither window.
+        with patch('workbench._style_today', return_value=date(2026, 10, 1)):
+            self.assertEqual(self.data(**params, dateFrom='2026-09-01', dateTo='2026-09-01')['total'], 0)
 
     def test_all_sort_columns_directions_and_nulls_last(self):
         coat = self.product('COAT', stock=7)
@@ -228,10 +234,49 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(self.data('workbench')['metrics']['units'], 22)
         thirty = self.data(velocityWindow=30)
         self.assertEqual(thirty['velocityWindow']['dateFrom'], '2026-08-20')
-        self.assertEqual(thirty['items'][0]['averageDailyUnits'], 1.07)
+        self.assertEqual(thirty['items'][0]['averageDailyUnits'], 22)
         self.assertEqual(thirty['items'][0]['estimatedDays'], 84.4)
         future = self.data(dateFrom='2026-10-01', dateTo='2026-10-01')['items'][0]
-        self.assertEqual((future['units'], future['velocityUnits'], future['risk']), (0, 0, 'no_sales'))
+        self.assertEqual((future['units'], future['averageDailyUnits'], future['velocityUnits'], future['risk']),
+                         (0, 0, 32, 'warning'))
+
+    def test_report_daily_sales_and_today_turnover_are_independent_at_every_level(self):
+        coat = self.product('WINDOWS', stock=70)
+        self.order(coat, 8, '2026-04-02 08:00:00+00')
+        self.order(coat, 6, '2026-04-03 08:00:00+00', price=20)
+        self.order(coat, 53, '2026-09-02 08:00:00+00')
+        self.order(coat, 7, '2026-09-15 08:00:00+00')
+        for start, end, days, expected, recent, forecast in [
+            ('2026-04-01', '2026-04-04', 7,  (14, 200, 3.5), 7, 70),
+            ('2026-04-03', '2026-04-03', 7,  (6, 120, 6), 7, 70),
+            ('2026-04-01', '2026-04-04', 30, (14, 200, 3.5), 60, 35),
+        ]:
+            with self.subTest(start=start, end=end, turnover=days):
+                query = dict(style='WINDOWS', dateFrom=start, dateTo=end, velocityWindow=days)
+                report = self.data(**query)
+                detail = self.data('style-detail', styleCode='WINDOWS', **query)
+                sizes = self.data('style-size-detail', styleCode='WINDOWS', productId=coat['id'], **query)
+                self.assertEqual(detail['salesWindow'], report['salesWindow'])
+                self.assertEqual(sizes['salesWindow'], report['salesWindow'])
+                self.assertEqual(detail['velocityWindow'], report['velocityWindow'])
+                self.assertEqual(sizes['velocityWindow'], report['velocityWindow'])
+                self.assertEqual(report['velocityWindow']['dateTo'], '2026-09-18')
+                self.assertEqual(detail['items'][0]['sizes'], sizes['items'])
+                for row in (report['items'][0], detail['items'][0], sizes['items'][0]):
+                    self.assertEqual((row['units'], row['amount'], row['averageDailyUnits']), expected)
+                    self.assertEqual((row['stock'], row['velocityUnits'], row['estimatedDays']), (70, recent, forecast))
+
+    def test_recent_retired_color_contributes_to_live_style_turnover_not_stock_or_period_sales(self):
+        self.product('LIVE', stock=21)
+        retired = self.product('RETIRED', stock=40)
+        db._fetch_one("UPDATE products SET style_code='LIVE',is_active=FALSE WHERE id=%s RETURNING id", (retired['id'],))
+        self.order(retired, 7)
+        query = dict(style='LIVE', dateFrom='2026-04-01', dateTo='2026-04-07')
+        row, = self.data(**query)['items']
+        self.assertEqual((row['units'], row['averageDailyUnits'], row['velocityUnits'], row['stock'], row['estimatedDays']),
+                         (0, 0, 7, 21, 21))
+        colors = self.data('style-detail', styleCode='LIVE', **query)['items']
+        self.assertEqual(sum(color['velocityUnits'] for color in colors), row['velocityUnits'])
 
     def test_style_precedence_and_legacy_fallback(self):
         explicit = self.product('PREFIX')

@@ -4,6 +4,7 @@ import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone, date
 from decimal import Decimal
+from typing import NamedTuple
 
 from flask import g, jsonify, request, make_response
 from psycopg.types.json import Jsonb
@@ -46,14 +47,34 @@ def _style_code_sql(alias: str = "p") -> str:
     """
 
 
-def _dashboard_window(args, default_days: int = 30):
-    end = date.fromisoformat(args.get('dateTo') or datetime.now(SHANGHAI).date().isoformat())
-    start = date.fromisoformat(args.get('dateFrom') or (end - timedelta(days=default_days - 1)).isoformat())
+class _DateWindow(NamedTuple):
+    start: date
+    end: date
+
+    @property
+    def days(self):
+        return (self.end - self.start).days + 1
+
+    def as_dict(self):
+        return {'dateFrom': self.start.isoformat(), 'dateTo': self.end.isoformat(), 'days': self.days}
+
+
+def _style_today():
+    return datetime.now(SHANGHAI).date()
+
+
+def _style_windows(args):
+    today = _style_today()
+    end = date.fromisoformat(args['dateTo']) if args.get('dateTo') else today
+    start = date.fromisoformat(args['dateFrom']) if args.get('dateFrom') else end - timedelta(days=29)
     if start > end:
         raise ValueError('开始日期不能晚于结束日期')
     if (end - start).days > 1095:
         raise ValueError('查询时间不能超过三年')
-    return start, end, (end - start).days + 1
+    days = int(args.get('velocityWindow', 7) or 7)
+    if days not in {7, 30}:
+        raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
+    return _DateWindow(start, end), _DateWindow(today - timedelta(days=days - 1), today)
 
 
 def _style_history_exists(args, start, end):
@@ -61,13 +82,12 @@ def _style_history_exists(args, start, end):
     return (f"EXISTS(SELECT 1 FROM order_items h JOIN orders o ON o.id=h.order_id WHERE h.product_id=p.id AND {where})", params)
 
 
-def _style_catalog_parts(args, start, end, style_code: str | None = None):
+def _style_catalog_parts(args, sales, velocity, style_code: str | None = None):
     style_sql = _style_code_sql('p')
     inventory_visible = '(p.is_active = TRUE OR EXISTS(SELECT 1 FROM product_size_prices debt WHERE debt.product_id=p.id AND (debt.stock<0 OR debt.contract_pending>0 OR debt.pending_inspection>0 OR debt.pending_inbound>0 OR debt.temporary_inbound>0 OR debt.defective_pending>0)))'
-    history, params = _style_history_exists(args, start, end)
-    # Include sold retired variants for the selected reporting windows, but do
-    # not turn their retired inventory into active stock.
-    where = [f'({inventory_visible} OR {history})']
+    history, report_params = _style_history_exists(args, *sales)
+    recent_history, recent_params = _style_history_exists(args, *velocity)
+    where, params = [], []
     if styles := filter_values(args, 'style'):
         where.append(f"({style_sql}=ANY(%s) OR COALESCE(NULLIF(p.product_code,''),p.sku)=ANY(%s))")
         params.extend([styles] * 2)
@@ -84,7 +104,7 @@ def _style_catalog_parts(args, start, end, style_code: str | None = None):
         where.append(f"{style_sql}=%s")
         params.append(style_code)
     cte = f"""
-      product_catalog AS (
+      matching_products AS (
         SELECT
           p.id,
           {inventory_visible} AS inventory_visible,
@@ -103,20 +123,28 @@ def _style_catalog_parts(args, start, end, style_code: str | None = None):
         JOIN product_categories pc ON pc.id=p.category_id
         LEFT JOIN product_translations pt ON pt.product_id=p.id AND pt.lang_code='zh'
         LEFT JOIN product_translations pte ON pte.product_id=p.id AND pte.lang_code='en'
-        WHERE {' AND '.join(where)}
+        WHERE {' AND '.join(where) or 'TRUE'}
+      ),
+      product_catalog AS (
+        SELECT p.* FROM matching_products p
+        WHERE p.inventory_visible OR {history}
+           OR ({recent_history} AND EXISTS (
+             SELECT 1 FROM matching_products live WHERE live.style_code=p.style_code AND live.inventory_visible
+           ))
       )
     """
-    return cte, params
+    # Recent sales of a retired color still count toward a live style's turnover.
+    # They do not bring back a fully retired style with no sales in the report.
+    return cte, [*params, *report_params, *recent_params]
 
 
-def _style_sales_join(args, start: date, end: date, *, days: int | None = None):
-    actual_start = end - timedelta(days=(days - 1 if days else 0)) if days else start
+def _style_sales_join(args, start: date, end: date):
     clauses = [
         "o.status <> 'cancelled'",
         "o.created_at >= %s",
         "o.created_at < %s",
     ]
-    params = [datetime.combine(actual_start, datetime.min.time(), SHANGHAI),
+    params = [datetime.combine(start, datetime.min.time(), SHANGHAI),
               datetime.combine(end + timedelta(days=1), datetime.min.time(), SHANGHAI)]
     if args.get('country') and args.get('country') != 'all':
         clauses.append('o.country=%s')
@@ -154,17 +182,14 @@ def _style_row(row):
 def style_performance(args, *, paginate=True):
     if args.get('_ownerId') is not None:
         args = {**dict(args), 'risk':'', 'sort':args.get('sort') if args.get('sort') not in {'stock','estimatedDays'} else 'units'}
-    start, end, span = _dashboard_window(args)
-    velocity_days = int(args.get('velocityWindow', 7) or 7)
-    if velocity_days not in {7, 30}:
-        raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
+    sales, velocity = _style_windows(args)
     page = int(args.get('page', 1) or 1) if paginate else 1
     page_size = int(args.get('pageSize', 10) or 10) if paginate else 10
     if page < 1 or page_size not in {10, 25, 50}:
         raise ValueError('款号分页参数无效')
-    catalog_cte, catalog_params = _style_catalog_parts(args, min(start, end-timedelta(days=velocity_days-1)), end)
-    window_join, window_params = _style_sales_join(args, start, end)
-    velocity_join, velocity_params = _style_sales_join(args, start, end, days=velocity_days)
+    catalog_cte, catalog_params = _style_catalog_parts(args, sales, velocity)
+    window_join, window_params = _style_sales_join(args, *sales)
+    velocity_join, velocity_params = _style_sales_join(args, *velocity)
     metrics_sql = f"""
       WITH {catalog_cte},
       style_catalog AS (
@@ -209,7 +234,7 @@ def style_performance(args, *, paginate=True):
                COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount,
                COALESCE(w.orders,0) AS orders, COALESCE(w.customers,0) AS customers,
                COALESCE(v.units,0) AS velocity_units, w.last_sold_at,
-               ROUND(COALESCE(v.units,0)::numeric / %s, 2) AS average_daily_units,
+               ROUND(COALESCE(w.units,0)::numeric / %s, 2) AS average_daily_units,
                CASE WHEN COALESCE(v.units,0)=0 OR c.available_stock=0 THEN NULL
                     ELSE ROUND(c.available_stock::numeric / (v.units::numeric / %s), 1) END AS estimated_days
         FROM style_catalog c
@@ -231,7 +256,7 @@ def style_performance(args, *, paginate=True):
                   ELSE 'healthy' END AS risk
       FROM metrics
     """
-    base_params = [*catalog_params, *window_params, *velocity_params, velocity_days, velocity_days]
+    base_params = [*catalog_params, *window_params, *velocity_params, sales.days, velocity.days]
     risk = str(args.get('risk') or '').strip()
     risk_filter = ''
     risk_params = []
@@ -278,22 +303,16 @@ def style_performance(args, *, paginate=True):
             'temporaryInbound': int(summary['temporary_inbound'] or 0),
             'defectivePending': int(summary['defective_pending'] or 0),
         },
-        'salesWindow': {'dateFrom': start.isoformat(), 'dateTo': end.isoformat(), 'days': span},
-        'velocityWindow': {'days': velocity_days, 'dateFrom': (end - timedelta(days=velocity_days - 1)).isoformat(), 'dateTo': end.isoformat()},
+        'salesWindow': sales.as_dict(),
+        'velocityWindow': velocity.as_dict(),
         'updatedAt': datetime.now(timezone.utc).isoformat(),
     }
 
 
-def _style_detail_rows(args, style_code: str, product_id: int | None = None):
-    start, end, span = _dashboard_window(args)
-    velocity_days = int(args.get('velocityWindow', 7) or 7)
-    if velocity_days not in {7, 30}:
-        raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
-    catalog_cte, catalog_params = _style_catalog_parts(args, min(start, end-timedelta(days=velocity_days-1)), end, style_code)
-    window_join, window_params = _style_sales_join(args, start, end)
-    velocity_join, velocity_params = _style_sales_join(args, start, end, days=velocity_days)
-    product_filter = ' WHERE pc.id=%s' if product_id is not None else ''
-    product_params = [product_id] if product_id is not None else []
+def _style_detail_rows(args, style_code, sales, velocity):
+    catalog_cte, catalog_params = _style_catalog_parts(args, sales, velocity, style_code)
+    window_join, window_params = _style_sales_join(args, *sales)
+    velocity_join, velocity_params = _style_sales_join(args, *velocity)
     sql = f"""
       WITH {catalog_cte},
       color_catalog AS (
@@ -311,7 +330,6 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
                COALESCE(SUM(psp.defective_pending),0) AS defective_pending
         FROM product_catalog pc
         LEFT JOIN product_size_prices psp ON psp.product_id=pc.id AND pc.inventory_visible
-        {product_filter}
         GROUP BY pc.id,pc.style_code,pc.product_code,pc.sku,pc.color_name,pc.color_hex,pc.main_image_url,pc.name,pc.category_id,pc.category_sort_order,pc.inventory_visible
       ),
       window_sales AS (
@@ -333,7 +351,7 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
              c.pending_inspection AS "pendingInspection", c.pending_inbound AS "pendingInbound", c.temporary_inbound AS "temporaryInbound", c.defective_pending AS "defectivePending",
              COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount, COALESCE(w.orders,0) AS orders,
              COALESCE(v.units,0) AS "velocityUnits", w.last_sold_at AS "lastSoldAt",
-             ROUND(COALESCE(v.units,0)::numeric / %s, 2) AS "averageDailyUnits",
+             ROUND(COALESCE(w.units,0)::numeric / %s, 2) AS "averageDailyUnits",
              CASE WHEN COALESCE(v.units,0)=0 OR c.available_stock=0 THEN NULL
                   ELSE ROUND(c.available_stock::numeric / (v.units::numeric / %s), 1) END AS "estimatedDays"
       FROM color_catalog c
@@ -341,20 +359,20 @@ def _style_detail_rows(args, style_code: str, product_id: int | None = None):
       LEFT JOIN velocity_sales v ON v.id=c.id
       ORDER BY c.category_sort_order,c.category_id,c.id
     """
-    params = [*catalog_params, *product_params, *window_params, *velocity_params, velocity_days, velocity_days]
-    rows = db._fetch_all(sql, tuple(params))
-    return rows, start, end, span, velocity_days
+    params = [*catalog_params, *window_params, *velocity_params, sales.days, velocity.days]
+    return db._fetch_all(sql, tuple(params))
 
 
 def style_detail(args):
     style_code = str(args.get('styleCode') or '').strip()
     if not style_code:
         raise ValueError('缺少款号')
-    rows, start, end, span, velocity_days = _style_detail_rows(args, style_code)
+    sales, velocity = _style_windows(args)
+    rows = _style_detail_rows(args, style_code, sales, velocity)
     if not rows:
         raise LookupError('款号不存在')
     sizes_by_product = {}
-    for size in _style_size_rows(args, style_code):
+    for size in _style_size_rows(args, style_code, sales, velocity):
         sizes_by_product.setdefault(size['productId'], []).append(size)
     items = []
     for row in rows:
@@ -364,20 +382,16 @@ def style_detail(args):
     return {
         'styleCode': style_code,
         'items': items,
-        'salesWindow': {'dateFrom': start.isoformat(), 'dateTo': end.isoformat(), 'days': span},
-        'velocityWindow': {'days': velocity_days, 'dateFrom': (end - timedelta(days=velocity_days - 1)).isoformat(), 'dateTo': end.isoformat()},
+        'salesWindow': sales.as_dict(),
+        'velocityWindow': velocity.as_dict(),
         'updatedAt': datetime.now(timezone.utc).isoformat(),
     }
 
 
-def _style_size_rows(args, style_code: str, product_id: int | None = None):
-    start, end, span = _dashboard_window(args)
-    velocity_days = int(args.get('velocityWindow', 7) or 7)
-    if velocity_days not in {7, 30}:
-        raise ValueError('周转计算窗口只支持近 7 天或近 30 天')
-    window_join, window_params = _style_sales_join(args, start, end)
-    velocity_join, velocity_params = _style_sales_join(args, start, end, days=velocity_days)
-    catalog_cte, catalog_params = _style_catalog_parts(args, min(start, end-timedelta(days=velocity_days-1)), end, style_code)
+def _style_size_rows(args, style_code, sales, velocity, product_id: int | None = None):
+    window_join, window_params = _style_sales_join(args, *sales)
+    velocity_join, velocity_params = _style_sales_join(args, *velocity)
+    catalog_cte, catalog_params = _style_catalog_parts(args, sales, velocity, style_code)
     product_filter = ' WHERE p.id=%s' if product_id is not None else ''
     sql = f"""
       WITH {catalog_cte},
@@ -401,7 +415,7 @@ def _style_size_rows(args, style_code: str, product_id: int | None = None):
              s.pending_inspection AS "pendingInspection", s.pending_inbound AS "pendingInbound", s.temporary_inbound AS "temporaryInbound", s.defective_pending AS "defectivePending",
              COALESCE(w.units,0) AS units, COALESCE(w.amount,0) AS amount,
              COALESCE(v.units,0) AS "velocityUnits",
-             ROUND(COALESCE(v.units,0)::numeric / %s, 2) AS "averageDailyUnits",
+             ROUND(COALESCE(w.units,0)::numeric / %s, 2) AS "averageDailyUnits",
              CASE WHEN COALESCE(v.units,0)=0 OR COALESCE(s.stock,0)<=0 THEN NULL
                   ELSE ROUND(s.stock::numeric / (v.units::numeric / %s), 1) END AS "estimatedDays"
       FROM product_catalog p
@@ -412,7 +426,7 @@ def _style_size_rows(args, style_code: str, product_id: int | None = None):
       {product_filter}
       ORDER BY p.category_sort_order,p.category_id,p.id,s.sort_order,s.id,k.size_code
     """
-    params = [*catalog_params, *window_params, *velocity_params, velocity_days, velocity_days]
+    params = [*catalog_params, *window_params, *velocity_params, sales.days, velocity.days]
     if product_id is not None:
         params.append(product_id)
     return [_style_row(row) for row in db._fetch_all(sql, tuple(params))]
@@ -423,12 +437,13 @@ def style_size_detail(args, style_code: str | None = None, product_id: int | Non
     product_id = product_id or int(args.get('productId') or 0)
     if not style_code or product_id <= 0:
         raise ValueError('缺少款号或商品')
-    start, end, span = _dashboard_window(args)
+    sales, velocity = _style_windows(args)
     return {
         'styleCode': style_code,
         'productId': product_id,
-        'items': _style_size_rows(args, style_code, product_id),
-        'salesWindow': {'dateFrom': start.isoformat(), 'dateTo': end.isoformat(), 'days': span},
+        'items': _style_size_rows(args, style_code, sales, velocity, product_id),
+        'salesWindow': sales.as_dict(),
+        'velocityWindow': velocity.as_dict(),
     }
 
 
