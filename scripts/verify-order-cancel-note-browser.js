@@ -90,7 +90,7 @@ async (page) => {
   check((await rejected).status()===409,'Expected conflict not returned');
   check(await dialog.getByRole('textbox',{name:'取消备注（选填）',exact:true}).inputValue()==='List reason\nSecond line','Conflict lost reason');
   await dialog.getByRole('button',{name:'刷新订单版本（保留备注）',exact:true}).click();
-  await dialog.getByText('部分配货 → 已取消；商品库存按现有规则返还。',{exact:true}).waitFor();
+  await dialog.getByText('部分配货 → 已取消；取消后返还本单已扣库存。',{exact:true}).waitFor();
   const saved=page.waitForResponse(r=>r.url().endsWith(`/api/admin/orders/${id}`) && r.request().method()==='PUT');
   await dialog.getByRole('button',{name:'确认取消订单',exact:true}).click();
   check((await saved).status()===200,'Cancellation after refresh failed');
