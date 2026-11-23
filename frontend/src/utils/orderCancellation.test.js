@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { allowedOrderStatuses, cancellationPending } from './orderCancellation.js';
+import { allowedOrderStatuses, cancellationPending, cancellationStockNotice, restoredStockNotice } from './orderCancellation.js';
 import {roleModules,rolePermissions,defaultRoleModules,editableRolePermissions} from '../permissions.js';
 const names=Object.fromEntries(['pending_payment','paid','partially_allocated','allocated','shipped','completed','cancelled'].map(x=>[x,x]));
 test('partial allocation may go back; allocated and later never go back or directly cancel',()=>{
@@ -22,4 +22,14 @@ test('approval is an operation grant, not a module or a default staff grant',()=
   assert.ok(!roleModules('admin').includes('orders.cancel.approve'));
   assert.ok(rolePermissions('sales').includes('orders.cancel.approve'));
   assert.deepEqual(editableRolePermissions('sales',['orders','orders.cancel.approve']),['orders','orders.cancel.approve']);
+});
+
+
+test('stock notices reflect server policy and do not promise unearned refunds',()=>{
+  assert.equal(cancellationStockNotice({cancelReturnsStock:false}), '本单未扣库存，取消不会增加现货。');
+  assert.equal(cancellationStockNotice({cancelReturnsStock:true}), '取消后返还本单已扣库存。');
+  assert.match(cancellationStockNotice({}), /实际已扣/);
+  assert.equal(restoredStockNotice({stockOnPaymentEnabled:true},'pending_payment'), '恢复为待付款，不扣减或预占库存。');
+  assert.equal(restoredStockNotice({stockOnPaymentEnabled:false},'pending_payment'), '恢复订单将重新扣减库存。');
+  assert.equal(restoredStockNotice({stockOnPaymentEnabled:true},'paid'), '恢复订单将重新扣减库存。');
 });

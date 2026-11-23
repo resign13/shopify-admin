@@ -257,7 +257,7 @@
 <script setup>
 import { errorMessage } from '../utils/adminErrors.js';
 import OrderCancellationHistory from './OrderCancellationHistory.vue';
-import {allowedOrderStatuses,cancellationPending} from '../utils/orderCancellation';
+import {allowedOrderStatuses,cancellationPending,cancellationStockNotice} from '../utils/orderCancellation';
 import { useResponsive } from "../composables/responsive";
 import MobileActionMenu from './MobileActionMenu.vue';
 import AdaptiveTable from "./AdaptiveTable";
@@ -399,7 +399,7 @@ async function submit() {
   if (saving.value || !(await formRef.value.validate().catch(() => false)))
     return;
   if (form.status === 'cancelled' && order.value.status !== 'cancelled' &&
-    !(await confirm('确认取消订单？商品库存将按现有规则返还。'))) return;
+    !(await confirm('确认取消订单？' + cancellationStockNotice(order.value)))) return;
   saving.value = true;
   error.value = "";
   try {

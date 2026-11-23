@@ -218,7 +218,7 @@ import OrderNumber from "../components/OrderNumber.vue";
 import OrderDrawer from "../components/OrderDrawer.vue";
 import OrderCancellationDialog from "../components/OrderCancellationDialog.vue";
 import OrderCancellationReviews from '../components/OrderCancellationReviews.vue';
-import {allowedOrderStatuses,cancellationPending} from '../utils/orderCancellation';
+import {allowedOrderStatuses,cancellationPending,cancellationStockNotice,restoredStockNotice} from '../utils/orderCancellation';
 import OrderCancelNoteMark from "../components/OrderCancelNoteMark.vue";
 import { removeAppliedOrderFilter } from "../utils/orderFilters";
 import { queryToSortState } from "../utils/tableSort";
@@ -291,7 +291,7 @@ async function updateStatus(row, status) {
     if (status === "shipped") {
       try {
         const result = await ElMessageBox.prompt(
-          `订单 ${row.orderNo}：填写物流单号后标记为已发货。${row.status === "cancelled" ? "恢复订单将重新扣减库存。" : ""}`, "确认发货",
+          `订单 ${row.orderNo}：填写物流单号后标记为已发货。${row.status === "cancelled" ? restoredStockNotice(row,status) : ""}`, "确认发货",
           { inputValue: trackingNo, inputPlaceholder: "物流单号", confirmButtonText: "确认发货",
             cancelButtonText: "取消", inputValidator: value => Boolean(value?.trim()) || "请输入物流单号",
             closeOnClickModal: false },
@@ -300,8 +300,8 @@ async function updateStatus(row, status) {
       } catch { return; }
     } else if (!(await confirm(
       `订单 ${row.orderNo}：${statusNames[row.status]} → ${statusNames[status]}。` +
-      (status === "cancelled" ? "取消后将返还订单商品库存；恢复订单会重新扣库。" :
-        row.status === "cancelled" ? "恢复订单将重新扣减库存，确认恢复？" : "确认修改？"),
+      (status === "cancelled" ? cancellationStockNotice(row) :
+        row.status === "cancelled" ? restoredStockNotice(row,status) + "确认恢复？" : "确认修改？"),
       "修改订单状态",
     ))) return;
     await save(`orders/${row.id}`, {

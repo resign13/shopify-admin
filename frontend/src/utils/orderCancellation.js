@@ -10,3 +10,13 @@ export function allowedOrderStatuses(order, names) {
   const canGoBack = ['pending_payment','partially_allocated'].includes(order.status);
   return Object.fromEntries(Object.entries(names).filter(([key]) => canGoBack || orderStages.indexOf(key)>=current));
 }
+
+export function cancellationStockNotice(order) {
+  if (order?.cancelReturnsStock === false) return '本单未扣库存，取消不会增加现货。';
+  if (order?.cancelReturnsStock === true) return '取消后返还本单已扣库存。';
+  return '取消时按实际已扣数量返还库存，未扣的不返还。';
+}
+export function restoredStockNotice(order, nextStatus) {
+  return order?.stockOnPaymentEnabled === true && nextStatus === 'pending_payment'
+    ? '恢复为待付款，不扣减或预占库存。' : '恢复订单将重新扣减库存。';
+}
