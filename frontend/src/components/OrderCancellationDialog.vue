@@ -3,7 +3,7 @@
     append-to-body destroy-on-close :close-on-click-modal="false" :close-on-press-escape="!busy" :before-close="close">
     <template v-if="current">
       <p class="order-id">{{ current.orderNo }}</p>
-      <p v-if="!noteOnly" class="small-note">{{ requiresApproval ? '提交后保持原订单状态和库存，审核通过后才取消；审核期间暂停修改和发货，可撤回申请。' : `${statusNames[current.status]} → 已取消；商品库存按现有规则返还。` }}</p>
+      <p v-if="!noteOnly" class="small-note">{{ requiresApproval ? '提交后保持原订单状态和库存，审核通过后才取消；审核期间暂停修改和发货，可撤回申请。' : `${statusNames[current.status]} → 已取消；${cancellationStockNotice(current)}` }}</p>
       <ElForm label-position="top" @submit.prevent="submit">
         <ElFormItem :label="requiresApproval ? '申请原因（必填）' : '取消备注（选填）'">
           <ElInput v-model="note" type="textarea" :rows="4" maxlength="500" show-word-limit
@@ -25,6 +25,7 @@
 <script setup>
 import { errorMessage } from '../utils/adminErrors.js';
 import { computed, ref, watch } from 'vue';
+import { cancellationStockNotice } from '../utils/orderCancellation';
 import { ElMessage } from 'element-plus';
 import { api, save, confirm, statusNames } from '../composables/workbench';
 const props = defineProps({ open: Boolean, order: Object, noteOnly: Boolean });

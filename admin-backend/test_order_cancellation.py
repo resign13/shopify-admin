@@ -143,11 +143,11 @@ class CancellationTest(unittest.TestCase):
     def test_inventory_failure_rolls_back_status_note_and_audit(self):
         order = self.create(); stock = self.stock(); history = self.history(order['id'])
         from test_workbench import application
-        original = db.inventory_policy.return_order_stock
-        def fail(cur, ids):
-            original(cur, ids)
+        original = db.inventory_policy.adjust_stock
+        def fail(cur, changes):
+            original(cur, changes)
             raise ValueError('fixture rollback after inventory update')
-        with patch.object(application.inventory_policy, 'return_order_stock', side_effect=fail):
+        with patch.object(application.inventory_policy, 'adjust_stock', side_effect=fail):
             r = self.call(f"orders/{order['id']}", 'PUT', {'status':'cancelled','version':order['version'],'cancelNote':'失败不能落库'})
         self.assertEqual(r.status_code, 400)
         self.assertEqual(self.detail(order['id']), order)

@@ -5,6 +5,40 @@ from psycopg.sql import SQL, Identifier
 MIN_STOCK = -2147483648
 MAX_STOCK = 2147483647
 OPEN_STATUSES = {'pending_payment', 'partially_allocated', 'allocated', 'paid'}
+ORDER_STOCK_STATUSES = {'paid', 'partially_allocated', 'allocated', 'shipped', 'completed'}
+ORDER_STOCK_ON_PAYMENT_VERSION = 'order-stock-on-payment-v1'
+ORDER_STOCK_ON_PAYMENT_SQL = (
+    "EXISTS (SELECT 1 FROM inventory_policy_versions "
+    f"WHERE version = '{ORDER_STOCK_ON_PAYMENT_VERSION}')"
+)
+
+
+def order_stock_on_payment_enabled(cur):
+    cur.execute(f'SELECT {ORDER_STOCK_ON_PAYMENT_SQL} AS enabled')
+    return bool(cur.fetchone()['enabled'])
+
+
+def order_stock_deducted(status, *, on_payment):
+    return status in ORDER_STOCK_STATUSES or (status == 'pending_payment' and not on_payment)
+
+
+def order_stock_changes(cur, previous_status, next_status, previous_quantities, next_quantities):
+    """Net per-size movement with the before and after order state from the same transaction."""
+    on_payment = (
+        order_stock_on_payment_enabled(cur) if 'pending_payment' in (previous_status, next_status) else False
+    )
+    before = previous_quantities if order_stock_deducted(previous_status, on_payment=on_payment) else {}
+    after = next_quantities if order_stock_deducted(next_status, on_payment=on_payment) else {}
+    return {
+        key: delta for key in before.keys() | after.keys()
+        if (delta := before.get(key, 0) - after.get(key, 0))
+    }
+
+
+def order_quantities(cur, order_id):
+    cur.execute("""SELECT product_id,COALESCE(size_code,'') AS size_code,SUM(quantity) AS quantity
+      FROM order_items WHERE order_id=%s GROUP BY product_id,COALESCE(size_code,'')""", (order_id,))
+    return {(r['product_id'], r['size_code']): int(r['quantity']) for r in cur.fetchall()}
 
 
 def parse_stock(value, label='现货余额', *, allow_blank=False):

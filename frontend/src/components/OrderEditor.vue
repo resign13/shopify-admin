@@ -285,7 +285,9 @@
         :title="
           lockedLines
             ? '已取消订单保留原商品明细；可修改客户与收货资料。'
-            : '后台允许欠货下单。新增扣减现货余额，修改仅按数量差额调整；实际余额以保存时为准。'
+            : stockOnPaymentEnabled
+              ? '待付款不扣减或预占库存；已付款、部分配货及后续状态才扣减。已扣订单改数量仅调差额，允许欠货；实际余额以保存时为准。'
+              : '后台允许欠货下单。新增扣减现货余额，修改仅按数量差额调整；实际余额以保存时为准。'
         "
         type="info"
         :closable="false"
@@ -604,6 +606,7 @@ const ready = ref(false),
   version = ref(""),
   requestId = ref(""),
   status = ref(""),
+  stockOnPaymentEnabled = ref(false),
   originalCount = ref(0),
   originalTotal = ref(0);
 const errorAlert = ref();
@@ -741,7 +744,7 @@ const inventoryImpact = computed(() => {
   for (const row of form.items) rows.get(`${row.productId}:${row.sizeCode}`).next += Number(row.quantity || 0);
   return [...rows.values()].sort((a, b) => compareProductCategories(products[a.productId], products[b.productId])).map(row => {
     const stock = products[row.productId]?.sizePrices?.find(s => s.sizeCode === row.sizeCode)?.stock;
-    return {...row, ...orderVariantInventory(stock, row.before, row.next, status.value, form.status)};
+    return {...row, ...orderVariantInventory(stock, row.before, row.next, status.value, form.status, stockOnPaymentEnabled.value)};
   });
 });
 function inventoryFor(row, sizeCode) {
@@ -853,6 +856,7 @@ async function loadEditor() {
       const catalog = await api("catalog-options");
       if (current !== serial) return;
       categories.value = catalog.items;
+      stockOnPaymentEnabled.value = catalog.stockOnPaymentEnabled === true;
       if (auth.canAssignOrderOwner) {
         const people = await api("salespeople");
         if (current !== serial) return;
@@ -1014,7 +1018,7 @@ async function submit() {
   }
   if (
     !(await confirm(
-      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}（${form.currency}）。${props.id ? `原总额 ${formatMoney(originalTotal.value,originalCurrency.value)}。` : ''}${status.value==='paid'?'已付款订单改价，请核对补款或退款；付款状态不自动改变。':''}${willClearPayment.value?'保存后清空旧付款链接。':''}${props.sourceOrderId || form.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}${form.status === "cancelled" && status.value !== "cancelled" ? "取消后返还订单商品库存。" : "库存仅按商品数量差额调整。"}`,
+      `${props.id ? "保存订单修改" : "创建待付款订单"}：${units.value} 件，总额 ${money(subtotal.value + Number(form.shippingFee))}（${form.currency}）。${props.id ? `原总额 ${formatMoney(originalTotal.value,originalCurrency.value)}。` : ''}${status.value==='paid'?'已付款订单改价，请核对补款或退款；付款状态不自动改变。':''}${willClearPayment.value?'保存后清空旧付款链接。':''}${props.sourceOrderId || form.sourceOrderId ? `运费 ${money(form.shippingFee)} 沿用原单，请确认。` : ''}${stockOnPaymentEnabled.value ? "待付款不扣库存；已付款及后续状态按本单应扣数量结算差额，取消仅返还实际已扣库存。" : form.status === "cancelled" && status.value !== "cancelled" ? "取消后返还订单商品库存。" : "库存仅按商品数量差额调整。"}`,
     ))
   )
     return;

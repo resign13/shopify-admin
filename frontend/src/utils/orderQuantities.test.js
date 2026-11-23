@@ -85,3 +85,23 @@ test('shared stock hints preserve signed balances and distinguish unavailable fr
   assert.equal(variantStockHint(orderVariantInventory(12, 0, 17).after).text, '库存 -5 · 欠货');
   assert.equal(variantStockHint(undefined, '库存 待刷新').text, '库存 待刷新');
 });
+
+
+test('payment policy previews unpaid, first posting, deltas and returns', () => {
+  const preview = (before, next, oldStatus, nextStatus) => orderVariantInventory(10,before,next,oldStatus,nextStatus,true);
+  assert.equal(preview(0,8,'','pending_payment').after,10);
+  assert.equal(preview(8,10,'pending_payment','pending_payment').after,10);
+  for (const status of ['paid','partially_allocated','allocated','shipped','completed']) {
+    assert.equal(preview(8,8,'pending_payment',status).after,2);
+    assert.equal(preview(8,8,'paid',status).after,10);
+  }
+  assert.equal(preview(8,10,'paid','partially_allocated').after,8);
+  assert.equal(preview(8,6,'paid','paid').after,12);
+  assert.equal(preview(8,8,'partially_allocated','pending_payment').after,18);
+  assert.equal(preview(8,8,'pending_payment','cancelled').after,10);
+  assert.equal(preview(8,8,'paid','cancelled').after,18);
+  assert.equal(preview(8,8,'cancelled','pending_payment').after,10);
+  assert.equal(preview(8,8,'cancelled','paid').after,2);
+  assert.equal(orderVariantInventory(2,0,6,'pending_payment','paid',true).after,-4);
+  assert.equal(orderVariantInventory(null,8,8,'pending_payment','paid',true).after,'待刷新');
+});

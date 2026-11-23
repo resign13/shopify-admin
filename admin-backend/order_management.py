@@ -233,12 +233,11 @@ def save_order(payload, order_id=None):
                 new['reference'] = current
     if price_changes:
         raise order_reorder.PriceChanged(price_changes)
-    changes = {key: previous_quantities.get(key, 0) - desired.get(key, {}).get('quantity', 0)
-               for key in set(desired) | set(previous_quantities)}
-    changes = {key: delta for key, delta in changes.items() if delta}
-    if changes:
-        with db.get_connection() as conn, conn.cursor() as cur:
-            inventory_policy.adjust_stock(cur, changes)
+    with db.get_connection() as conn, conn.cursor() as cur:
+        changes = inventory_policy.order_stock_changes(
+            cur, old['status'] if old else None, next_status, previous_quantities,
+            {key: row['quantity'] for key, row in desired.items()})
+        inventory_policy.adjust_stock(cur, changes)
     total = amount(sum(row['quantity'] * row['price'] for row in desired.values()) + shipping, '订单总额')
     if order_pricing.financial_changed(old, total, currency):
         payment = ''
@@ -274,7 +273,8 @@ def save_order(payload, order_id=None):
         db._fetch_one('UPDATE orders SET label_image_urls=%s,label_pdf_url=%s WHERE id=%s RETURNING id',
                       (json.dumps(image_urls, ensure_ascii=False), legacy_files[0] if legacy_files else '', order_id))
     if old:
-        db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping, cancel_note=cancel_note)
+        db.update_order_status(order_id, next_status, tracking.strip(), payment.strip(), shipping,
+                               cancel_note=cancel_note, stock_managed=True)
     if origin:
         order_reorder.audit(order_id, origin)
     from private_media import bind_current, attachment_urls

@@ -3329,7 +3329,10 @@ def customer_template_pdf_upload():
 @require_auth
 @require_roles('admin','sales','warehouse','customer')
 def catalog_options_route():
-    return jsonify({'items': [{'key': c['key'], 'labels': c['labels']} for c in list_categories()]})
+    with db.get_connection() as conn, conn.cursor() as cur:
+        on_payment = inventory_policy.order_stock_on_payment_enabled(cur)
+    return jsonify({'items': [{'key': c['key'], 'labels': c['labels']} for c in list_categories()],
+                    'stockOnPaymentEnabled': on_payment})
 
 
 @app.post('/api/admin/inventory/<int:product_id>/receive')

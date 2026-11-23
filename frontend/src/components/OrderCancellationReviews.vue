@@ -17,7 +17,7 @@
         <p v-if="selected.order">当前状态：{{ statusNames[selected.order.status] }} · {{ selected.order.itemCount }} 件
           <span v-if="!auth.isWarehouse"> · 总额 {{ money(selected.order.totalAmount,selected.order.currency) }}</span></p>
         <ul v-if="selected.order"><li v-for="(line,index) in selected.order.items" :key="index">{{ line.sku }} · {{ line.sizeCode }} × {{ line.quantity }}</li></ul>
-        <ElAlert v-if="selected.item.state==='pending'" title="审核通过后取消订单，并按现有规则返还商品库存。" type="warning" :closable="false" />
+        <ElAlert v-if="selected.item.state==='pending'" :title="'审核通过后取消订单。' + cancellationStockNotice(selected.order)" type="warning" :closable="false" />
         <ElInput v-if="selected.item.state==='pending'" v-model="reviewNote" type="textarea" :rows="3" maxlength="500" show-word-limit aria-label="审核意见" placeholder="审核意见；驳回时必填，将向申请人显示" :disabled="busy" />
         <p v-else class="review-note">{{ selected.item.reviewNote || '未填写审核意见' }}<br>{{ selected.item.reviewerName }} · {{ dateTime(selected.item.closedAt) }}</p>
       </div>
@@ -33,7 +33,7 @@ import {ElMessage} from 'element-plus';
 import {api,save,confirm,dateTime,money,statusNames} from '../composables/workbench';
 import {useAdminAuthStore} from '../stores/auth';
 import {errorMessage} from '../utils/adminErrors';
-import {cancellationStateNames} from '../utils/orderCancellation';
+import {cancellationStateNames,cancellationStockNotice} from '../utils/orderCancellation';
 const props=defineProps({open:Boolean});const emit=defineEmits(['update:open','changed','count']);const auth=useAdminAuthStore();
 const tab=ref('pending'),page=ref(1),total=ref(0),rows=ref([]),loading=ref(false),error=ref(''),busy=ref(false);
 const selected=ref(null),detailOpen=ref(false),detailLoading=ref(false),detailError=ref(''),reviewNote=ref('');let serial=0,detailSerial=0;
@@ -50,7 +50,7 @@ async function select(item){
 async function decide(action){
   if(busy.value || !selected.value)return;
   if(action==='reject'&&!reviewNote.value.trim()){detailError.value='请填写驳回原因';return;}
-  if(!await confirm(action==='approve'?'确认审核通过并取消订单？商品库存按现有规则返还。':'确认驳回取消申请？订单状态和库存保持不变。'))return;
+  if(!await confirm(action==='approve'?'确认审核通过并取消订单？'+cancellationStockNotice(selected.value.order):'确认驳回取消申请？订单状态和库存保持不变。'))return;
   busy.value=true;detailError.value='';
   try{await save(`orders/cancellation-requests/${selected.value.item.id}/${action}`,{version:selected.value.item.version,reviewNote:reviewNote.value},'POST');ElMessage.success(action==='approve'?'审核通过，订单已取消':'申请已驳回');detailOpen.value=false;await load();emit('changed');}
   catch(e){detailError.value=errorMessage(e);}finally{busy.value=false;}

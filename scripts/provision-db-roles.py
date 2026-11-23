@@ -72,6 +72,8 @@ with db._connect() as conn:
     read=['security_schema_versions','security_media_migrations','products','product_categories','product_category_translations','product_translations','product_sizes','product_size_prices','product_images','banners','banner_translations','homepage_configs','presale_configs','store_users','orders','order_items','inventory_legacy_cancelled_orders','security_files','security_file_refs']
     for name in read:
         if name in tables: conn.execute(sql.SQL('GRANT SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
+    if 'inventory_policy_versions' in tables:
+        conn.execute(sql.SQL('GRANT SELECT (version) ON public.inventory_policy_versions TO {}').format(store))
     for name in ['order_cancellation_requests','order_cancellation_migrations']:
         if name in tables: conn.execute(sql.SQL('GRANT SELECT ON public.{} TO {}').format(sql.Identifier(name),store))
     if 'order_cancellation_requests' in tables:
